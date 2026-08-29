@@ -5,7 +5,7 @@
 # with ssh forwarded to localhost:$SSH_PORT, VNC on 127.0.0.1:$VNC, and a QEMU
 # monitor socket for screenshots.
 #
-# Usage: vm.sh <name> create [--disk-gb 40] [--iso PATH] [--cidata PATH]
+# Usage: vm.sh <name> create [--disk-gb 40] [--iso PATH] [--cidata PATH] [--secboot]
 #        vm.sh <name> start  [--iso PATH] [--cidata PATH] [--secboot]
 #        vm.sh <name> stop | status | screenshot | ssh [cmd...] | wait-ssh [secs]
 #        vm.sh <name> snapshot <tag> | restore <tag>
@@ -77,12 +77,46 @@ case "$cmd" in
     mkdir -p "$vm"
     [[ -f $disk ]] && { echo "disk exists: $disk (delete it to recreate)" >&2; exit 1; }
     qemu-img create -q -f qcow2 "$disk" "${disk_gb}G"
-    if (( secboot )); then cp "$ovmf_dir/OVMF_VARS_4M.secboot.qcow2" "$vars"; else cp "$ovmf_dir/OVMF_VARS_4M.qcow2" "$vars"; fi
-    echo "created $vm (disk ${disk_gb}G, secboot=$secboot)"
+    if (( secboot )); then
+      # The distro's secboot variable store is NOT in Setup Mode: it ships with
+      # Microsoft's PK, KEK and db already enrolled, which means the firmware
+      # enforces from the first boot and `sbctl enroll-keys` has nothing it is
+      # allowed to write. Two things would then be impossible in one VM: the
+      # LIVE ISO is unsigned (upstream builds it with an unsigned GRUB) so it
+      # would not boot at all, and the install could not enroll the machine's
+      # own keys.
+      #
+      # Deleting the PK is the file-level equivalent of the firmware setup
+      # screen's "erase all Secure Boot variables" / "reset to Setup Mode":
+      # with no platform key the firmware reports SetupMode=1, enforces
+      # nothing, and accepts unauthenticated writes to PK/KEK/db -- which is
+      # exactly the state install/server/secureboot-server.sh and
+      # `omarchy-server-secureboot enroll` are written for. KEK, db and dbx are
+      # left alone; enroll-keys overwrites the first two and the Microsoft
+      # revocation list in dbx is worth keeping.
+      cp "$ovmf_dir/OVMF_VARS_4M.secboot.qcow2" "$vars"
+      command -v virt-fw-vars >/dev/null || {
+        echo "--secboot needs virt-fw-vars (Arch: python-virt-firmware, Fedora: virt-firmware)" >&2
+        exit 1
+      }
+      virt-fw-vars --inplace "$vars" --delete PK >/dev/null 2>&1 || {
+        echo "failed to clear the platform key from $vars" >&2
+        exit 1
+      }
+    else
+      cp "$ovmf_dir/OVMF_VARS_4M.qcow2" "$vars"
+    fi
+    # Remember the choice: OVMF's secboot variable store only works against the
+    # secboot CODE image, and a later `start` without the flag would pair them
+    # wrongly and boot a firmware that cannot see its own variables.
+    (( secboot )) && : >"$vm/secboot"
+    note=""; (( secboot )) && note=" [firmware in setup mode]"
+    echo "created $vm (disk ${disk_gb}G, secboot=$secboot)$note"
     ;;
   start)
     running && { echo "already running (pid $(<"$pidfile"))"; exit 0; }
     [[ -f $disk && -f $vars ]] || { echo "run create first" >&2; exit 1; }
+    [[ -f $vm/secboot ]] && secboot=1
     code="$ovmf_dir/OVMF_CODE_4M.qcow2"
     (( secboot )) && code="$ovmf_dir/OVMF_CODE_4M.secboot.qcow2"
     args=(

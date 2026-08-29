@@ -320,3 +320,66 @@ harness rate-limited itself out and looked hung while the rule was doing exactly
 its job. `vm.sh` now multiplexes over a single connection (`ControlMaster`) and
 `wait-ssh` polls every 10 s instead of every 5 s. Worth knowing before wiring
 this profile into any automation that reconnects in bursts.
+
+## Secure Boot, with the machine's own keys
+
+Verified end to end on VM `srvsb`, ISO `omarchy-2026.08.29-x86_64-server-local`,
+`omarchy-server 4.0.1-3`. Full evidence in `reference/acceptance-secureboot.txt`
+(`acceptance-secureboot.sh`, **24 passed, 0 failed**).
+
+```bash
+pocs/lab/mkcidata.sh --profile server --secureboot --hostname srvsb \
+  --out pocs/lab/out-server-secboot
+LAB_OUT=pocs/lab/out-server-secboot pocs/lab/vm.sh srvsb create --secboot
+LAB_OUT=pocs/lab/out-server-secboot pocs/lab/vm.sh srvsb start \
+  --iso iso/release/<iso> --cidata pocs/lab/out-server-secboot/cidata.iso
+LAB_OUT=pocs/lab/out-server-secboot pocs/server-install/acceptance-secureboot.sh srvsb
+```
+
+`create --secboot` clears the platform key out of OVMF's `secboot` variable
+store (`virt-fw-vars --delete PK`), which is the only way one VM can do both
+halves of the exercise: the live ISO is unsigned and would not boot against an
+enforcing firmware, and `sbctl enroll-keys` needs Setup Mode to write anything.
+The install enrolls, and the machine has been enforcing ever since — including
+across the reboot at the end of the acceptance run.
+
+| # | Item | Verdict | Evidence |
+|---|---|---|---|
+| 1 | firmware enforcing with our keys | **PASS** | `sbctl status`: `Secure Boot: ✓ Enabled`, `Setup Mode: ✓ Disabled`, `installed: true` |
+| 2 | the firmware's own variable agrees | **PASS** | `SecureBoot-8be4df61…` byte 4 = `1` |
+| 3 | the kernel saw it at handover | **PASS** | `[ 0.004285] Secure boot enabled` |
+| 4 | every EFI binary on the ESP is signed | **PASS** | `limine_x64.efi`, `BOOTX64.EFI`, `omarchy_linux.efi` — `unsigned=0` |
+| 5 | `limine.conf`'s recorded hash is the hash of the **signed** UKI | **PASS** | `recorded == b2sum(file)` |
+| 6 | the booted cmdline carries the lockdown options | **PASS** | `lockdown=integrity module.sig_enforce=1` in `/proc/cmdline` |
+| 7 | lockdown is in integrity mode | **PASS** | `/sys/kernel/security/lockdown` → `none [integrity] confidentiality` |
+| 8 | module signature enforcement is on | **PASS** | `sig_enforce=Y` |
+| 9 | the drop-in appends, it does not replace | **PASS** | `omarchy-secureboot.conf` with `KERNEL_CMDLINE[default]+=`, serial console intact |
+| 10 | keys on `@`, never on the ESP | **PASS** | `PK/KEK/db` under `/var/lib/sbctl`, `esp-key-files=0` |
+| 11 | key material is root-only | **PASS** | dirs `0700`, `db.key` `0400`, `ls` as the user → `Permission denied` |
+| 12 | an unsigned module is refused | **PASS** | tampered `aegis128_aesni.ko`: `insmod: Key was rejected by service`, `dmesg: Loading of unsigned module is rejected` |
+| 13 | stock in-tree modules still load | **PASS** | `modprobe dummy` → loaded |
+| 14 | a kernel reinstall rebuilds **and** re-signs the UKI | **PASS** | `pacman -S linux`: mkinitcpio post hook `[sbctl] ✓ Signed`, then `✓ Signed /boot/EFI/limine/limine_x64.efi`, then `(5/5) Signing EFI binaries…`; UKI hash changed |
+| 15 | `limine.conf` still records the new signed UKI | **PASS** | `hash-ok` after the reinstall |
+| 16 | `limine-snapper-sync` keeps the config consistent | **PASS** | snapshot entries added, branding above the first entry intact |
+| 17 | it still boots enforcing afterwards | **PASS** | boot id changed, `secure_boot: true`, `[integrity]`, `sig_enforce=Y` |
+
+Nothing in that list is re-signed by code this profile owns. The signatures come
+from `limine-entry-tool`'s `sb_sign` (the Limine binary), mkinitcpio's
+`/usr/lib/initcpio/post/sbctl` (the UKI, on the temporary file, before its hash
+is recorded) and sbctl's `zz-sbctl.hook` (everything in the database, after any
+transaction that touches `boot/`). All three are gated on
+`sbctl setup --print-state`, so creating the keys is the entire switch.
+`docs/secure-boot.md` is the design and the limitations.
+
+### Two things that bit during this run
+
+**`sbctl verify` exits 0 while reporting an unsigned file.** The first pass of
+the acceptance script checked `$?` and called an unsigned `BOOTX64.EFI` a pass.
+Both the script and `omarchy-server-secureboot` now parse the report for
+`is not signed`.
+
+**The removable fallback is signed by nobody during an install.**
+`limine-entry-tool` signs only `limine_x64.efi`; `/EFI/BOOT/BOOTX64.EFI` is
+covered by sbctl's pacman hook, and no transaction runs after `limine-install`
+writes it. `omarchy-server-secureboot enroll` now signs the chain itself before
+verifying, which closes the gap wherever it appears.

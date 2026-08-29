@@ -78,10 +78,22 @@ EOF
 
     echo
     echo "== assertions =="
+    # Read the version back from pacman instead of writing it down here. Every
+    # content change bumps pkgrel (docs/packaging.md §1 "Versioning"), so a
+    # literal in this file would have to be edited on every release and would
+    # fail the run on the one it was forgotten on.
+    pkg_version=$(pacman -Q omarchy-server | cut -d" " -f2)   # pkgver-pkgrel
+    pkg_pkgver=${pkg_version%%-*}
+    echo "testing omarchy-server $pkg_version"
     check "no desktop packages installed" bash -c \
       "! pacman -Qq | grep -qE \"^(hyprland|sddm|pipewire|quickshell|plymouth|wireplumber|uwsm|gnome-keyring|xdg-desktop-portal-hyprland)\""
     check "omarchy-version prints the package version" bash -c \
-      "[[ \$(omarchy-version) == 4.0.1-1 ]]"
+      "[[ \$(omarchy-version) == $pkg_version ]]"
+    # The runtime depends on omarchy-server-settings=${pkgver}, without a
+    # pkgrel, so the two may carry different pkgrels; only the pkgver has to
+    # agree.
+    check "omarchy-server-settings is the matching pkgver" bash -c \
+      "[[ \$(pacman -Q omarchy-server-settings | cut -d\" \" -f2) == $pkg_pkgver-* ]]"
     check "omarchy-pkg-present bash" omarchy-pkg-present bash
     check "omarchy-pkg-present of a missing package fails" bash -c \
       "! omarchy-pkg-present definitely-not-installed"
@@ -138,7 +150,7 @@ EOF
     echo
     echo "== identity =="
     check "os-release names the edition and the version" bash -c \
-      "grep -qx \"NAME=\\\"Omarchy Server\\\"\" /etc/os-release && grep -qx \"PRETTY_NAME=\\\"Omarchy Server 4.0.1\\\"\" /etc/os-release && grep -qx \"ANSI_COLOR=\\\"0;32\\\"\" /etc/os-release && grep -qx \"LOGO=omarchy\" /etc/os-release"
+      "grep -qx \"NAME=\\\"Omarchy Server\\\"\" /etc/os-release && grep -qx \"PRETTY_NAME=\\\"Omarchy Server $pkg_pkgver\\\"\" /etc/os-release && grep -qx \"ANSI_COLOR=\\\"0;32\\\"\" /etc/os-release && grep -qx \"LOGO=omarchy\" /etc/os-release"
     check "limine.conf brands the menu" bash -c \
       "grep -qx \"interface_branding: Omarchy Server\" /usr/share/omarchy/default/limine/limine.conf"
     check "limine.conf points at the wallpaper on the ESP" bash -c \
@@ -211,7 +223,7 @@ EOF
     check "omarchy-server-addon is linked into /usr/bin" bash -c \
       "test -L /usr/bin/omarchy-server-addon"
     check "omarchy-server-addon --list names every addon" bash -c \
-      "for a in cli-tools dev docker editor fwall net-tools tailscale vm; do omarchy-server-addon --list | grep -qx \"\$a\" || exit 1; done"
+      "for a in cli-tools dev docker editor fwall net-tools secureboot tailscale vm; do omarchy-server-addon --list | grep -qx \"\$a\" || exit 1; done"
     check "omarchy-server-addon --help does not touch the system" \
       omarchy-server-addon --help
     check "an unknown addon fails" bash -c \
@@ -220,6 +232,26 @@ EOF
       "grep -qx docker /usr/share/omarchy/install/server/addons/docker.packages && grep -qx ufw-docker /usr/share/omarchy/install/server/addons/docker.packages"
     check "docker addon setup leaf ships with it" \
       test -f /usr/share/omarchy/install/server/addons/docker.sh
+    echo
+    echo "== secure boot =="
+    check "the secureboot addon is sbctl and nothing else" bash -c \
+      "[[ \$(grep -cv \"^#\\|^\$\" /usr/share/omarchy/install/server/addons/secureboot.packages) == 1 ]] && grep -qx sbctl /usr/share/omarchy/install/server/addons/secureboot.packages"
+    check "sbctl is not in the base" bash -c \
+      "! pacman -Qq sbctl >/dev/null 2>&1"
+    check "the addon leaf runs the profile setup script" bash -c \
+      "grep -q \"server/secureboot-server.sh\" /usr/share/omarchy/install/server/addons/secureboot.sh"
+    check "the setup script adds the lockdown cmdline" bash -c \
+      "grep -q \"lockdown=integrity module.sig_enforce=1\" /usr/share/omarchy/install/server/secureboot-server.sh && grep -q \"limine-entry-tool.d/omarchy-secureboot.conf\" /usr/share/omarchy/install/server/secureboot-server.sh"
+    # The cmdline must be an addition, not a replacement: the drop-in has to
+    # sort after omarchy-defaults.conf and use += .
+    check "the cmdline drop-in appends rather than replaces" bash -c \
+      "grep -q \"KERNEL_CMDLINE\\[default\\]+=\" /usr/share/omarchy/install/server/secureboot-server.sh && [[ omarchy-secureboot.conf > omarchy-defaults.conf ]]"
+    check "the base ships no secure boot cmdline" bash -c \
+      "! test -e /etc/limine-entry-tool.d/omarchy-secureboot.conf"
+    check "omarchy-server-secureboot is linked into /usr/bin and parses" bash -c \
+      "test -L /usr/bin/omarchy-server-secureboot && bash -n /usr/share/omarchy/bin/omarchy-server-secureboot"
+    check "omarchy-server-secureboot --help does not touch the system" \
+      omarchy-server-secureboot --help
     check "fwall is an addon, not part of the base" bash -c \
       "grep -qx fwall /usr/share/omarchy/install/server/addons/fwall.packages && ! pacman -Qq fwall >/dev/null 2>&1"
 

@@ -1,0 +1,217 @@
+=== Secure Boot acceptance — VM 'srvsb' — 2026-08-29T06:07:25-03:00 ===
+
+[PASS] sbctl reports Secure Boot enabled with our keys
+      $ ~/.lab-sudo sbctl status
+      Installed:	✓ sbctl is installed
+      Owner GUID:	e8e7f87a-f0e0-48e5-8b05-261748d820ef
+      Setup Mode:	✓ Disabled
+      Secure Boot:	✓ Enabled
+      Vendor Keys:	microsoft
+
+[PASS] sbctl says the firmware is out of setup mode
+      $ ~/.lab-sudo sbctl status --json
+      {
+        "installed": true,
+        "guid": "e8e7f87a-f0e0-48e5-8b05-261748d820ef",
+        "setup_mode": false,
+        "secure_boot": true,
+        "vendors": [
+          "microsoft"
+        ],
+        "firmware_quirks": []
+      }
+
+[PASS] sbctl owns the installed keys
+      $ ~/.lab-sudo sbctl status --json
+      {
+        "installed": true,
+        "guid": "e8e7f87a-f0e0-48e5-8b05-261748d820ef",
+        "setup_mode": false,
+        "secure_boot": true,
+        "vendors": [
+          "microsoft"
+        ],
+        "firmware_quirks": []
+      }
+
+[PASS] the SecureBoot EFI variable reads 1
+      $ od -An -t u1 -j4 -N1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c | tr -d " "
+      1
+
+[PASS] the kernel saw secure boot at handover
+      $ ~/.lab-sudo dmesg | grep -i "secure boot" || echo NONE
+      [    0.004952] Secure boot enabled
+
+[PASS] every EFI binary on the ESP is signed
+      $ ~/.lab-sudo sbctl verify | tee /dev/stderr | grep -c "is not signed" | sed "s/^/unsigned=/"
+      Verifying file database and EFI images in /boot...
+      ✓ /boot/EFI/BOOT/BOOTX64.EFI is signed
+      ✓ /boot/EFI/Linux/omarchy_linux.efi is signed
+      ✓ /boot/EFI/limine/limine_x64.efi is signed
+      unsigned=0
+
+[PASS] the Limine binary, the fallback and the UKI are all in the signed set
+      $ ~/.lab-sudo sbctl verify | grep -E "limine_x64.efi|BOOTX64.EFI|omarchy_linux.efi"
+      ✓ /boot/EFI/BOOT/BOOTX64.EFI is signed
+      ✓ /boot/EFI/Linux/omarchy_linux.efi is signed
+      ✓ /boot/EFI/limine/limine_x64.efi is signed
+
+[PASS] limine.conf points at the UKI and its recorded hash matches the file
+      $ ~/.lab-sudo bash -c 'p=$(grep -o "path: boot():/EFI/Linux/[^#]*#[0-9a-f]*" /boot/limine.conf | head -1);
+     f=/boot${p#*boot():}; f=${f%%#*}; h=${p##*#};
+     echo "file=$f"; echo "recorded=$h"; echo "actual=$(b2sum "$f" | cut -d" " -f1)";
+     [[ $h == $(b2sum "$f" | cut -d" " -f1) ]] && echo hash-ok || echo hash-mismatch'
+      file=/boot/EFI/Linux/omarchy_linux.efi
+      recorded=6648fb91474ecfbc4841dd6e5512703e864ec9f5d66ae33214df1bb88456b7c6502a3ef28f90bcd7c18716966484bdbaa5f834216bb055b132848b60ba60f1fa
+      actual=6648fb91474ecfbc4841dd6e5512703e864ec9f5d66ae33214df1bb88456b7c6502a3ef28f90bcd7c18716966484bdbaa5f834216bb055b132848b60ba60f1fa
+      hash-ok
+
+[PASS] the cmdline the kernel booted with carries the lockdown options
+      $ cat /proc/cmdline
+      root=PARTUUID=62460126-fbdc-4427-ad6d-f18cd8e248d2 zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  lockdown=integrity module.sig_enforce=1 console=ttyS0,115200 console=tty0
+
+[PASS] lockdown is in integrity mode
+      $ ~/.lab-sudo cat /sys/kernel/security/lockdown
+      none [integrity] confidentiality
+
+[PASS] module signature enforcement is on
+      $ cat /sys/module/module/parameters/sig_enforce
+      Y
+
+[PASS] the cmdline drop-in appends to the profile defaults
+      $ ls /etc/limine-entry-tool.d/; grep -v "^#" /etc/limine-entry-tool.d/omarchy-secureboot.conf
+      omarchy-defaults.conf
+      omarchy-secureboot.conf
+      omarchy-uki.conf
+      KERNEL_CMDLINE[default]+=" lockdown=integrity module.sig_enforce=1"
+
+[PASS] the serial console survived on the cmdline
+      $ cat /proc/cmdline
+      root=PARTUUID=62460126-fbdc-4427-ad6d-f18cd8e248d2 zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  lockdown=integrity module.sig_enforce=1 console=ttyS0,115200 console=tty0
+
+[PASS] the keys are on the root filesystem, not on the ESP
+      $ ~/.lab-sudo find /var/lib/sbctl -name "*.key" | sort; ~/.lab-sudo find /boot -name "*.key" -o -name "*.pem" | wc -l | sed "s/^/esp-key-files=/"
+      /var/lib/sbctl/keys/KEK/KEK.key
+      /var/lib/sbctl/keys/PK/PK.key
+      /var/lib/sbctl/keys/db/db.key
+      esp-key-files=0
+
+[PASS] no account but root can read the key material
+      $ ~/.lab-sudo stat -c "%a %n" /var/lib/sbctl /var/lib/sbctl/keys /var/lib/sbctl/keys/db /var/lib/sbctl/keys/db/db.key;
+   ls /var/lib/sbctl 2>&1 | tail -1
+      700 /var/lib/sbctl
+      700 /var/lib/sbctl/keys
+      700 /var/lib/sbctl/keys/db
+      400 /var/lib/sbctl/keys/db/db.key
+      ls: cannot open directory '/var/lib/sbctl': Permission denied
+
+[PASS] an unsigned module is refused
+      $ ~/.lab-sudo bash -c 'k=$(uname -r); m=""; n="";
+     for f in $(find /usr/lib/modules/$k/kernel -name "*.ko.zst" | head -200); do
+       b=$(basename "$f" .ko.zst); b=${b//-/_};
+       lsmod | grep -q "^$b " || { m=$f; n=$b; break; };
+     done;
+     echo "module=$n source=$m";
+     zstd -qdc "$m" >/tmp/tamper.ko; printf "\\x00" >>/tmp/tamper.ko;
+     echo "insmod:"; insmod /tmp/tamper.ko 2>&1 || true;
+     rmmod "$n" 2>/dev/null && echo "WARNING: it loaded";
+     rm -f /tmp/tamper.ko' 2>&1;
+   echo "---"; ~/.lab-sudo dmesg | tail -3
+      module=aegis128_aesni source=/usr/lib/modules/7.1.11-arch1-1/kernel/arch/x86/crypto/aegis128-aesni.ko.zst
+      insmod:
+      insmod: ERROR: could not insert module /tmp/tamper.ko: Key was rejected by service
+      ---
+      [    3.358042] systemd-journald[314]: Received client request to flush runtime journal.
+      [    3.402985] zswap: loaded using pool zstd
+      [   58.854025] Loading of unsigned module is rejected
+
+[PASS] a stock in-tree module still loads
+      $ ~/.lab-sudo modprobe -r dummy 2>/dev/null; ~/.lab-sudo modprobe dummy && echo loaded; ~/.lab-sudo modprobe -r dummy
+      loaded
+
+UKI before the kernel reinstall: 6648fb91474ecfbc4841dd6e5512703e…
+
+[PASS] reinstalling the kernel rebuilds the UKI
+      $ ~/.lab-sudo pacman -Sy --noconfirm >/dev/null 2>&1;
+   ~/.lab-sudo pacman -S --noconfirm linux 2>&1 | tail -25;
+   echo "---";
+   after=$(~/.lab-sudo b2sum /boot/EFI/Linux/omarchy_linux.efi | cut -d' ' -f1);
+   echo "before=6648fb91474ecfbc4841dd6e5512703e864ec9f5d66ae33214df1bb88456b7c6502a3ef28f90bcd7c18716966484bdbaa5f834216bb055b132848b60ba60f1fa"; echo "after=$after";
+   [[ $after == 6648fb91474ecfbc4841dd6e5512703e864ec9f5d66ae33214df1bb88456b7c6502a3ef28f90bcd7c18716966484bdbaa5f834216bb055b132848b60ba60f1fa ]] && echo uki-unchanged || echo uki-rebuilt
+        -> Running build hook: [block]
+        -> Running build hook: [encrypt]
+      ==> WARNING: Possibly missing firmware for module: 'qat_6xxx'
+        -> Running build hook: [filesystems]
+        -> Running build hook: [fsck]
+        -> Running build hook: [btrfs-overlayfs]
+      ==> Generating module dependencies
+      ==> Creating zstd-compressed initcpio image
+        -> Early uncompressed CPIO image generation successful
+      ==> Initcpio image generation successful
+      ==> Creating unified kernel image: '/tmp/limine-mkinitcpio.v5MzXx/linux.efi'
+      ==> Unified kernel image generation successful
+      ==> Running post hooks
+        -> Running post hook: [sbctl]
+      Signing /tmp/limine-mkinitcpio.v5MzXx/linux.efi
+      ✓ Signed /tmp/limine-mkinitcpio.v5MzXx/linux.efi
+      ==> Post processing done
+      Copied: /tmp/limine-mkinitcpio.v5MzXx/linux.efi -> /boot/EFI/Linux/omarchy_linux.efi
+      Updated: /boot/limine.conf
+      ✓ Signed /boot/EFI/limine/limine_x64.efi
+      (5/5) Signing EFI binaries...
+      Generating EFI bundles....
+      File has already been signed /boot/EFI/BOOT/BOOTX64.EFI
+      File has already been signed /boot/EFI/Linux/omarchy_linux.efi
+      File has already been signed /boot/EFI/limine/limine_x64.efi
+      ---
+      before=6648fb91474ecfbc4841dd6e5512703e864ec9f5d66ae33214df1bb88456b7c6502a3ef28f90bcd7c18716966484bdbaa5f834216bb055b132848b60ba60f1fa
+      after=11402d1c4272738367fcdda848d1a643217a2d537b73757e917e53dcd8c493cacf77adccd05c8a5e5ca80f29d1a342c43eb0d1c48648b399c4e039b3116d21a9
+      uki-rebuilt
+
+[PASS] the rebuilt UKI is signed
+      $ ~/.lab-sudo sbctl verify | tee /dev/stderr | grep -c "is not signed" | sed "s/^/unsigned=/"
+      Verifying file database and EFI images in /boot...
+      ✓ /boot/EFI/BOOT/BOOTX64.EFI is signed
+      ✓ /boot/EFI/Linux/omarchy_linux.efi is signed
+      ✓ /boot/EFI/limine/limine_x64.efi is signed
+      unsigned=0
+
+[PASS] limine.conf still records the hash of the rebuilt, signed UKI
+      $ ~/.lab-sudo bash -c 'p=$(grep -o "path: boot():/EFI/Linux/[^#]*#[0-9a-f]*" /boot/limine.conf | head -1);
+     f=/boot${p#*boot():}; f=${f%%#*}; h=${p##*#};
+     [[ $h == $(b2sum "$f" | cut -d" " -f1) ]] && echo hash-ok || echo hash-mismatch'
+      hash-ok
+
+[PASS] limine-snapper-sync left the config consistent
+      $ ~/.lab-sudo bash -c "~/.lab-sudo snapper -c root create -d acceptance-secureboot 2>/dev/null; sleep 20; grep -c \"^/+\\|^  //\" /boot/limine.conf; grep -q \"interface_branding: Omarchy Server\" /boot/limine.conf && echo branding-ok"
+      2
+      branding-ok
+
+=== rebooting to prove the machine still boots enforcing ===
+boot id before: e39a0958-5f78-47a6-828e-8dd2386c92b6
+boot id after:  6afbdbb4-5695-4e89-a8fc-41815c712ed3
+
+[PASS] the machine actually rebooted
+      boot_id e39a0958-5f78-47a6-828e-8dd2386c92b6 -> 6afbdbb4-5695-4e89-a8fc-41815c712ed3
+
+[PASS] the machine came back with Secure Boot still enforcing
+      $ ~/.lab-sudo sbctl status --json; echo "---"; cat /sys/kernel/security/lockdown; uname -r
+      {
+        "installed": true,
+        "guid": "e8e7f87a-f0e0-48e5-8b05-261748d820ef",
+        "setup_mode": false,
+        "secure_boot": true,
+        "vendors": [
+          "microsoft"
+        ],
+        "firmware_quirks": []
+      }
+      ---
+      none [integrity] confidentiality
+      7.1.11-arch1-1
+
+[PASS] and it is still refusing unsigned modules
+      $ cat /sys/module/module/parameters/sig_enforce
+      Y
+
+=== 24 passed, 0 failed ===

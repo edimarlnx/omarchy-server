@@ -1,0 +1,155 @@
+diff --git a/configs/airootfs/usr/local/bin/omarchy-cidata-load b/configs/airootfs/usr/local/bin/omarchy-cidata-load
+index 631ba56..8b4ac37 100755
+--- a/configs/airootfs/usr/local/bin/omarchy-cidata-load
++++ b/configs/airootfs/usr/local/bin/omarchy-cidata-load
+@@ -49,7 +49,10 @@ mount -o ro "$device" "$mnt" || exit 1
+ # per line; the server ISO bundles them all in its offline mirror.
+ # `unattended-updates` is a marker file: its presence turns on the server
+ # profile's daily update timer, which ships disabled. Its content is not read.
+-optional_inputs=(user_credentials.json defer-provisioning user_full_name.txt user_email_address.txt user_encrypt_installation.txt authorized_keys tailscale_authkey profile addons unattended-updates)
++# `secureboot` is a marker file too: its presence makes the install generate
++# this machine's own Secure Boot keys, sign the boot chain with them and enroll
++# them when the firmware is in Setup Mode. Its content is not read.
++optional_inputs=(user_credentials.json defer-provisioning user_full_name.txt user_email_address.txt user_encrypt_installation.txt authorized_keys tailscale_authkey profile addons unattended-updates secureboot)
+ for file in user_configuration.json "${optional_inputs[@]}"; do
+   rm -f "$dest/$file"
+ done
+diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py b/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py
+index 7bbc6e2..3056cff 100644
+--- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py
++++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py
+@@ -43,6 +43,7 @@ def build_phases(ctx: InstallContext):
+         configure_ssh_access,
+         configure_tailscale,
+         validate_boot,
++        enroll_secure_boot,
+         create_factory_snapshot,
+     )
+ 
+@@ -67,6 +68,11 @@ def build_phases(ctx: InstallContext):
+         ("Configuring Tailscale",      configure_tailscale),
+         ("Configuring DNS resolver",   configure_dns_resolver),
+         ("Validating boot setup",      validate_boot),
++        # After validate_boot: enrolling a platform key is what makes the
++        # firmware start refusing what it cannot verify, so the boot chain has
++        # to be written, signed and checked first. A no-op unless the install
++        # asked for Secure Boot.
++        ("Enrolling Secure Boot keys", enroll_secure_boot),
+         ("Creating factory snapshot",  create_factory_snapshot),
+     ]
+ 
+diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
+index aa477eb..3c5c946 100644
+--- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
++++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
+@@ -149,6 +149,34 @@ def _is_server_profile() -> bool:
+     return _install_profile() == "server"
+ 
+ 
++# ─────────────────────────────────────────────────────────────────────────────
++# Secure Boot. A marker file on the autoinstall drive (`secureboot`, copied to
++# /root by omarchy-cidata-load) or OMARCHY_SECURE_BOOT=1 in the live
++# environment asks for an install whose boot chain is signed by keys this
++# machine generates for itself.
++#
++# It is not a phase of its own for the setup: the work is the server profile's
++# `secureboot` addon, so it rides the addon phase that already exists and
++# already knows how to install a package out of the offline mirror. That phase
++# runs before finalize_limine_boot, which is what the ordering has to be --
++# the kernel cmdline lives inside the UKI, so the drop-in that adds
++# `lockdown=integrity` must exist before the UKI is built.
++#
++# Enrollment IS a phase of its own (enroll_secure_boot, below), because it can
++# only happen after the boot chain has been written and signed.
++# ─────────────────────────────────────────────────────────────────────────────
++
++SECURE_BOOT_ADDON = "secureboot"
++
++
++def _secure_boot_requested() -> bool:
++    if not _is_server_profile():
++        return False
++    if os.environ.get("OMARCHY_SECURE_BOOT", "").strip() == "1":
++        return True
++    return Path("/root/secureboot").exists()
++
++
+ # Packages installed BEFORE useradd. The selected omarchy-settings package and
+ # omarchy-nvim populate /etc/skel so the user's home gets seeded correctly, and
+ # omarchy-settings also ships the limine/snapper configs. Target-side setup
+@@ -1168,6 +1196,10 @@ def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str
+         # turns the daily update timer on when it says 1; the package ships
+         # that timer disabled.
+         f"OMARCHY_UNATTENDED_UPDATES={'1' if Path('/root/unattended-updates').exists() else '0'}",
++        # Same shape: a marker file on the autoinstall drive. The setup itself
++        # runs as the `secureboot` addon; this is what lets anything else in
++        # the target know which kind of install it is part of.
++        f"OMARCHY_SECURE_BOOT={'1' if _secure_boot_requested() else '0'}",
+         "OMARCHY_INSTALL_LOG_FILE=/var/log/omarchy-install.log",
+         "OMARCHY_LOG_TO_STDOUT=1",
+     ]
+@@ -1280,7 +1312,7 @@ def _requested_addons() -> list[str]:
+     try:
+         lines = Path("/root/addons").read_text().splitlines()
+     except OSError:
+-        return []
++        lines = []
+ 
+     names = []
+     for line in lines:
+@@ -1290,6 +1322,13 @@ def _requested_addons() -> list[str]:
+         if not ADDON_NAME_RE.match(name):
+             raise RuntimeError(f"invalid addon name on the autoinstall drive: {name!r}")
+         names.append(name)
++
++    # First, and whether or not the drive named any addon: the keys and the
++    # cmdline drop-in have to be in place before anything else an addon might
++    # trigger rebuilds the initramfs.
++    if _secure_boot_requested() and SECURE_BOOT_ADDON not in names:
++        names.insert(0, SECURE_BOOT_ADDON)
++
+     return names
+ 
+ 
+@@ -1974,6 +2013,41 @@ def _validate_pre_mounted_filesystems(ctx: InstallContext) -> None:
+             raise RuntimeError(f"{crypttab} missing LUKS UUID {storage['luks_uuid']}")
+ 
+ 
++# ─────────────────────────────────────────────────────────────────────────────
++# enroll_secure_boot: hand this machine's PK/KEK/db to the firmware.
++#
++# Last, and after validate_boot, on purpose. Enrolling a platform key is the
++# moment the firmware starts refusing everything it cannot verify, so it must
++# come after the boot chain exists, has been signed and has been checked --
++# `omarchy-server-secureboot enroll` re-verifies with `sbctl verify` before it
++# writes anything, and refuses to enroll into a chain that is not fully signed.
++#
++# Enrollment writes EFI variables, not files, so it does not belong inside the
++# factory snapshot that follows either way.
++#
++# Firmware that is not in Setup Mode is not a failure: the command says what to
++# do at the machine's own setup screen and exits 0, leaving an install that is
++# signed and ready for the operator's one manual step.
++# ─────────────────────────────────────────────────────────────────────────────
++
++def enroll_secure_boot(ctx: InstallContext) -> None:
++    if not _secure_boot_requested():
++        return
++
++    # The real file under /usr/share, not the /usr/bin symlink: that symlink is
++    # absolute, so resolving it from outside the chroot lands in the LIVE ISO's
++    # filesystem, where the command does not exist — and the phase would fail
++    # on a target where the addon installed perfectly.
++    if not (ctx.target / "usr/share/omarchy/bin/omarchy-server-secureboot").exists():
++        raise RuntimeError(
++            "secure boot was requested but omarchy-server-secureboot is not in the "
++            "target; the `secureboot` addon did not install"
++        )
++
++    _prepare_target_setup(ctx)
++    _run_target_setup_command(ctx, ["/usr/bin/omarchy-server-secureboot", "enroll"])
++
++
+ # ─────────────────────────────────────────────────────────────────────────────
+ # create_factory_snapshot: read-only snapshot of @ kept at the btrfs top level
+ # as @factory — outside snapper's .snapshots, so cleanup timers and the Limine

@@ -1,0 +1,319 @@
+#!/bin/bash
+
+# omarchy:summary=Inspect and manage Secure Boot with this machine's own keys
+# omarchy:args=[status|enroll|sign|keys]
+# omarchy:examples=omarchy server-secureboot status | omarchy server-secureboot enroll
+# omarchy:requires-sudo=true
+
+# The runtime face of the `secureboot` addon. The signing itself is automatic
+# once the keys exist -- limine-entry-tool signs the Limine EFI binary and
+# mkinitcpio signs the UKI, both gated on `sbctl setup --print-state`, and
+# sbctl's own pacman hook re-signs everything in its database after any
+# transaction that touches boot/. What is left for a human is knowing whether
+# that is actually working (`status`), putting the keys into the firmware the
+# one time that has to happen (`enroll`), and repairing the two states where
+# the automation cannot help: a boot chain that was written before the keys
+# existed (`sign`) and a machine with no keys at all (`keys`).
+#
+# See docs/secure-boot.md in the omarchy-server repository for the design.
+
+set -uo pipefail
+
+# The whole command line as invoked, so the sudo re-exec below repeats it
+# verbatim instead of losing the subcommand the case statement consumed.
+argv=("$@")
+
+require_root() {
+  if ((EUID != 0)); then
+    exec sudo -E "$0" "${argv[@]}"
+  fi
+}
+
+esp_mount() {
+  local esp=""
+  if [[ -r /etc/default/limine ]]; then
+    esp=$(sed -n 's/^[[:space:]]*ESP_PATH=["'\'']\{0,1\}\([^"'\'']*\).*/\1/p' /etc/default/limine | tail -n 1)
+  fi
+  printf '%s' "${esp:-/boot}"
+}
+
+require_sbctl() {
+  if ! command -v sbctl >/dev/null; then
+    echo "omarchy-server-secureboot: sbctl is not installed." >&2
+    echo "                           Run: omarchy-server-addon secureboot" >&2
+    exit 1
+  fi
+}
+
+keys_present() {
+  [[ $(sbctl setup --print-state --json 2>/dev/null) == *'"installed": true'* ]]
+}
+
+# The firmware's own answer, read straight out of efivarfs, so it does not
+# depend on sbctl agreeing. Byte 4 of each variable is the value; the first
+# four bytes are the EFI attribute word.
+efivar_flag() { # efivar_flag <name>-<vendor guid>
+  local path="/sys/firmware/efi/efivars/$1"
+  [[ -r $path ]] || return 2
+  local byte
+  byte=$(od -An -t u1 -j4 -N1 "$path" 2>/dev/null | tr -d ' ')
+  [[ $byte == 1 ]]
+}
+
+secure_boot_enabled() {
+  efivar_flag "SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+}
+
+setup_mode() {
+  efivar_flag "SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+}
+
+boot_chain_files() {
+  local esp
+  esp=$(esp_mount)
+  printf '%s\n' \
+    "$esp/EFI/limine/limine_x64.efi" \
+    "$esp/EFI/BOOT/BOOTX64.EFI" \
+    "$esp/EFI/Linux/omarchy_linux.efi"
+}
+
+cmd_status() {
+  require_sbctl
+
+  echo "== sbctl =="
+  sbctl status || true
+
+  echo
+  echo "== firmware =="
+  if [[ -d /sys/firmware/efi ]]; then
+    if secure_boot_enabled; then echo "SecureBoot: enabled"; else echo "SecureBoot: disabled"; fi
+    case $(
+      setup_mode
+      echo $?
+    ) in
+      0) echo "SetupMode:  yes (the firmware owns no PK; keys can be enrolled)" ;;
+      1) echo "SetupMode:  no (a PK is enrolled)" ;;
+      *) echo "SetupMode:  unknown (variable not readable)" ;;
+    esac
+  else
+    echo "not booted through UEFI"
+  fi
+  # dmesg carries the kernel's own view, which is the one that decides whether
+  # lockdown engages. Readable by root only on a hardened kernel, hence the
+  # fallback line rather than a failure.
+  dmesg 2>/dev/null | grep -i "secure boot" || echo "dmesg: no Secure Boot line (or dmesg is restricted)"
+
+  echo
+  echo "== kernel =="
+  if [[ -r /sys/kernel/security/lockdown ]]; then
+    echo "lockdown:        $(</sys/kernel/security/lockdown)"
+  else
+    echo "lockdown:        securityfs not mounted or lockdown LSM not active"
+  fi
+  echo "module.sig_enforce: $(cat /sys/module/module/parameters/sig_enforce 2>/dev/null || echo unknown)"
+  echo "cmdline:         $(</proc/cmdline)"
+
+  echo
+  echo "== boot chain =="
+  if keys_present; then
+    verify_chain || echo "the boot chain is NOT fully signed; run: omarchy-server-secureboot sign"
+  else
+    echo "no keys under /var/lib/sbctl; run: omarchy-server-secureboot keys"
+  fi
+
+  # bootctl belongs to systemd-boot and is not installed in this profile; the
+  # check is here so its absence reads as "not applicable" rather than as a
+  # missing step.
+  echo
+  if command -v bootctl >/dev/null; then
+    echo "== bootctl =="
+    bootctl status 2>&1 | sed -n '1,25p'
+  else
+    echo "bootctl: not installed (this profile boots through Limine, not systemd-boot)"
+  fi
+}
+
+cmd_keys() {
+  require_root
+  require_sbctl
+
+  if keys_present; then
+    echo "Keys are already present under /var/lib/sbctl. Refusing to overwrite:"
+    echo "replacing them would leave every already-signed binary unverifiable."
+    echo "To rotate deliberately, see docs/secure-boot.md."
+  else
+    sbctl create-keys || exit 1
+    chmod 0700 /var/lib/sbctl
+    find /var/lib/sbctl -type d -exec chmod 0700 {} +
+  fi
+
+  echo
+  sbctl status || true
+  echo
+  echo "Certificates (public halves; the .key files never leave this machine):"
+  find /var/lib/sbctl/keys -name '*.pem' -printf '  %p\n' 2>/dev/null
+}
+
+sign_boot_chain() {
+  local file
+  while read -r file; do
+    if [[ -f $file ]]; then
+      echo "signing $file"
+      sbctl sign -s "$file" || echo "  failed" >&2
+    fi
+  done < <(boot_chain_files)
+
+  # Everything else already in the database (a second kernel, a rescue image
+  # somebody added by hand).
+  sbctl sign-all -g || true
+}
+
+# `sbctl verify` exits 0 even when it has just reported an unsigned file, so
+# its exit status is the wrong thing to trust. The report is what carries the
+# answer: one "✗ ... is not signed" line per file it could not verify.
+verify_chain() {
+  local output
+  output=$(sbctl verify 2>&1)
+  printf '%s\n' "$output"
+  ! grep -q "is not signed" <<<"$output"
+}
+
+cmd_sign() {
+  require_root
+  require_sbctl
+
+  if ! keys_present; then
+    echo "omarchy-server-secureboot: no keys yet. Run: omarchy-server-secureboot keys" >&2
+    exit 1
+  fi
+
+  sign_boot_chain
+
+  echo
+  verify_chain || exit 1
+}
+
+cmd_enroll() {
+  require_root
+  require_sbctl
+
+  if [[ ! -d /sys/firmware/efi/efivars ]]; then
+    echo "omarchy-server-secureboot: efivarfs is not mounted; nothing to enroll into." >&2
+    exit 1
+  fi
+
+  if ! keys_present; then
+    echo "omarchy-server-secureboot: no keys yet. Run: omarchy-server-secureboot keys" >&2
+    exit 1
+  fi
+
+  if secure_boot_enabled && ! setup_mode; then
+    echo "Secure Boot is already enabled and the firmware owns a PK. Nothing to do."
+    exit 0
+  fi
+
+  # Sign first, then verify, and only then enroll.
+  #
+  # Signing here is not redundant with the addon's setup: the removable
+  # fallback /EFI/BOOT/BOOTX64.EFI does not exist yet when the addon runs (the
+  # installer's limine-install writes it afterwards), and limine-entry-tool
+  # signs only the primary binary — the fallback is left to sbctl's pacman
+  # hook, which no transaction has fired since. Signing what is already signed
+  # costs nothing.
+  echo "== signing the boot chain =="
+  sign_boot_chain
+
+  # Verify BEFORE enrolling, never after. Enrolling a PK is the moment the
+  # firmware starts refusing unsigned binaries, and the machine on the other
+  # side of the next reboot is the one that has to boot: if anything is still
+  # unsigned, the honest outcome is to say so and enroll nothing.
+  echo
+  echo "== verifying the boot chain before enrolling =="
+  if ! verify_chain; then
+    echo >&2
+    echo "omarchy-server-secureboot: the boot chain is not fully signed; enrolling" >&2
+    echo "                           now would leave this machine unbootable." >&2
+    exit 1
+  fi
+
+  if ! setup_mode; then
+    # A legitimate outcome, not a failure: most firmware ships with the vendor
+    # PK in place, and clearing it is a decision made at the machine's own
+    # setup screen. Exit 0 so an install that asked for Secure Boot still
+    # finishes -- with the keys, the signatures and the cmdline all in place,
+    # waiting for that one manual step.
+    echo
+    echo "The firmware is NOT in Setup Mode, so its PK cannot be replaced from here."
+    echo
+    echo "  1. Reboot into the firmware setup screen."
+    echo "  2. Find the Secure Boot key management page and erase/clear the"
+    echo "     platform key (often \"Delete all Secure Boot variables\","
+    echo "     \"Reset to Setup Mode\" or \"Erase all secure boot settings\")."
+    echo "  3. Boot back into this system and run:"
+    echo "         sudo omarchy-server-secureboot enroll"
+    echo "  4. Re-enable Secure Boot in the firmware and reboot."
+    exit 0
+  fi
+
+  # --microsoft: the option ROM of a plug-in card (a NIC, a RAID controller,
+  # a GPU) is signed by Microsoft's UEFI CA and nothing else, and firmware that
+  # cannot verify it may refuse to initialise the device -- which on a headless
+  # machine can mean no disk and no network. The trade is explicit: those CAs
+  # can also vouch for a shim somebody else controls. docs/secure-boot.md says
+  # how to drop them on hardware that does not need them.
+  #
+  # -i (--ignore-immutable): efivarfs sets the immutable attribute on every
+  # variable file that already exists, as a guard against `rm -rf` taking the
+  # firmware's configuration with it. A variable store that came out of Setup
+  # Mode with KEK/db still populated (which is what OVMF's does when only the
+  # PK was cleared) therefore has immutable KEK and db files, and sbctl refuses
+  # to touch them rather than clearing the flag itself. Replacing those two
+  # variables is precisely the operation being asked for here, so the guard is
+  # not protecting anything this command has not already decided to do.
+  echo
+  echo "== enrolling PK/KEK/db (plus the Microsoft CAs for option ROMs) =="
+  if ! sbctl enroll-keys -i --microsoft; then
+    echo "omarchy-server-secureboot: enrollment failed." >&2
+    exit 1
+  fi
+
+  echo
+  sbctl status || true
+  echo
+  echo "Keys enrolled. Enable Secure Boot in the firmware if it is not already on,"
+  echo "then reboot: from the next boot the firmware runs only what these keys signed."
+}
+
+case "${1:-status}" in
+  status)
+    shift
+    cmd_status
+    ;;
+  keys)
+    shift
+    cmd_keys
+    ;;
+  sign)
+    shift
+    cmd_sign
+    ;;
+  enroll)
+    shift
+    cmd_enroll
+    ;;
+  -h | --help)
+    echo "Usage: omarchy-server-secureboot [status|enroll|sign|keys]"
+    echo
+    echo "  status    report firmware, kernel and boot-chain signature state (default)"
+    echo "  enroll    verify the chain, then enroll this machine's keys into the firmware"
+    echo "  sign      re-sign the Limine binaries and the UKI, then verify"
+    echo "  keys      create the machine-local PK/KEK/db if there are none"
+    echo
+    echo "Install the tooling with: omarchy-server-addon secureboot"
+    exit 0
+    ;;
+  *)
+    echo "omarchy-server-secureboot: unknown command '$1'. Try --help." >&2
+    exit 2
+    ;;
+esac

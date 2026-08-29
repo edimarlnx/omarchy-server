@@ -127,6 +127,35 @@ has a checkout exports `OMARCHY_SRC` and the PKGBUILD reads that instead
 mount at `/src/omarchy` and what the ISO builder does at `/omarchy-source`: no
 network, and never the ambient state of a working tree.
 
+### 2.0 Versioning: bump `pkgrel` on every content change
+
+**Every change to what a package contains bumps its `pkgrel`.** `pkgver`
+tracks the upstream Omarchy release the profile is built against, so it stays
+put for as long as the pinned commit does; `pkgrel` is the only field left that
+says "this is a different package from the one you have".
+
+This is not bookkeeping. The CI workflow publishes into a GitHub release whose
+assets are addressed **by file name**, and the file name is
+`<name>-<pkgver>-<pkgrel>-<arch>.pkg.tar.zst`. Rebuilding with the same version
+republishes the same asset name: `repo-add` records the same version in
+`omarchy-server.db`, `pacman -Syu` on an installed machine compares versions,
+finds them equal, and reports nothing to do. The new content is on the server
+and will never be installed. That has already happened once, to
+`omarchy-server` and `omarchy-server-settings` at `4.0.1-1`, which is why both
+now start at `4.0.1-2`.
+
+Nothing in the toolchain can detect this for you — a package with new contents
+and an old version is a perfectly valid package. The rules:
+
+- changed anything under `profile/server/` (the overlay tarball) → bump
+  `omarchy-server` **and** `omarchy-server-settings`, since the same tarball is
+  a source of both;
+- changed a `PKGBUILD`'s `package()`, `depends`, or the pinned `_commit` → bump
+  that package;
+- moved `pkgver` → reset `pkgrel` to `1`;
+- test assertions never hard-code the version: `pkgs/test.sh` reads it back
+  from `pacman -Q omarchy-server`, so a bump needs no edit there.
+
 ### 2.1 `omarchy-server-keyring` (3.7 KB)
 
 Same layout as `omarchy-keyring`. The key packaged today is a **lab** key:

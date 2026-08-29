@@ -17,7 +17,7 @@ profile/server/  package list, addons, services, overlay (install/server/*,
                  settings) and patches applied on top of the upstream tree
 iso/             build.sh + overlay/patches for the ISO --profile server
 pocs/            lab scripts and measured results (QEMU/OVMF, cidata autoinstall)
-docs/            technical docs: packaging.md, iso-server.md, screenshots/
+docs/            technical docs: packaging.md, iso-server.md, secure-boot.md, screenshots/
 ```
 
 The **PKGBUILDs are not here**. They live in
@@ -97,7 +97,7 @@ ssh and be firewalled, and nothing else. What a machine needs on top comes from
 an addon, bundled in the ISO's offline mirror but not installed:
 
 ```bash
-omarchy-server-addon --list          # cli-tools dev docker editor fwall net-tools tailscale vm
+omarchy-server-addon --list          # cli-tools dev docker editor fwall net-tools secureboot tailscale vm
 omarchy-server-addon docker
 pocs/lab/mkcidata.sh --profile server --addons docker    # or at install time
 ```
@@ -125,6 +125,34 @@ The timer ships **disabled**. It can also be turned on at install time by an
 autoinstall drive carrying an `unattended-updates` file
 (`mkcidata.sh --unattended-updates`). `journalctl -u omarchy-server-update` is
 the record of a run. `docs/iso-server.md` §3.1 is what had to change and why.
+
+## Secure Boot
+
+Optional, and off unless asked for. A machine can boot with Secure Boot
+enforcing against keys **it generated for itself**: the Limine binary, its
+removable fallback and the UKI are all signed by a `db` key that never existed
+anywhere else, unsigned kernels and out-of-tree modules are refused
+(`lockdown=integrity module.sig_enforce=1`, inside the signed UKI), and a
+kernel upgrade re-signs the chain without anyone asking it to.
+
+```bash
+sudo omarchy-server-addon secureboot     # sbctl, keys, cmdline, signatures
+sudo omarchy-server-secureboot enroll    # hand the keys to the firmware
+sudo omarchy-server-secureboot status
+```
+
+At install time an autoinstall drive carrying a `secureboot` marker
+(`mkcidata.sh --secureboot`) does all of it, enrollment included, when the
+firmware is in Setup Mode. It costs exactly one package, and only on the
+machines that asked: `sbctl`, which is what limine-entry-tool and mkinitcpio
+already look for when they decide whether to sign what they just wrote.
+
+`docs/secure-boot.md` is the design — own keys rather than upstream's
+shim + MOK, where the keys live, which existing hook signs which binary, the
+lab flow with an OVMF firmware in Setup Mode, and what the boundary does and
+does not cover.
+
+## Measurements
 
 Measurements (package count, size, enabled units, listening sockets, setuid
 binaries, root services) are in `pocs/server-install/README.md`, produced by

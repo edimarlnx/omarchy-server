@@ -6,7 +6,7 @@
 #
 # Usage: mkcidata.sh [--profile desktop|server] [--hostname NAME] [--user NAME]
 #                    [--disk /dev/vda] [--disk-size-gb 40] [--addons a,b]
-#                    [--unattended-updates] [--out DIR]
+#                    [--unattended-updates] [--secureboot] [--out DIR]
 # Output: $OUT/cidata/* (the plain files) and $OUT/cidata.iso (volume label
 # "cidata", ISO9660+Joliet+RockRidge, which udev exposes as
 # /dev/disk/by-label/cidata inside the live ISO).
@@ -23,6 +23,7 @@ disk=/dev/vda
 disk_size_gb=40
 addons=""
 unattended_updates=0
+secureboot=0
 out="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/out"
 timezone="${TZ_NAME:-America/Sao_Paulo}"
 keyboard="${KB_LAYOUT:-us}"
@@ -38,6 +39,7 @@ while (($#)); do
     --disk-size-gb) disk_size_gb="$2"; shift 2 ;;
     --addons) addons="$2"; shift 2 ;;
     --unattended-updates) unattended_updates=1; shift ;;
+    --secureboot) secureboot=1; shift ;;
     --out) out="$2"; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
@@ -214,6 +216,18 @@ if ((unattended_updates)); then
   echo "enabled" >"$dir/unattended-updates"
 fi
 
+# Another marker file: its presence makes the install set Secure Boot up with
+# keys the machine generates for itself. The orchestrator turns it into the
+# `secureboot` addon (sbctl, from the ISO's offline mirror) plus an enrollment
+# step after the boot chain has been built and signed.
+#
+# The firmware has to be in Setup Mode for the enrollment to land; the lab gets
+# that from `vm.sh <name> create --secboot`. Without it the install still
+# finishes, signed and ready, and prints what to do at the firmware screen.
+if ((secureboot)); then
+  echo "enabled" >"$dir/secureboot"
+fi
+
 echo "$full_name" >"$dir/user_full_name.txt"
 echo "$email" >"$dir/user_email_address.txt"
 echo false >"$dir/user_encrypt_installation.txt"
@@ -230,5 +244,5 @@ done
 jq . "$dir/user_configuration.json" >/dev/null # validate
 
 xorriso -as mkisofs -quiet -V cidata -J -r -o "$out/cidata.iso" "$dir" 2>/dev/null
-echo "cidata: $out/cidata.iso (profile=$profile host=${hostname:-<installer default>} user=$username disk=$disk ${disk_size_gb}G addons=${addons:-none} unattended-updates=$unattended_updates)"
+echo "cidata: $out/cidata.iso (profile=$profile host=${hostname:-<installer default>} user=$username disk=$disk ${disk_size_gb}G addons=${addons:-none} unattended-updates=$unattended_updates secureboot=$secureboot)"
 echo "password: $password_file"

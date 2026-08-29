@@ -88,6 +88,7 @@ consumes a pinned commit anyway.
 | `0007-build-packages-makedepends-and-extra-sources.patch` | `builder/build-omarchy-packages.sh` | `makepkg --nodeps` installs nothing at all, including makedepends a package genuinely needs to compile, so each PKGBUILD's `makedepends` are read out of `makepkg --printsrcinfo` and installed — and only those. Also picks up addon packages built from their own upstream: a checkout at `/omarchy-pkgs/src/<name>` gets a `safe.directory` entry and its `<NAME>_SRC` variable (`FWALL_SRC` for `tui-tools`), the same contract `OMARCHY_SRC` gives the Omarchy PKGBUILDs. |
 | `0008-build-iso-profile-branding-and-addon-packages.patch` | `builder/build-iso.sh` | Adds `fwall` to the server profile's locally built packages, so it lands in the offline mirror and is never looked up on the network mirror. **Brands the live medium**: on a named profile the grub, syslinux and `profiledef.sh` labels become `Omarchy <Profile>` — a rename of the menu labels only, leaving the entry ids, the kernel command lines and the installer itself alone. |
 | `0009-orchestrator-default-hostname.patch` | `orchestrator/context.py` | archinstall defaults `hostname` to `archlinux` and only overrides it when the JSON carries a non-empty value, so an autoinstall drive that says nothing about the hostname produces a machine called `archlinux`. Defaults it to `omarchy` instead — the same default the interactive configurator offers — while leaving an explicit hostname, including `archlinux`, untouched. |
+| `0010-orchestrator-secure-boot.patch` | `omarchy-cidata-load`, `orchestrator/{main,phases_impl}.py` | Secure Boot with the machine's own keys. Accepts a `secureboot` marker file on the `cidata` drive; exports `OMARCHY_SECURE_BOOT` into the chroot env; **prepends the `secureboot` addon** to the requested list so the existing `install_addons` phase does the setup (and so it lands before `finalize_limine_boot`, which the cmdline drop-in requires); and adds one phase, `enroll_secure_boot`, after `validate_boot`. See §2.2 and `docs/secure-boot.md`. |
 
 ### `ufw limit` instead of `ufw allow`
 
@@ -119,6 +120,39 @@ factory snapshot is still taken on a clean disk.
 No patch touches `SigLevel`: `[omarchy]` stays `Optional TrustAll` as upstream
 and the offline mirror stays `Never` (a signed repository of our own is a
 separate step).
+
+### 2.2 Secure Boot, and why it needed only one new phase
+
+A `secureboot` marker on the autoinstall drive asks for an install whose boot
+chain is signed by keys the machine generates for itself. Almost all of the
+work is already-existing plumbing:
+
+- **the setup is an addon.** `_requested_addons()` prepends `secureboot` when
+  the marker is present, so `install_addons` installs `sbctl` out of the
+  offline mirror and sources `install/server/secureboot-server.sh` — no new
+  phase, no second copy of the offline-`pacman.conf` dance.
+- **the ordering was already right.** `install_addons` runs before
+  `finalize_limine_boot`, which is exactly what this needs: the cmdline
+  drop-in that adds `lockdown=integrity module.sig_enforce=1` has to exist
+  before the UKI that embeds it is built.
+- **the signing is not ours.** `limine-entry-tool` signs the Limine EFI binary
+  and `mkinitcpio` signs the UKI, both gated on `sbctl setup --print-state`.
+  Creating the keys is the whole switch; the profile ships no signing hook.
+
+What genuinely could not be folded into an existing phase is **enrollment**.
+Handing the firmware a platform key is the moment it starts refusing what it
+cannot verify, so it has to come after the chain has been written, signed and
+validated — hence one phase, `enroll_secure_boot`, after `validate_boot` and
+before `create_factory_snapshot` (it writes EFI variables, not files, so it has
+nothing to contribute to the snapshot). It runs
+`omarchy-server-secureboot enroll`, which re-verifies with `sbctl verify` and
+refuses to enroll into a chain that is not fully signed.
+
+Firmware that is not in Setup Mode is not an install failure: the command
+prints the firmware-screen steps and exits 0. The **live ISO is unsigned**
+(upstream builds it with an unsigned GRUB), so an install cannot happen on a
+machine that is already enforcing; `docs/secure-boot.md` §6 has the lab flow
+that gets around this by starting from an OVMF variable store with no PK.
 
 ## 3. Runtime patches (`profile/server/overlay/patches/`)
 
