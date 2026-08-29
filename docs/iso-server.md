@@ -236,6 +236,129 @@ step still prints "Restarting shell / All plugins have been reloaded" followed
 by `omarchy-restart-shell`'s own "config not found", which is cosmetic noise on
 a headless machine and the one piece of the update path left untouched.
 
+## 3.2 What happens after the update: restart, defer, reboot
+
+§3.1 got the update to *finish* unattended. It did not get the machine to
+**run** what the update installed. Upstream's last step asks "Linux kernel has
+been updated. Reboot?", and an unattended run declines, which on a desktop is
+right: the next login reboots anyway. On a server nobody logs in, so the machine
+keeps the sshd, the networkd and the libssl it replaced on disk — for as long as
+it stays up.
+
+`omarchy-server-update` therefore no longer `exec`s the update. It records the
+size of `/var/log/pacman.log` first, runs `omarchy-update -y`, and hands that
+byte offset to **`omarchy-server-update-restart`**, which reads exactly the
+transaction that just happened.
+
+**Two sources, and the machine outranks the log.**
+
+| Source | Answers |
+|---|---|
+| `/var/log/pacman.log` from the offset | which packages moved, and `upgraded` vs `reinstalled` — i.e. whether a *version* changed or only files did |
+| `/proc/<pid>/maps` and `/proc/<pid>/exe` | which processes still map a file that has been unlinked (the `(deleted)` marker) — "running replaced code", with no guess about which package owns which library |
+
+The second is what decides restarts, so a library nobody had mapped costs
+nothing and a service that maps something the log did not obviously name is
+still caught. Only `/usr` and `/opt` count: `/tmp`, `/run`, `/var`, `/dev` and
+`memfd` deletions are programs managing their own scratch files.
+
+**The classes, and the reason each one is where it is.**
+
+| Class | Packages | Verdict |
+|---|---|---|
+| kernel | `linux`, `linux-lts`, `linux-zen`, `linux-hardened`, `linux-rt`, `linux-rt-lts` | reboot **only if** the running `uname -r` is no longer an installed kernel |
+| firmware / microcode | `linux-firmware*`, `*-ucode` | reboot on a version change: the blob the hardware was handed at boot is gone |
+| initramfs | `mkinitcpio*`, `booster`, `dracut` | reboot: the image was rebuilt and the running kernel booted from the old one |
+| bootloader | `limine*` | reboot |
+| glibc | `glibc` | reboot |
+| systemd | `systemd`, `systemd-libs`, `systemd-sysvcompat`, `systemd-ukify` | **`daemon-reexec`**, not a reboot |
+| bus | `dbus`, `dbus-broker` | `daemon-reload`; the bus process itself is deferred |
+| everything else | — | whatever the `(deleted)` scan says |
+
+Three of those are decisions rather than lookups.
+
+**The kernel test is upstream's, not the package log's.** The question is not
+whether a kernel package was in the transaction but whether the kernel this
+machine is *running* is still one of the kernels installed on it. A
+same-version reinstall — which is what `pacman -S linux` does when nothing
+moved, and what a SELinux relabel or a re-signed UKI provokes — leaves the
+answer yes, and costs no reboot at all. This is the rule that makes an
+initramfs rebuild a non-event.
+
+**systemd is re-executed, not rebooted.** `systemctl daemon-reexec` replaces
+the running PID 1 with the new binary and keeps every unit's state; the proof is
+`/proc/1/exe` losing its `(deleted)` marker. A reexec that does *not* clear it
+is the one case where systemd earns a reboot, and it is checked rather than
+assumed.
+
+**`limine*` is listed as a reboot even though a bootloader takes effect on the
+next boot regardless.** The reason is not technical necessity: it is that the
+next boot is the first proof the new boot chain works, and a server should take
+that boot in a window somebody chose rather than discover it during an
+unplanned power cycle months later.
+
+**The deny-list** — replaced, reported, not restarted:
+
+| Unit | Why not |
+|---|---|
+| `dbus`, `dbus-broker` | every client holds a connection and none reconnect |
+| `systemd-logind` | a restart invalidates every session, which here is every ssh login |
+| `user@*`, `user-runtime-dir@*` | takes the user's session with it |
+| `getty@*`, `serial-getty@*`, `console-getty` | the console login, and on this profile the serial console is the recovery path |
+| `omarchy-server-update.service` | the unit the update is running inside |
+| `emergency`, `rescue` | the paths that exist for when the rest failed |
+
+`sshd` is deliberately **not** on it. Arch's unit sets `KillMode=process`, so
+the per-connection children live outside the unit's kill scope and established
+sessions survive the listener being swapped. That is a property of the shipped
+unit rather than a law, so the command reads
+`systemctl show -p KillMode --value` and defers instead when a drop-in changed
+it. `sshd` is also restarted last, so a surprise there cannot take the rest of
+the pass with it.
+
+**The output is three lines, always all three**, because a report that only
+speaks when something happened cannot be read as "nothing happened" — and this
+is what the journal keeps for a run nobody watched:
+
+```
+restarted: sshd systemd-networkd systemd-resolved
+deferred: dbus (the bus keeps its old process until a reboot)
+reboot required: no
+```
+
+The upstream `reboot-required` marker (`$HOME/.local/state/omarchy/`) is set
+**only** on the third line saying yes.
+
+### `--kexec`: a required reboot without the firmware
+
+The `kexec` addon is one package, `kexec-tools`, and it is an addon on the
+premise that runs the rest of this profile: a machine that reboots twice a year
+gains nothing from it. `omarchy-server-update --kexec` (or
+`omarchy-server-update kexec on`, which writes `/etc/omarchy-server-update.conf`
+for the timer to read) uses it only when it is installed; with the addon absent
+a required reboot is left as the marker, exactly as before.
+
+`omarchy-server-kexec load` is shaped entirely by this profile's boot image
+being a **signed UKI** — a PE binary carrying the kernel, the initramfs and the
+command line in its own sections:
+
+* `kexec_load(2)`, the classic syscall, takes a bzImage and an initrd as
+  separate files and verifies nothing. The `lockdown=integrity` baked into this
+  profile's UKI makes the kernel refuse it outright, which is the point of
+  lockdown.
+* `kexec_file_load(2)` takes one file descriptor and verifies the image's
+  signature in the kernel. `kexec --kexec-file-syscall` is how kexec-tools
+  reaches it, and under lockdown it is the only route.
+
+The keyring question is **not** the one module signing lost. Module signature
+verification consults `.builtin` and `.machine`, so a certificate enrolled in
+the firmware `db` — what this profile does — lands in `.platform` and is never
+consulted (`docs/secure-boot.md` §8). kexec's PE verification path accepts
+`.platform`. Measured in `reports/2026-08-29-update-without-reboot.md`.
+
+Taking the reboot is `systemctl kexec`: systemd's ordinary shutdown
+transaction, with a jump at the end instead of a firmware reset.
+
 ---
 
 ## 4. First-boot audit (`omarchy-provision-owner`)
