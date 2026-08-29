@@ -367,10 +367,14 @@ func resolveSuites(lab *Lab, requested string) ([]string, error) {
 func runLabTest(s *Session, lab *Lab, suites []string, noCollect, noReboot, enforce, publish bool) error {
 	cfg := s.Config
 	evidence := lab.evidenceDir()
-	if err := os.MkdirAll(evidence, 0o755); err != nil {
-		return err
+	if cfg.DryRun {
+		s.Printf("[lab] (dry run) evidence would be written to %s", evidence)
+	} else {
+		if err := os.MkdirAll(evidence, 0o755); err != nil {
+			return err
+		}
+		s.Printf("evidence: %s", evidence)
 	}
-	s.Printf("evidence: %s", evidence)
 
 	// collect.sh and surface.sh run FIRST: the acceptance lists install the
 	// docker addon and then run an update, which change the package set and
@@ -492,6 +496,13 @@ func referenceDir(cfg *Config, lab string) string {
 // run out of the record.
 func publishEvidence(s *Session, lab *Lab, evidence string) error {
 	target := referenceDir(s.Config, lab.Name)
+	// A dry run says where the evidence would land and stops there. Publishing
+	// writes into the COMMITTED record, so a rehearsal that did it would put
+	// files nothing measured into the repository's evidence directory.
+	if s.Config.DryRun {
+		s.Printf("[lab] (dry run) evidence would be published into %s", target)
+		return nil
+	}
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return err
 	}

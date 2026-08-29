@@ -51,16 +51,21 @@ type Step struct {
 
 func NewSession(cfg *Config, name string) (*Session, error) {
 	session := &Session{Config: cfg, Name: name, Start: time.Now()}
-	dir := filepath.Join(cfg.Root, "pocs", "lab", "runs")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
+	// A dry run touches no filesystem at all, the run log included: the whole
+	// point of --dry-run is that it can be aimed at anything, so it must not
+	// leave a file behind either. Printf falls back to the terminal alone.
+	if !cfg.DryRun {
+		dir := filepath.Join(cfg.Root, "pocs", "lab", "runs")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+		session.Path = filepath.Join(dir, fmt.Sprintf("%s-%s.log", time.Now().Format("20060102-150405"), name))
+		file, err := os.Create(session.Path)
+		if err != nil {
+			return nil, err
+		}
+		session.Log = file
 	}
-	session.Path = filepath.Join(dir, fmt.Sprintf("%s-%s.log", time.Now().Format("20060102-150405"), name))
-	file, err := os.Create(session.Path)
-	if err != nil {
-		return nil, err
-	}
-	session.Log = file
 	session.Printf("=== serverlab %s — %s ===", name, time.Now().Format(time.RFC3339))
 	if cfg.Path != "" {
 		session.Printf("config: %s", cfg.Path)
@@ -70,10 +75,10 @@ func NewSession(cfg *Config, name string) (*Session, error) {
 
 // Close writes the trailer and prints where the log went.
 func (s *Session) Close() {
+	s.Printf("=== finished in %s ===", round(time.Since(s.Start)))
 	if s.Log == nil {
 		return
 	}
-	s.Printf("=== finished in %s ===", round(time.Since(s.Start)))
 	_ = s.Log.Close()
 	fmt.Printf("\nlog: %s\n", s.Path)
 }
