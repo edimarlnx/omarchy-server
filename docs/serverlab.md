@@ -88,6 +88,20 @@ serverlab lab test srvsel --suite all --enforce   # permissive pass, then ENFORC
 serverlab report srvsel
 ```
 
+Not every list is implied by a marker, though. `transactional` applies to any
+server machine, so nothing at install time can decide whether it runs — and it
+is not something to run by accident: it reboots the VM three times and leaves
+package state behind. Optional lists like that are therefore **never part of
+`--suite all`** and only run when asked for by name.
+
+```bash
+serverlab lab test srvsb --suite transactional    # omarchy-server-update --transactional
+```
+
+`serverlab report` does include them: it reads every suite the lab was installed
+for **plus** the optional ones, and skips whichever left no evidence file. A
+list that ran is in the report; one that never ran costs nothing.
+
 Evidence goes to `pocs/lab/out-<name>/evidence/`, one directory per machine, so
 two labs never overwrite each other's record.
 

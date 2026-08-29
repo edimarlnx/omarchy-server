@@ -1,0 +1,22 @@
+=== Cost of one transaction — VM 'srvsb' — 2026-08-29T16:20:35-03:00 ===
+# omarchy-server-transaction run, three shapes, each rolled back and pruned
+# so every measurement starts from the same filesystem.
+
+== baseline
+fs_used=1667014656 esp_kib=152732
+empty      rc=0 seconds=3 fs_delta_bytes=1232896 fs_delta_mib=1 esp_delta_kib=0
+userspace  rc=0 seconds=3 fs_delta_bytes=1294336 fs_delta_mib=1 esp_delta_kib=0
+kernel     rc=0 seconds=8 fs_delta_bytes=181846016 fs_delta_mib=173 esp_delta_kib=0
+== after, with everything pruned
+fs_used=1851387904 esp_kib=152732
+== subvolumes
+@home
+@log
+@pkg
+@factory
+@
+
+=== reboot round trips, from the acceptance run ===
+      round trip 69s
+      round trip 10s
+      round trip 11s

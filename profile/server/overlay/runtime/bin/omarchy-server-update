@@ -48,9 +48,14 @@ require_root() {
 # `omarchy-server-update --kexec` and `omarchy-server-update run --kexec` work.
 restart_args=()
 action=""
+# Whether this run replaces the live root in place or builds a new one beside
+# it. Empty means "whatever the config says"; the flags below are the override.
+transactional=""
 for argument in "$@"; do
   case "$argument" in
     --kexec | --no-reboot | --no-restart | --dry-run) restart_args+=("$argument") ;;
+    --transactional) transactional=1 ;;
+    --in-place) transactional=0 ;;
     *) [[ -n $action ]] || action="$argument" ;;
   esac
 done
@@ -63,17 +68,30 @@ fi
 if [[ ${KEXEC:-0} == 1 && " ${restart_args[*]:-} " != *" --kexec "* ]]; then
   restart_args+=(--kexec)
 fi
+[[ -n $transactional ]] || transactional="${TRANSACTIONAL:-0}"
+
+# One key at a time, because there is more than one of them now: the config is
+# sourced as shell, so rewriting the whole file to set KEXEC would silently
+# drop TRANSACTIONAL and the other way round.
+set_config() {
+  local key="$1" value="$2" temporary
+  temporary=$(mktemp)
+  [[ -r $config ]] && grep -v "^${key}=" "$config" >"$temporary"
+  printf '%s=%s\n' "$key" "$value" >>"$temporary"
+  install -m 0644 "$temporary" "$config"
+  rm -f "$temporary"
+}
 
 case "${action:-run}" in
   kexec)
     require_root "$@"
     case "${2:-status}" in
       on)
-        printf 'KEXEC=1\n' >"$config"
+        set_config KEXEC 1
         echo "kexec on: a required reboot will be taken with systemctl kexec"
         ;;
       off)
-        printf 'KEXEC=0\n' >"$config"
+        set_config KEXEC 0
         echo "kexec off: a required reboot leaves the marker for the next window"
         ;;
       status) omarchy-server-kexec status ;;
@@ -84,10 +102,42 @@ case "${action:-run}" in
     esac
     exit 0
     ;;
+  transactional)
+    # The toggle the timer reads, same shape as `kexec on|off`: a fleet is
+    # configured once rather than by editing a unit file.
+    require_root "$@"
+    case "${2:-status}" in
+      on)
+        set_config TRANSACTIONAL 1
+        echo "transactional on: updates build a new root and swap it in at reboot"
+        ;;
+      off)
+        set_config TRANSACTIONAL 0
+        echo "transactional off: updates are applied to the running root in place"
+        ;;
+      status) echo "transactional=${transactional}" ;;
+      *)
+        echo "Usage: omarchy-server-update transactional [on|off|status]" >&2
+        exit 2
+        ;;
+    esac
+    exit 0
+    ;;
+  rollback)
+    # Only meaningful after a transactional update; omarchy-server-transaction
+    # says so itself when there is no previous root to go back to.
+    require_root "$@"
+    exec omarchy-server-transaction rollback ${restart_args[@]+"${restart_args[@]}"}
+    ;;
   status)
     # Reporting, so a disabled timer is an answer rather than a failure.
+    echo "mode: $([[ $transactional == 1 ]] && echo transactional || echo in-place)"
     systemctl is-enabled "$timer" 2>/dev/null || true
     systemctl status "$timer" --no-pager 2>&1 || true
+    if [[ $transactional == 1 ]] && ((EUID == 0)) && command -v omarchy-server-transaction >/dev/null; then
+      echo
+      omarchy-server-transaction status 2>/dev/null || true
+    fi
     exit 0
     ;;
   enable)
@@ -103,6 +153,27 @@ case "${action:-run}" in
     ;;
   run)
     require_root "$@"
+
+    # ── transactional mode ───────────────────────────────────────────────────
+    #
+    # Nothing below this branch runs: the update happens inside a snapshot of
+    # the root subvolume and the live root is not written to at all. That also
+    # takes omarchy-server-update-restart out of the picture on purpose --
+    # there is no in-place change to classify and no process running replaced
+    # code, because no file under the running root moved. A transaction is
+    # always a reboot, which is the trade the mode makes.
+    if [[ $transactional == 1 ]]; then
+      # --no-restart and --dry-run qualify a classifier this mode does not run,
+      # so only the two flags that mean something here are passed on.
+      transaction_args=()
+      for argument in ${restart_args[@]+"${restart_args[@]}"}; do
+        case "$argument" in
+          --kexec | --no-reboot) transaction_args+=("$argument") ;;
+        esac
+      done
+      exec omarchy-server-transaction run ${transaction_args[@]+"${transaction_args[@]}"}
+    fi
+
     # -y as well as the environment variable: the flag is the documented
     # promise and the variable is what survives the `script` re-exec into every
     # step below it.
@@ -142,19 +213,26 @@ case "${action:-run}" in
     exit "$update_rc"
     ;;
   -h | --help)
-    echo "Usage: omarchy-server-update [run|enable|disable|status|kexec] [flags]"
+    echo "Usage: omarchy-server-update [run|enable|disable|status|kexec|transactional|rollback] [flags]"
     echo
-    echo "  run       update now, non-interactively (default), then restart what changed"
-    echo "  enable    enable the daily $timer"
-    echo "  disable   disable the daily $timer"
-    echo "  status    report whether the timer is enabled and when it next runs"
-    echo "  kexec     on|off|status -- whether a required reboot is taken with kexec"
+    echo "  run            update now, non-interactively (default), then restart what changed"
+    echo "  enable         enable the daily $timer"
+    echo "  disable        disable the daily $timer"
+    echo "  status         report the mode, whether the timer is enabled and when it next runs"
+    echo "  kexec          on|off|status -- whether a required reboot is taken with kexec"
+    echo "  transactional  on|off|status -- whether updates build a new root instead of"
+    echo "                 writing to the running one. The timer reads the same setting."
+    echo "  rollback       after a transactional update, boot the previous root again"
+    echo
+    echo "Mode, overriding the configured default for this run:"
+    echo "  --transactional  update inside a snapshot of / and swap it in at reboot"
+    echo "  --in-place       update the running root (the default)"
     echo
     echo "Flags, passed through to omarchy-server-update-restart:"
     echo "  --kexec       take a required reboot now, via kexec into the signed UKI"
     echo "  --no-reboot   never take a reboot (the reboot-required marker is still set)"
-    echo "  --no-restart  classify and report, restart nothing"
-    echo "  --dry-run     --no-restart, and do not set the marker either"
+    echo "  --no-restart  classify and report, restart nothing (in-place mode only)"
+    echo "  --dry-run     --no-restart, and do not set the marker either (in-place only)"
     exit 0
     ;;
   *)

@@ -82,6 +82,12 @@ func (l *Lab) env() []string {
 	return env
 }
 
+// optionalSuites are acceptance lists that no install-time marker implies, so
+// they are never part of `--suite all`: they apply to any server machine and
+// they change it -- the transactional list alone reboots the VM three times and
+// leaves package state behind. They run only when asked for by name.
+var optionalSuites = []string{"transactional"}
+
 // Suites returns the acceptance suites this machine was installed for. Every
 // machine gets the base list; a Secure Boot or MAC marker adds its own.
 func (l *Lab) Suites() []string {
@@ -275,7 +281,7 @@ func runLabUp(s *Session, lab *Lab, waitSecs int) error {
 
 func labTest(args []string) error {
 	fs, base := newFlagSet("lab test")
-	suite := fs.String("suite", "", "base, secureboot, selinux, apparmor or all (default: what the lab was installed with)")
+	suite := fs.String("suite", "", "base, secureboot, selinux, apparmor, transactional or all (default: what the lab was installed with; the optional lists are never in `all`)")
 	noCollect := fs.Bool("no-collect", false, "skip collect.sh and surface.sh")
 	noReboot := fs.Bool("no-reboot", false, "skip reboot-check.sh, which takes the VM down and up")
 	enforce := fs.Bool("enforce", false, "MAC suites: also run the ENFORCE=1 pass")
@@ -328,7 +334,13 @@ func resolveSuites(lab *Lab, requested string) ([]string, error) {
 		}
 		return []string{requested}, nil
 	default:
-		return nil, fmt.Errorf("unknown suite %q (base, secureboot, selinux, apparmor, all)", requested)
+		// No install-time marker gates these, so there is nothing to refuse
+		// them against: any server machine can be asked to run one.
+		if slices.Contains(optionalSuites, requested) {
+			return []string{requested}, nil
+		}
+		return nil, fmt.Errorf("unknown suite %q (base, secureboot, selinux, apparmor, %s, all)",
+			requested, strings.Join(optionalSuites, ", "))
 	}
 }
 

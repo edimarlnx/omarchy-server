@@ -395,7 +395,11 @@ func buildReportInput(cfg *Config, lab *Lab, title, subject, date string) (*Repo
 		return relative
 	}
 
-	for _, suite := range lab.Suites() {
+	// The optional lists too, and not only what the lab was installed for: a
+	// suite that ran leaves evidence, and evidence that exists belongs in the
+	// report. Suites with no file are skipped by the ParseAcceptanceFile error
+	// below, so listing one that never ran costs nothing.
+	for _, suite := range append(lab.Suites(), optionalSuites...) {
 		_, file := suiteScript(suite)
 		for _, candidate := range []struct {
 			file     string
@@ -466,6 +470,8 @@ func suiteHeading(suite string, enforced bool) string {
 			return "Acceptance — AppArmor, enforce"
 		}
 		return "Acceptance — AppArmor, as installed"
+	case "transactional":
+		return "Acceptance — transactional updates"
 	default:
 		return "Acceptance — " + suite
 	}

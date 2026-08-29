@@ -18,7 +18,8 @@ profile/server/  package list, addons, services, overlay (install/server/*,
 iso/             build.sh + overlay/patches for the ISO --profile server
 pocs/            lab scripts and measured results (QEMU/OVMF, cidata autoinstall)
 tools/serverlab/ the Go driver that runs all of the above in order (make serverlab)
-docs/            technical docs: packaging.md, iso-server.md, secure-boot.md, serverlab.md, screenshots/
+docs/            technical docs: packaging.md, iso-server.md, secure-boot.md, mac.md,
+                 transactional.md, serverlab.md, screenshots/
 ```
 
 The **PKGBUILDs are not here**. They live in
@@ -183,6 +184,31 @@ verifies the image's signature in the kernel. It is also where the keyring that
 defeats module signing does not apply: kexec's verification accepts `.platform`,
 where a firmware-`db` certificate lands. Measured against the firmware path in
 `reports/2026-08-29-update-without-reboot.md`.
+
+### Or update without touching the running system at all
+
+An update that finishes is one thing; an update that *breaks* is another, and on
+a headless machine the recovery is a snapper snapshot, a reboot and a manual
+rollback. The transactional mode removes that case: the update runs inside a
+writable btrfs snapshot of `/`, with the ESP, the package cache and `/var/log`
+bound in, and the live root is never opened for writing. A failure costs a
+`btrfs subvolume delete`. A success becomes the root at the next reboot.
+
+```bash
+sudo omarchy-server-update --transactional     # this run only
+sudo omarchy-server-update transactional on    # and every run after it, timer included
+sudo omarchy-server-update rollback            # boot the previous root again
+```
+
+The new root is selected by **renaming subvolumes** (`@`→`@prev-<ts>`,
+`@tx-<ts>`→`@`), so the kernel command line, the UKI, `/etc/fstab` and every
+pacman hook stay byte for byte what they were — which is what makes it safe
+under Secure Boot and what makes rollback the same two renames backwards. The
+mode ships off: a transaction is always a reboot.
+
+`docs/transactional.md` is the design, the operator's guide, the rollback
+procedure and the limitations, including why a fully immutable root is *not*
+the next step. Measured in `reports/2026-08-29-transactional-updates.md`.
 
 ## Secure Boot
 
