@@ -96,7 +96,12 @@ case "${1:-load}" in
       echo "image:  none found in $uki_dir"
     fi
     # /sys/kernel/kexec_loaded is 1 once an image is in the reserved region.
-    echo "loaded: $(cat /sys/kernel/kexec_loaded 2>/dev/null || echo unknown)"
+    loaded=$(cat /sys/kernel/kexec_loaded 2>/dev/null || echo unknown)
+    echo "loaded: $loaded"
+    if [[ $loaded == 1 ]]; then
+      echo "        an image is loaded: systemctl reboot will kexec into it,"
+      echo "        not reset the machine. omarchy-server-kexec unload undoes that."
+    fi
     echo "lockdown: $(cat /sys/kernel/security/lockdown 2>/dev/null || echo none)"
     exit 0
     ;;
@@ -164,12 +169,32 @@ if objcopy -O binary --only-section=.linux "$uki" "$kernel" 2>>"$errors" &&
   objcopy -O binary --only-section=.initrd "$uki" "$initrd" 2>>"$errors" &&
   [[ -s $kernel && -s $initrd ]]; then
 
-  # The command line comes out of the UKI too, so the kexec'd kernel gets the
-  # one this machine was actually built to boot with -- lockdown=integrity and
-  # module.sig_enforce=1 included. --reuse-cmdline would read /proc/cmdline,
-  # which is the same string on a first boot and NOT the same after an earlier
-  # kexec chain; taking it from the image keeps every hop identical.
-  cmdline=$(objcopy -O binary --only-section=.cmdline "$uki" /dev/stdout 2>/dev/null | tr -d '\0')
+  # The command line. /proc/cmdline is the primary source and that is
+  # deliberate: it is the line THIS machine booted with, lockdown=integrity and
+  # module.sig_enforce=1 and root= included, and it stays correct across a
+  # chain of kexecs because each hop is handed the same string.
+  #
+  # A UKI *may* carry a .cmdline section, and where it does that is the more
+  # authoritative answer. On this profile it does not: limine-entry-tool puts
+  # the command line in limine.conf and the bootloader passes it, so the image
+  # has .linux and .initrd and no .cmdline at all.
+  #
+  # Getting this wrong is not a degraded boot, it is a brick. An earlier
+  # version took the section, got an empty string because there is none, and
+  # silently loaded an image with NO command line: no root=, so it could not
+  # mount anything, and no console=, so it died without a word. The machine
+  # shut down cleanly and never came back -- and because a loaded image changes
+  # what an ordinary `systemctl reboot` does, the reboot that killed it was not
+  # even a kexec anyone asked for. Hence: read it, or refuse to load.
+  cmdline=$(tr -d '\0' </proc/cmdline)
+  if objcopy -O binary --only-section=.cmdline "$uki" "$work/cmdline" 2>/dev/null && [[ -s $work/cmdline ]]; then
+    from_uki=$(tr -d '\0' <"$work/cmdline")
+    [[ -n ${from_uki// /} ]] && cmdline="$from_uki"
+  fi
+  if [[ -z ${cmdline// /} ]]; then
+    echo "omarchy-server-kexec: no command line to give the kernel; refusing to load an image that could not boot." >&2
+    exit 1
+  fi
 
   if command -v sbctl >/dev/null && sbctl sign -o "$work/vmlinuz.signed" "$kernel" >/dev/null 2>>"$errors"; then
     kernel="$work/vmlinuz.signed"
@@ -180,10 +205,15 @@ if objcopy -O binary --only-section=.linux "$uki" "$kernel" 2>>"$errors" &&
     exit 1
   fi
 
-  load=(kexec --load --kexec-file-syscall "$kernel" --initrd="$initrd")
-  [[ -n $cmdline ]] && load+=(--command-line="$cmdline")
-  if "${load[@]}" 2>>"$errors"; then
+  if kexec --load --kexec-file-syscall "$kernel" --initrd="$initrd" \
+    --command-line="$cmdline" 2>>"$errors"; then
     echo "omarchy-server-kexec: loaded the unpacked UKI via kexec_file_load"
+    echo "omarchy-server-kexec: cmdline: $cmdline"
+    # Said out loud because it changes the meaning of a command nobody
+    # associates with kexec: with an image loaded, an ordinary `systemctl
+    # reboot` jumps into it instead of resetting the machine.
+    echo "omarchy-server-kexec: an image is now loaded -- until it is used or"
+    echo '                      unloaded, systemctl reboot will kexec into it.'
     exit 0
   fi
 fi

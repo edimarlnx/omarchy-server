@@ -364,10 +364,24 @@ kexec_time=$(reboot_seconds "kexec reboot" '~/.lab-sudo omarchy-server-kexec loa
 echo "$kexec_time"
 echo
 
-if [[ $kexec_time == *"did not come back"* ]]; then
-  report FAIL "the machine came back from a kexec" "$kexec_time"
+# BOTH lines have to be a real measurement, and the check says so positively
+# rather than by the absence of a phrase. A run that asserted only "did not
+# come back" is missing reported 29 passed / 0 failed on a machine that had
+# been bricked: the firmware reboot never came back, the kexec line's starting
+# boot id was the string "kex_exchange_identification: read: Connection reset
+# by peer", and the downtime it computed from it was 784 seconds. A green that
+# survives that is worse than no check at all.
+verdict_ok() { # verdict_ok <timing line>
+  [[ $1 == *"downtime"* ]] || return 1
+  [[ $1 == *"did not come back"* ]] && return 1
+  # boot_id OLD -> NEW, both UUIDs. Error text in either half is not a boot id.
+  [[ $1 =~ boot_id\ [0-9a-f]{8}-[0-9a-f-]+\ -\>\ [0-9a-f]{8}-[0-9a-f-]+$ ]]
+}
+
+if verdict_ok "$firmware_time" && verdict_ok "$kexec_time"; then
+  report PASS "both reboot paths came back, and were measured" "$firmware_time" "$kexec_time"
 else
-  report PASS "the machine came back from a kexec" "$firmware_time" "$kexec_time"
+  report FAIL "both reboot paths came back, and were measured" "$firmware_time" "$kexec_time"
 fi
 
 # A kexec'd kernel is not launched by the firmware, so it cannot be verified by
