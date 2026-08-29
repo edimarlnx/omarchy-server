@@ -275,30 +275,47 @@ echo "=== kexec ==="
 # reboot_seconds <label> <remote command>: two measurements of the same reboot,
 # because neither alone is trustworthy here.
 #
-#   client   the wall-clock gap between issuing the command and ssh answering
-#            on a NEW boot id. It is what an operator feels, and it carries the
-#            lab's own noise: the helpers multiplex ssh (ControlPersist=120,
-#            because `ufw limit 22` drops the seventh connection in thirty
-#            seconds), so the first probe after a reboot can be answered by a
-#            socket that has not yet noticed the machine is gone.
-#   guest    `systemd-analyze time`, read off the machine afterwards. This is
-#            the honest one for comparing the two paths, because the firmware
-#            and loader phases it names are EXACTLY what kexec skips: a kexec
-#            boot has no firmware line at all.
+#   client    the wall-clock gap between issuing the command and ssh answering
+#             on a NEW boot id. It is what an operator feels, and it carries
+#             the lab's own noise, which is not small: `ufw limit 22` drops the
+#             seventh connection from one source inside thirty seconds, so a
+#             probe loop that polls faster than every five seconds ends up
+#             measuring its own rate limit. Hence the six second interval, and
+#             hence a resolution of six seconds on this number.
+#   downtime  measured by the machine itself and immune to all of that: the
+#             first journal timestamp of the new boot minus the last timestamp
+#             of the one before it. That gap is the shutdown tail plus, for the
+#             firmware path only, POST, the option ROMs and the Limine menu.
+#             It is the number the two paths should be compared on.
+#
+# `systemd-analyze time` is deliberately NOT used. After a kexec it still
+# reports a firmware and a loader phase -- the values it read from the EFI
+# variables of the boot before -- so it cannot tell the two paths apart, which
+# is exactly what it looks like it is for.
 reboot_seconds() {
-  local label=$1 command=$2 before after started elapsed analyze
+  local label=$1 command=$2 before after started elapsed downtime
   before=$(run 'cat /proc/sys/kernel/random/boot_id')
   started=$(date +%s)
   run "$command" >/dev/null 2>&1
-  for _ in $(seq 1 90); do
-    sleep 2
+  # Fifteen seconds before the first probe, ten between them. `ufw limit 22`
+  # drops the seventh connection from one source inside thirty seconds, and a
+  # reboot kills the ssh master, so every probe after one is a NEW connection:
+  # probing faster than this measures the firewall rather than the machine.
+  # Measured the hard way -- a two second loop locked the lab out for minutes
+  # and returned a 187 second "reboot".
+  sleep 15
+  for _ in $(seq 1 24); do
     after=$(run 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null)
     [[ -n $after && $after != "$before" ]] && break
+    sleep 10
   done
   elapsed=$(($(date +%s) - started))
   if [[ -n ${after:-} && $after != "$before" ]]; then
-    analyze=$(run 'systemd-analyze time 2>/dev/null | head -1')
-    echo "$label: client ${elapsed}s | guest ${analyze:-<unavailable>} | boot_id $before -> $after"
+    downtime=$(run '~/.lab-sudo sh -c "
+      last=\$(journalctl -b -1 -o short-unix --no-pager 2>/dev/null | tail -1 | cut -d. -f1)
+      first=\$(journalctl -b -o short-unix --no-pager 2>/dev/null | head -1 | cut -d. -f1)
+      [ -n \"\$last\" ] && [ -n \"\$first\" ] && echo \$((first - last)) || echo unknown"')
+    echo "$label: downtime ${downtime}s | client ${elapsed}s (6s resolution) | boot_id $before -> $after"
   else
     echo "$label: did not come back within ${elapsed}s"
   fi
@@ -311,11 +328,25 @@ check "the kexec addon installs kexec-tools and finds the signed UKI" \
   '^image: .*\.efi$'
 
 # The load, on its own, before anything reboots: this is where a rejected
-# signature shows up as a message rather than as a machine that did not
-# come back.
-check "kexec_file_load accepts the UKI signed by the machine's own db key" \
-  '~/.lab-sudo omarchy-server-kexec load 2>&1; echo "loaded=$(cat /sys/kernel/kexec_loaded)"' \
-  'loaded via kexec_file_load'
+# signature shows up as a message rather than as a machine that did not come
+# back. Two separate facts are being recorded here, and the command's own
+# output is what separates them:
+#
+#   * handing the UKI straight to kexec_file_load is REFUSED. The kernel says
+#     "PEFILE: Unsigned PE binary", even though `sbctl verify` above called the
+#     same file signed and the firmware booted it: the signature layout
+#     systemd-ukify produces is not the one the kernel's pefile parser reads.
+#   * the .linux section extracted from that same UKI, re-signed with the same
+#     machine key, IS accepted -- which is the proof of the `.platform`
+#     premise, the keyring module signing on this profile cannot use.
+check "kexec_file_load refuses the UKI and accepts the kernel inside it" \
+  '~/.lab-sudo omarchy-server-kexec load 2>&1; echo "loaded=$(cat /sys/kernel/kexec_loaded)";
+   ~/.lab-sudo dmesg | grep -E "PEFILE|Lockdown: kexec" | tail -2' \
+  '^loaded=1$'
+
+check "and it was the unpacked UKI that the kernel took" \
+  '~/.lab-sudo omarchy-server-kexec load 2>&1 | tail -2' \
+  'loaded the unpacked UKI via kexec_file_load'
 
 echo "--- timing the two reboot paths ---"
 firmware_time=$(reboot_seconds "firmware reboot" '~/.lab-sudo systemctl reboot')

@@ -584,7 +584,10 @@ if [[ ${ENFORCE:-0} == 1 ]]; then
   # ABSENCE of a string, and grep -E has no way to say that.
   check "the rebuilt UKI no longer carries lsm=...selinux" \
     'uki=$(~/.lab-sudo sh -c "ls -t /boot/EFI/Linux/*.efi" 2>/dev/null | head -1); echo "uki=$uki";
-     cmdline=$(~/.lab-sudo objcopy -O binary --only-section=.cmdline "$uki" /dev/stdout 2>/dev/null | tr -d "\0");
+     # objcopy needs a seekable output, so /dev/stdout is not one of its
+     # options: it writes a real file and that file is what gets read back.
+     ~/.lab-sudo sh -c "objcopy -O binary --only-section=.cmdline $uki /tmp/uki-cmdline && chmod 644 /tmp/uki-cmdline" 2>&1 | head -3;
+     cmdline=$(tr -d "\0" </tmp/uki-cmdline 2>/dev/null);
      if [ -z "$cmdline" ]; then echo "cmdline=unreadable";
      else echo "cmdline: $cmdline";
        case "$cmdline" in *lsm=*selinux*) echo "verdict=selinux-still-in-cmdline" ;;
