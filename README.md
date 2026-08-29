@@ -158,4 +158,8 @@ Measurements (package count, size, enabled units, listening sockets, setuid
 binaries, root services) are in `pocs/server-install/README.md`, produced by
 `pocs/server-install/surface.sh`.
 
+**Reports** — `reports/` is the validation record while the profile is in its
+testing phase: one report per run, with environment, method, results and the
+raw evidence behind them.
+
 Large artifacts (ISOs, VM disks, keys, build output) never enter the repo.
