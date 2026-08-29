@@ -109,25 +109,40 @@ revokes what is listed in `<name>-revoked`. All three files must exist.
 
 ## 2. The packages
 
-PKGBUILDs in `pkgs/pkgbuilds/`. Three of them build the profile; `fwall` (§2.4)
-is an addon package built from its own upstream. Common source: the upstream checkout
-**pinned** at commit `468b511249b1a341311c46f5a7cf81aa5bc5af92`, consumed as
-`git+file:///src/omarchy#commit=...` (read-only bind mount in the container),
-plus `profile/server/overlay/` packed as a source tarball by `build.sh`. Once a
-GitHub fork is used, the URL changes and the mount goes away; that is the only
-line to change (`OMARCHY_GIT_URL`).
+The PKGBUILDs are **not in this repository**. They live in
+[`omarchy-server-pkgs`](https://github.com/edimarlnx/omarchy-server-pkgs) under
+`pkgbuilds/<pkg>/`, cloned beside this checkout (`OMARCHY_PKGS_DIR` moves it),
+because the same files are what GitHub Actions builds the published
+`[omarchy-server]` repository from, and a PKGBUILD kept in two places is a
+PKGBUILD that disagrees with itself. `pkgs/build.sh` and `iso/build.sh` read
+them from there. See §5.
+
+Three of them build the profile; `fwall` (§2.4) is an addon package built from
+its own upstream. Common source: the fork
+`https://github.com/edimarlnx/omarchy.git`, branch `server`, **pinned** at
+commit `468b511249b1a341311c46f5a7cf81aa5bc5af92`, plus
+`profile/server/overlay/` packed as a source tarball. A builder that already
+has a checkout exports `OMARCHY_SRC` and the PKGBUILD reads that instead
+(`git+file://`), which is what `pkgs/build.sh` does with its read-only bind
+mount at `/src/omarchy` and what the ISO builder does at `/omarchy-source`: no
+network, and never the ambient state of a working tree.
 
 ### 2.1 `omarchy-server-keyring` (3.7 KB)
 
 Same layout as `omarchy-keyring`. The key packaged today is a **lab** key:
 `pkgs/keys/gen-lab-key.sh` generates an ed25519 key without passphrase in
-`pkgs/keys/` (gitignored) and exports `.gpg` + `-trusted` + `-revoked` into the
-PKGBUILD directory. Current fingerprint:
-`792739C447F15D9172C59F8F4398BBFF2AE89B1A`.
+`pkgs/keys/` (gitignored, and private) and exports `.gpg` + `-trusted` +
+`-revoked` into the keyring PKGBUILD directory **in the `omarchy-server-pkgs`
+checkout**, where those three public files are committed: CI has to be able to
+build the keyring package from a checkout of that repository alone. Current
+fingerprint: `792739C447F15D9172C59F8F4398BBFF2AE89B1A`.
 
-**Switching to a real key** means: generate offline, export the public part,
-replace the three files, bump `pkgver` (a date) and rebuild. Nothing else in
-the repository references the key material.
+**Switching to a real key** means: generate offline, export the public part
+over those three files, bump `pkgver` (a date), put the private key in the
+`PACMAN_GPG_KEY` secret of `omarchy-server-pkgs` and rebuild. Nothing else
+references the key material. The rotation ORDER matters and is written down in
+that repository's README: a machine already installed trusts only the old key,
+so the package that teaches it the new one has to be signed by the old one.
 
 ### 2.2 `omarchy-server-settings` (65 KB compressed, 145 KB installed)
 
@@ -157,6 +172,11 @@ why in its own header:
 | `etc/profile.d/omarchy-motd.sh` | prints the login banner once per login shell |
 | `etc/issue.net` | two plain lines, for an admin who wants an ssh `Banner` |
 | `etc/systemd/system/serial-getty@.service.d/10-omarchy-issue.conf` | points agetty at `/etc/issue.serial` on the serial line |
+
+Generated in `package()` rather than taken from the overlay:
+`etc/pacman.d/omarchy-server.conf`, the `[omarchy-server]` repository
+definition, plus an `Include` for it appended to each of the three channel
+templates `default/pacman/pacman-{stable,rc,edge}.conf` (§5).
 
 The three Docker configuration files upstream installs into `/etc`
 (`docker/daemon.json`, `systemd/resolved.conf.d/20-docker-dns.conf`,
@@ -544,8 +564,9 @@ moves it). It is bind mounted read-only at `/src/tui-tools`, the way
 install a Go toolchain.
 
 `build.sh` runs everything in an `archlinux:latest` container as user
-`builder` (the same design as a future GitHub Actions workflow), with
-`upstream/omarchy` mounted read-only at `/src/omarchy`. Gitignored outputs:
+`builder` (the same design the GitHub Actions workflow in `omarchy-server-pkgs`
+uses), with `upstream/omarchy` mounted read-only at `/src/omarchy` and
+`OMARCHY_SRC` pointing the PKGBUILDs at it. Gitignored outputs:
 `pkgs/out/` (packages + `.sig`) and `pkgs/repo/`
 (`omarchy-server.db.tar.gz`/`.files` signed with `repo-add --sign`).
 
@@ -559,7 +580,9 @@ install a Go toolchain.
 `limine-mkinitcpio-hook`, `limine-snapper-sync`, `ufw-docker`, `tzupdate`,
 `yay`) and `[omarchy-server]` with `SigLevel = Required DatabaseOptional` /
 `Server = file:///repo`, bootstraps the trust anchor and runs
-`pacman -Sy omarchy-server`.
+`pacman -Sy omarchy-server`. The equivalent test against the repository as it
+is actually served — over HTTP, with a hostile mirror on the other side of the
+same run — is `scripts/verify.sh` in `omarchy-server-pkgs` (§5).
 
 **Trust anchor bootstrap**: the keyring package is signed by the very key it
 delivers, so it cannot verify itself (the same problem as
@@ -571,7 +594,7 @@ equivalent step is the ISO's offline mirror, which pacman reads with
 
 ### Results (2026-08-29)
 
-61 assertions, all PASS. Measured in the container:
+66 assertions, all PASS. Measured in the container:
 
 | Item | Value |
 |---|---|
@@ -595,6 +618,12 @@ docker, no tailscale, no NetworkManager, no compiler, the Docker drop-ins under
 `/usr/share` rather than `/etc` — that the sshd hardening and the `ufw limit`
 rule are in the shipped scripts, and that every addon list and
 `omarchy-server-addon` itself are packaged and behave.
+
+An `== [omarchy-server] repository wiring ==` block covers §5 as bytes on disk:
+the shipped `/etc/pacman.d/omarchy-server.conf` (section, `SigLevel`, `Server`),
+the `Include` in all three channel templates, the `backup=` entry, and that the
+install scriptlet leaves an inline definition alone instead of duplicating the
+section.
 
 An `== identity ==` block covers §2.5 as bytes on disk: the `os-release` values,
 the branding and `wallpaper` lines in `limine.conf`, the wallpaper file and the
@@ -656,18 +685,114 @@ runtime usable outside a session; a mechanical, risk-free change.
 
 ---
 
-## 5. What changes with a real key and a GitHub fork
+## 5. How the remote repository works
 
-| Today (local) | Later |
+The profile's packages are served from the **assets of a single GitHub
+release** of
+[`edimarlnx/omarchy-server-pkgs`](https://github.com/edimarlnx/omarchy-server-pkgs),
+tagged `repo`. The tag never moves; every build replaces the assets under it.
+That gives pacman a stable base URL:
+
+```
+[omarchy-server]
+SigLevel = Required DatabaseOptional
+Server = https://github.com/edimarlnx/omarchy-server-pkgs/releases/download/repo
+```
+
+The idea is not new — the upstream Omarchy ISO already carries
+`Server = https://github.com/NoaHimesaka1873/arch-mact2-mirror/releases/download/release`
+for the MacBook T2 repository. A GitHub release is a flat, cacheable,
+CDN-backed file host that costs nothing to run, which is the entire job
+description of a pacman mirror.
+
+### What is in the release
+
+| Asset | Why |
 |---|---|
-| lab key in `pkgs/keys/` (no passphrase, on disk) | key generated offline; only the public part enters `omarchy-server-keyring`; the private key lives in GitHub Actions secrets or on encrypted disk |
-| `source=(git+file:///src/omarchy#commit=468b511…)` | `source=(git+https://github.com/<fork>/omarchy.git#commit=…)`, branch `server`; the bind mount and `OMARCHY_GIT_URL` go away |
-| overlay packed as a tarball by `build.sh` | same, or the overlay moves into the fork itself |
-| `Server = file:///repo` | `Server = https://github.com/edimarlnx/omarchy-server-pkgs/releases/download/repo` |
-| local `build.sh` in Docker | the same script called by a GitHub Actions workflow |
-| trust anchor via `pacman-key --add` in the test | `/etc/pacman.d/omarchy-server.conf` included in the ISO's `pacman.conf`, with the keyring coming from the offline mirror |
+| `<pkg>-<ver>-<arch>.pkg.tar.zst` + `.sig` | the packages and their detached signatures |
+| `omarchy-server.db.tar.gz` / `.files.tar.gz` + `.sig` | the database `repo-add --sign` produced |
+| `omarchy-server.db` / `.files` + `.sig` | **real copies** of the two above |
 
-Pending: **nothing** today delivers `/etc/pacman.d/omarchy-server.conf` or
-includes the repo in `pacman.conf`. The packaged
-`default/pacman/pacman-{stable,rc,edge}.conf` are upstream's, without an
-`[omarchy-server]` section. That comes with the signed remote repository.
+The last row is the one detail that a naive upload gets wrong. `repo-add`
+leaves `omarchy-server.db` as a **symlink** to `omarchy-server.db.tar.gz`, and
+`$repo.db` is the exact name pacman asks the mirror for. A release asset cannot
+be a symlink, so `scripts/publish.sh` publishes those two as copies.
+
+`publish.sh` also fetches the currently published database before adding this
+run's packages to it, so a build that rebuilt one package does not strand the
+other three, and it deletes a package asset only once the database has stopped
+referencing it.
+
+### The three pieces on the client
+
+1. **`omarchy-server-keyring`** puts the repository's public key in
+   `/usr/share/pacman/keyrings/` and its `.install` runs
+   `pacman-key --populate omarchy-server`, which is what makes
+   `SigLevel = Required` mean something rather than merely say something. The
+   runtime package depends on it (§2.3), so it cannot be skipped.
+2. **`omarchy-server-settings`** ships `/etc/pacman.d/omarchy-server.conf` with
+   the section above, and appends `Include = /etc/pacman.d/omarchy-server.conf`
+   to each of `default/pacman/pacman-{stable,rc,edge}.conf`. The definition
+   lives in its own file precisely because `/etc/pacman.conf` is **rewritten
+   wholesale** by `omarchy-refresh-pacman` and by
+   `install/server/post-install-pacman-server.sh`; a repository definition that
+   a channel switch deletes is a repository that disappears at the worst
+   moment.
+3. **The install scriptlet** adds that `Include` to a `/etc/pacman.conf` that
+   is already in place, because an ordinary `omarchy-update` never rewrites
+   that file from the template. It refuses to do so in two cases: when
+   `pacman.conf` has no `[omarchy]` section — which is how the live ISO's
+   offline configuration looks inside the target chroot, and adding a remote
+   repository there would send every remaining offline install to GitHub — and
+   when an `[omarchy-server]` section is already defined inline.
+
+`omarchy-server-addon <name>` needs nothing else: it already runs
+`pacman -Syu --needed`, so the refresh is what pulls the current database out
+of the release. It now says so when the repository is missing, instead of
+letting pacman answer "target not found".
+
+The ISO's offline mirror is unaffected and still reads with
+`SigLevel = Optional TrustAll` (`configs/pacman-offline.conf`), which is right:
+its integrity is the ISO's, and pacstrap verifies against the *live* keyring,
+not the target's.
+
+### The build
+
+`.github/workflows/publish.yml` runs on every push to `main` and on manual
+dispatch, in an `archlinux:latest` container. It imports `PACMAN_GPG_KEY`
+(ASCII-armored private key, with `PACMAN_GPG_PASSPHRASE` optional) into a
+throwaway GnuPG home, runs `scripts/build.sh`, then `scripts/publish.sh` with
+the `GITHUB_TOKEN`. Only the public half of the key is committed, in
+`pkgbuilds/omarchy-server-keyring/`.
+
+The key in place today is the **lab** key (§2.1). Replacing it is four steps,
+written down in that repository's README.
+
+### Verified end to end, 2026-08-29
+
+`scripts/verify.sh` builds the repository locally (`build.sh` +
+`publish.sh --local`), serves `repo/` over **HTTP** to a clean `archlinux`
+container and puts it through the real client path. 13 assertions, all PASS:
+
+| | |
+|---|---|
+| transport | the database is fetched over HTTP |
+| bootstrap | the key is read out of the keyring package, locally signed, the package installed under verification, `pacman-key --populate omarchy-server` |
+| install | `pacman -Sy` syncs `omarchy-server.db`; `fwall` and `omarchy-server` install with `SigLevel = PackageRequired` in force |
+| client wiring | the installed `/etc/pacman.d/omarchy-server.conf` carries the real `Server` line |
+| **hostile mirror** | the same repository re-served with `fwall` signed by a **freshly generated stranger's key** and the database rebuilt so every checksum agrees → pacman refuses it (`required key missing from keyring`) and nothing installs |
+| **unsigned** | the same package with its `.sig` removed → pacman refuses to complete the transaction and nothing installs |
+
+The hostile-mirror case is the one that matters. A checksum proves nothing
+about a database an attacker just rewrote; the signature is the only thing
+between the machine and that mirror, and this is the test that says so out
+loud. The download cache and the previously synced database signature are both
+cleared before it runs, or the test would be verifying the copy it already
+trusts.
+
+### What is left
+
+Publishing itself: the release does not exist until the first push of
+`omarchy-server-pkgs` runs the workflow. Until then a machine that has the
+repository configured simply finds nothing to sync from it, and the ISO's
+offline mirror carries the packages exactly as before.

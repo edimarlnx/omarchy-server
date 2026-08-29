@@ -15,9 +15,22 @@
 set -euo pipefail
 
 keys_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$keys_dir/../.." && pwd)
 export GNUPGHOME="$keys_dir/gnupg"
 key_uid="Omarchy Server Lab <lab@omarchy-server.invalid>"
-keyring_dir="$keys_dir/../pkgbuilds/omarchy-server-keyring"
+
+# The PKGBUILDs live in the omarchy-server-pkgs checkout beside this one;
+# OMARCHY_PKGS_DIR moves it. The three files
+# exported below are the PUBLIC half of the key and are committed THERE, so a
+# CI runner that checked out only that repository can build the keyring
+# package.
+pkgs_repo=${OMARCHY_PKGS_DIR:-$repo_root/../omarchy-server-pkgs}
+keyring_dir="$pkgs_repo/pkgbuilds/omarchy-server-keyring"
+if [[ ! -d $keyring_dir ]]; then
+  echo "Error: $keyring_dir does not exist (set OMARCHY_PKGS_DIR)." >&2
+  echo "       git clone https://github.com/edimarlnx/omarchy-server-pkgs.git ../omarchy-server-pkgs" >&2
+  exit 1
+fi
 
 if [[ ! -d $GNUPGHOME ]]; then
   install -d -m 700 "$GNUPGHOME"

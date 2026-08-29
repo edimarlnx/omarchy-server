@@ -12,12 +12,17 @@
 #   pkgs/out/    the .pkg.tar.zst files and their .sig
 #   pkgs/repo/   omarchy-server.db{,.tar.gz} + .files + the packages
 #
-# The build runs as an unprivileged `builder` user, the way the future GitHub
-# Actions workflow will (a signed remote repository is a later step). The upstream checkout is bind
-# mounted read-only at /src/omarchy and consumed through a pinned
-# `git+file://` source, so the build never depends on the working tree's state.
-# With a GitHub fork that URL becomes the fork and this mount goes away. fwall
-# is built the same way from the tui-tools checkout at /src/tui-tools.
+# The PKGBUILDs live in the sibling omarchy-server-pkgs checkout, which is also
+# what GitHub Actions builds the published [omarchy-server] repository from.
+# This script is the LOCAL path: it builds those same PKGBUILDs against the
+# working tree of profile/server/, so editing the overlay and seeing the result
+# does not go through a commit and a CI run.
+#
+# The build runs as an unprivileged `builder` user, the way the workflow does.
+# The upstream checkouts are bind mounted read-only at /src/omarchy and
+# /src/tui-tools and reached through OMARCHY_SRC / FWALL_SRC, so a local build
+# needs no network and never depends on a branch having moved; without those
+# variables the PKGBUILDs default to the public repositories over https.
 
 set -euo pipefail
 
@@ -25,6 +30,24 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 pkgs_dir="$repo_root/pkgs"
 image=${OMARCHY_BUILD_IMAGE:-archlinux:latest}
 packages=("$@")
+
+# The PKGBUILDs are not in this repository. They live in omarchy-server-pkgs,
+# the public repository whose GitHub Actions workflow builds and signs the
+# [omarchy-server] pacman repository, cloned beside this checkout by default:
+#
+#   git clone https://github.com/edimarlnx/omarchy-server-pkgs.git ../omarchy-server-pkgs
+#
+# OMARCHY_PKGS_DIR moves it. One source of truth for how a package is built;
+# this script stays the fast local path that builds it against the WORKING TREE
+# of profile/server/, which is what makes editing the overlay worth doing.
+pkgs_repo=${OMARCHY_PKGS_DIR:-$repo_root/../omarchy-server-pkgs}
+if [[ ! -d $pkgs_repo/pkgbuilds ]]; then
+  echo "Error: $pkgs_repo/pkgbuilds not found (set OMARCHY_PKGS_DIR)." >&2
+  echo "       git clone https://github.com/edimarlnx/omarchy-server-pkgs.git ../omarchy-server-pkgs" >&2
+  exit 1
+fi
+pkgs_repo=$(cd "$pkgs_repo" && pwd)
+pkgbuilds_dir="$pkgs_repo/pkgbuilds"
 
 if ((${#packages[@]} == 0)); then
   packages=(omarchy-server-keyring omarchy-server-settings omarchy-server fwall)
@@ -60,7 +83,7 @@ fingerprint=$(<"$pkgs_dir/keys/fingerprint")
 # install time.
 overlay_tarball_name=omarchy-server-overlay.tar.gz
 for package in omarchy-server-settings omarchy-server; do
-  tar -czf "$pkgs_dir/pkgbuilds/$package/$overlay_tarball_name" \
+  tar -czf "$pkgbuilds_dir/$package/$overlay_tarball_name" \
     -C "$repo_root/profile/server" overlay addons branding
 done
 
@@ -72,11 +95,12 @@ mounts=(-v "$repo_root/upstream/omarchy:/src/omarchy:ro")
 
 docker run --rm \
   "${mounts[@]}" \
-  -v "$pkgs_dir/pkgbuilds:/build/pkgbuilds:ro" \
+  -v "$pkgbuilds_dir:/build/pkgbuilds:ro" \
   -v "$pkgs_dir/keys:/build/keys:ro" \
   -v "$pkgs_dir/out:/out" \
   -v "$pkgs_dir/repo:/repo" \
   -e "OMARCHY_SIGN_KEY=$fingerprint" \
+  -e "OMARCHY_SRC=/src/omarchy" \
   -e "OMARCHY_PACKAGES=${packages[*]}" \
   "$image" bash -euo pipefail -c '
     pacman -Syu --noconfirm --needed base-devel git
@@ -99,6 +123,9 @@ docker run --rm \
 
     install -d -o builder -g builder /home/builder/work /home/builder/gnupg
     cp -a /build/keys/gnupg/. /home/builder/gnupg/
+    # A copied GnuPG home can carry another agent'"'"'s sockets, which gpg would
+    # try to reuse and then fail on a key that is plainly there.
+    rm -f /home/builder/gnupg/S.*
     chown -R builder:builder /home/builder/gnupg
     chmod 700 /home/builder/gnupg
 
@@ -110,6 +137,11 @@ docker run --rm \
         set -euo pipefail
         export GNUPGHOME=/home/builder/gnupg
         export GPGKEY=$OMARCHY_SIGN_KEY
+        # The PKGBUILDs default to the public fork over https; these point them
+        # at the read-only bind mounts instead, so a local build needs no
+        # network and never depends on a branch having moved.
+        export OMARCHY_SRC=/src/omarchy
+        if [[ -d /src/tui-tools ]]; then export FWALL_SRC=/src/tui-tools; fi
         cd /home/builder/work/$package
         # --nodeps, not -s: the Omarchy packages are arch=any file bundles with
         # no compile step, and their depends() name each other plus five

@@ -104,12 +104,23 @@ if ((${#pacman_args[@]})); then
   pacman "${pacman_args[@]}" -Sy --noconfirm
   pacman "${pacman_args[@]}" -S --needed --noconfirm "${packages[@]}"
 else
+  # Packages that exist in no public Arch repository come from this profile's
+  # own [omarchy-server] repository, which omarchy-server-settings enables by
+  # dropping /etc/pacman.d/omarchy-server.conf and an Include into
+  # /etc/pacman.conf. Say so before pacman fails with "target not found",
+  # which explains nothing.
+  if ! pacman-conf --repo-list 2>/dev/null | grep -qx omarchy-server; then
+    echo "Warning: the [omarchy-server] repository is not configured." >&2
+    echo "         Addons whose packages are built by this profile (fwall) will not be found." >&2
+    echo "         Expected: an Include for /etc/pacman.d/omarchy-server.conf in /etc/pacman.conf." >&2
+  fi
   # `-Syu`, not `-Sy` followed by `-S`: pulling a package built against newer
   # libraries into a system that has not been upgraded is the partial-upgrade
   # breakage Arch warns about, and an installed machine has no reason to keep
   # its databases stale. On a fresh install the sync databases are empty (the
   # install ran off the ISO's offline mirror), so a refresh is required, not
-  # optional.
+  # optional. The refresh is also what pulls the current [omarchy-server]
+  # database down from the release assets.
   pacman -Syu --needed --noconfirm "${packages[@]}"
 fi
 

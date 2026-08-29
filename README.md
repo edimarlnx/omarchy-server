@@ -12,14 +12,29 @@ upstream is modified in place.
 ## Layout
 
 ```
-pkgs/            PKGBUILDs (omarchy-server, omarchy-server-settings,
-                 omarchy-server-keyring, fwall), build.sh (Docker), test.sh
+pkgs/            build.sh (Docker) and test.sh for the packages; the signing key
 profile/server/  package list, addons, services, overlay (install/server/*,
                  settings) and patches applied on top of the upstream tree
 iso/             build.sh + overlay/patches for the ISO --profile server
 pocs/            lab scripts and measured results (QEMU/OVMF, cidata autoinstall)
 docs/            technical docs: packaging.md, iso-server.md, screenshots/
 ```
+
+The **PKGBUILDs are not here**. They live in
+[`omarchy-server-pkgs`](https://github.com/edimarlnx/omarchy-server-pkgs), the
+public repository whose GitHub Actions workflow builds and signs the
+`[omarchy-server]` pacman repository served from its `repo` release. Clone it
+beside this one (`OMARCHY_PKGS_DIR` moves it):
+
+```bash
+git clone https://github.com/edimarlnx/omarchy-server-pkgs.git ../omarchy-server-pkgs
+```
+
+`pkgs/build.sh` and `iso/build.sh` read the PKGBUILDs from there and build them
+against the **working tree** of `profile/server/`, which is what keeps editing
+the overlay a fast loop. That repository carries its own vendored copy of
+`profile/server/` (refreshed by its `scripts/sync-overlay.sh`) so CI needs
+nothing from here.
 
 ## Upstream clones
 
@@ -69,6 +84,7 @@ wrap on an 80-column line: `pocs/server-install/reference/serial-issue.txt`.
 ## Quick start
 
 ```bash
+git clone https://github.com/edimarlnx/omarchy-server-pkgs.git ../omarchy-server-pkgs
 ./pkgs/build.sh        # build the packages into a local signed repo
 ./pkgs/test.sh         # install them in a clean archlinux container
 ./iso/build.sh         # build the ISO with the server profile
@@ -85,6 +101,11 @@ omarchy-server-addon --list          # cli-tools dev docker editor fwall net-too
 omarchy-server-addon docker
 pocs/lab/mkcidata.sh --profile server --addons docker    # or at install time
 ```
+
+An installed machine gets those from the signed `[omarchy-server]` repository,
+which `omarchy-server-settings` enables by shipping
+`/etc/pacman.d/omarchy-server.conf` and including it from every channel's
+`pacman.conf`. `docs/packaging.md` §5 is how that works.
 
 Measurements (package count, size, enabled units, listening sockets, setuid
 binaries, root services) are in `pocs/server-install/README.md`, produced by

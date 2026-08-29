@@ -115,6 +115,27 @@ EOF
       "grep -qx \"ID=omarchy-server\" /etc/os-release"
 
     echo
+    echo "== [omarchy-server] repository wiring =="
+    # What lets an installed machine reach its own packages: the repository
+    # definition ships as a file under /etc/pacman.d, and every channel
+    # template Includes it, so a channel switch (omarchy-refresh-pacman) or the
+    # end of an ISO install (post-install-pacman-server.sh) keeps it enabled.
+    check "the repository definition ships under /etc/pacman.d" bash -c \
+      "grep -qx \"\\[omarchy-server\\]\" /etc/pacman.d/omarchy-server.conf && grep -qx \"SigLevel = Required DatabaseOptional\" /etc/pacman.d/omarchy-server.conf && grep -qx \"Server = https://github.com/edimarlnx/omarchy-server-pkgs/releases/download/repo\" /etc/pacman.d/omarchy-server.conf"
+    check "every channel template includes it" bash -c \
+      "for c in stable rc edge; do grep -qx \"Include = /etc/pacman.d/omarchy-server.conf\" /usr/share/omarchy/default/pacman/pacman-\$c.conf || exit 1; done"
+    check "the definition is a backup= file" bash -c \
+      "pacman -Qii omarchy-server-settings | grep -q \"etc/pacman.d/omarchy-server.conf\""
+    # The container defines [omarchy-server] inline (file:///repo). The
+    # scriptlet must leave pacman.conf alone: adding its Include would splice a
+    # SECOND [omarchy-server] section in, pointing at GitHub, and pacman would
+    # be reading a duplicate repository.
+    check "the scriptlet does not duplicate an inline definition" bash -c \
+      "(( \$(grep -c \"^\\[omarchy-server\\]\" /etc/pacman.conf) == 1 )) && ! grep -q \"^Include = /etc/pacman.d/omarchy-server.conf\" /etc/pacman.conf"
+    check "omarchy-server-addon warns when the repo is missing" bash -c \
+      "grep -q \"the \\[omarchy-server\\] repository is not configured\" /usr/share/omarchy/bin/omarchy-server-addon"
+
+    echo
     echo "== identity =="
     check "os-release names the edition and the version" bash -c \
       "grep -qx \"NAME=\\\"Omarchy Server\\\"\" /etc/os-release && grep -qx \"PRETTY_NAME=\\\"Omarchy Server 4.0.1\\\"\" /etc/os-release && grep -qx \"ANSI_COLOR=\\\"0;32\\\"\" /etc/os-release && grep -qx \"LOGO=omarchy\" /etc/os-release"

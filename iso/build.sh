@@ -100,11 +100,20 @@ git -C "$scratch" add -A
 # builder/build-omarchy-packages.sh reads /omarchy-pkgs/pkgbuilds/<pkg>, and
 # our patched builder/build-iso.sh reads /omarchy-pkgs/profile/<name>/.
 echo "› assembling $pkgs_scratch"
+# The PKGBUILDs live in the omarchy-server-pkgs checkout beside this one, which
+# is also what GitHub Actions builds the signed [omarchy-server] repository
+# from. OMARCHY_PKGS_DIR moves it.
+pkgs_repo=${OMARCHY_PKGS_DIR:-$repo_root/../omarchy-server-pkgs}
+if [[ ! -d $pkgs_repo/pkgbuilds ]]; then
+  echo "Error: $pkgs_repo/pkgbuilds not found (set OMARCHY_PKGS_DIR)." >&2
+  echo "       git clone https://github.com/edimarlnx/omarchy-server-pkgs.git ../omarchy-server-pkgs" >&2
+  exit 1
+fi
 bash "$repo_root/pkgs/keys/gen-lab-key.sh"
 
 rm -rf "$pkgs_scratch"
 mkdir -p "$pkgs_scratch/profile"
-cp -a "$repo_root/pkgs/pkgbuilds" "$pkgs_scratch/pkgbuilds"
+cp -a "$pkgs_repo/pkgbuilds" "$pkgs_scratch/pkgbuilds"
 cp -a "$repo_root/profile/$profile" "$pkgs_scratch/profile/$profile" 2>/dev/null ||
   { [[ $profile == desktop ]] || { echo "Error: no profile/$profile in this repo." >&2; exit 1; }; }
 
