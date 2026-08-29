@@ -147,6 +147,15 @@ firmware is in Setup Mode. It costs exactly one package, and only on the
 machines that asked: `sbctl`, which is what limine-entry-tool and mkinitcpio
 already look for when they decide whether to sign what they just wrote.
 
+**Known limitation, measured:** with `module.sig_enforce=1` the kernel only
+trusts modules signed by its own build key or by a certificate in the `.machine`
+keyring, which is fed by shim's MokList. A certificate enrolled in the firmware
+`db` (what this profile does) lands in `.platform` and is *not* consulted for
+modules, so out-of-tree modules (ZFS, DKMS drivers) do not load under this
+setup. The options are a shim carrying the certificate, a kernel built with it,
+or relaxing `module.sig_enforce` on those machines; none is implemented. See
+`docs/secure-boot.md` §8 and `reports/2026-08-29-zfs-signed-module.md`.
+
 `docs/secure-boot.md` is the design — own keys rather than upstream's
 shim + MOK, where the keys live, which existing hook signs which binary, the
 lab flow with an OVMF firmware in Setup Mode, and what the boundary does and
