@@ -115,6 +115,19 @@ func cmdDoctor(args []string) error {
 			fmt.Sprintf("%d GiB free on the filesystem holding the repository (want %d)", free, cfg.MinFreeGB),
 			"an ISO is ~3 GiB and each lab VM disk grows to a few GiB; free some space")
 	}
+	// The OCI CLI is not a prerequisite for anything in this repository: it is
+	// only needed by pocs/image/oci/, which the owner runs by hand against a
+	// tenancy this host may not even have credentials for. A note, not a check.
+	if path, err := exec.LookPath("oci"); err == nil {
+		fmt.Printf("  ok    %-22s %s\n", "oci (optional)", path)
+	} else {
+		fmt.Printf("  note  %-22s not installed; only pocs/image/oci/ needs it\n", "oci (optional)")
+	}
+	if image, err := newestImage(cfg); err == nil {
+		fmt.Printf("  ok    %-22s %s\n", "pocs/image/out", filepath.Base(image))
+	} else {
+		fmt.Printf("  note  %-22s no cloud image yet; `serverlab image build` makes one\n", "pocs/image/out")
+	}
 	if iso, err := newestISO(cfg, cfg.Profile); err == nil {
 		fmt.Printf("  ok    %-22s %s\n", "iso/release", filepath.Base(iso))
 	} else {

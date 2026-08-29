@@ -35,6 +35,18 @@ type Lab struct {
 	ISO               string    `json:"iso"`
 	Out               string    `json:"out"`
 	Created           time.Time `json:"created"`
+
+	// Image is set when the machine was NOT installed from an ISO but booted
+	// from a built cloud image (`serverlab image test`). It is what makes a
+	// report say "launched from this image" instead of "installed from this
+	// ISO", and it is the one difference between the two kinds of lab that a
+	// reader has to be told about.
+	Image string `json:"image,omitempty"`
+	// SSHUser is the account the harness reaches the machine as. The lab
+	// installs `omarchy`; an image build installs a throwaway account and an
+	// image test reaches the account the NoCloud seed created, so the name
+	// cannot be a constant in the scripts any more.
+	SSHUser string `json:"sshUser,omitempty"`
 }
 
 func (l *Lab) settingsPath() string { return filepath.Join(l.Out, "lab.json") }
@@ -79,6 +91,9 @@ func (l *Lab) env() []string {
 	if l.CPUs > 0 {
 		env = append(env, "CPUS="+strconv.Itoa(l.CPUs))
 	}
+	if l.SSHUser != "" {
+		env = append(env, "SSH_USER="+l.SSHUser)
+	}
 	return env
 }
 
@@ -86,7 +101,12 @@ func (l *Lab) env() []string {
 // they are never part of `--suite all`: they apply to any server machine and
 // they change it -- the transactional list alone reboots the VM three times and
 // leaves package state behind. They run only when asked for by name.
-var optionalSuites = []string{"transactional"}
+//
+// `cloud` is here for a different reason: it is the acceptance list of a
+// machine booted from a cloud image, which no INSTALL marker can imply. It is
+// run by `serverlab image test`, and it is listed here so `serverlab report`
+// picks its evidence up like any other suite.
+var optionalSuites = []string{"transactional", "cloud"}
 
 // Suites returns the acceptance suites this machine was installed for. Every
 // machine gets the base list; a Secure Boot or MAC marker adds its own.

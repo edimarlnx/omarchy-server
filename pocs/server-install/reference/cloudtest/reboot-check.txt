@@ -1,0 +1,36 @@
+=== reboot survival — VM 'cloudtest' — 2026-08-29T17:32:01-03:00 ===
+
+before:
+2026-08-29 17:31:44
+7.1.11-arch1-1
+4.0.1-10
+
+rebooting...
+rebooted: boot time moved from 2026-08-29 17:31:44 to 2026-08-29 17:32:05
+ssh answered 0s after the reboot request
+
+after:
+2026-08-29 17:32:05
+7.1.11-arch1-1
+profile: server
+version: 4.0.1-10
+default target: multi-user.target
+cmdline: root=PARTUUID=eddadfc4-5246-459d-80d8-e71ca2f644ae zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
+Startup finished in 762ms (firmware) + 2.749s (loader) + 781ms (kernel) + 3.123s (userspace) = 7.416s 
+multi-user.target reached after 3.073s in userspace.
+--- failed units ---
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+
+0 loaded units listed.
+--- firewall ---
+Status: active
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     LIMIT       Anywhere                  
+22/tcp (v6)                LIMIT       Anywhere (v6)              # omarchy-sshd
+--- listening ---
+0.0.0.0:22
+127.0.0.53%lo:53
+127.0.0.54:53
+[::]:22

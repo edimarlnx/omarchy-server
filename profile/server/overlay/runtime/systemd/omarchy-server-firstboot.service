@@ -1,0 +1,29 @@
+[Unit]
+# Enabled by install/server/cloud-server.sh (the `cloud` addon). Gives a
+# machine booted from a shared image the identity the image deliberately does
+# not carry: its own ssh host keys and, when the image was built for it, its
+# own Secure Boot keys. See bin/omarchy-server-firstboot.
+Description=Omarchy Server first boot (ssh host keys, Secure Boot keys)
+Documentation=man:omarchy-server-firstboot
+
+# Before sshd, and before the unit that would otherwise generate the host keys:
+# the fingerprint this machine offers has to be the one this unit made, not one
+# a race decided. Also before cloud-init's final stage, so an operator reading
+# `cloud-init status --wait` knows the host identity settled first.
+After=local-fs.target
+Before=sshd.service sshdgenkeys.service cloud-final.service
+
+# Runs once; the command itself keeps the marker, so a --force run by hand
+# still works.
+ConditionPathExists=!/var/lib/omarchy/firstboot-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/omarchy-server-firstboot
+# A headless machine has nowhere to show a failure but the journal.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

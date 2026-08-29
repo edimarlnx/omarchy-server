@@ -14,6 +14,7 @@
 //	serverlab iso build --profile server
 //	serverlab lab up srv --profile server
 //	serverlab lab test srv --suite base
+//	serverlab image build|test|publish
 //	serverlab report srv
 //	serverlab all --profile server         all of the above, from scratch
 //
@@ -40,6 +41,9 @@ Usage:
   serverlab lab up NAME [flags]          cidata + create + start + wait-ssh
   serverlab lab test NAME [--suite S]    collect + surface + acceptance + reboot-check
   serverlab lab status|down|ssh|screenshot NAME
+  serverlab image build [flags]          install, generalize and convert a cloud image
+  serverlab image test [flags]           boot it with a NoCloud seed and assert
+  serverlab image publish --yes          upload it to a GitHub release
   serverlab report NAME [flags]          write reports/YYYY-MM-DD-<name>.md
   serverlab all [flags]                  pkgs -> iso -> lab up -> lab test -> report
 
@@ -78,6 +82,8 @@ func dispatch(args []string) error {
 		return cmdISO(args[1:])
 	case "lab":
 		return cmdLab(args[1:])
+	case "image":
+		return cmdImage(args[1:])
 	case "report":
 		return cmdReport(args[1:])
 	case "all":

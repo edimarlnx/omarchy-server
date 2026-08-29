@@ -1,0 +1,412 @@
+=== Server install acceptance — VM 'cloudtest' — 2026-08-29T17:32:19-03:00 ===
+
+[PASS] default target is multi-user.target
+      $ systemctl get-default
+      multi-user.target
+
+[PASS] no sddm/hyprland/pipewire/plymouth installed
+      $ for p in sddm hyprland pipewire plymouth wireplumber uwsm quickshell xdg-desktop-portal-hyprland gnome-keyring; do pacman -Qq "$p" >/dev/null 2>&1 && echo "PRESENT: $p"; done; echo "graphical=$(pacman -Qq | grep -cE "^(sddm|hyprland|pipewire|plymouth|wireplumber|uwsm|quickshell)$")"
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+      graphical=0
+
+[PASS] docker is absent from the base
+      $ for p in docker docker-compose docker-buildx ufw-docker lazydocker networkmanager base-devel gcc git tailscale; do pacman -Qq "$p" >/dev/null 2>&1 && echo "PRESENT: $p"; done; echo "extras=$(pacman -Qq | grep -cE "^(docker|networkmanager|gcc|tailscale)$")"
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+      extras=0
+
+[PASS] ssh with the cidata key works
+      $ echo "logged in as $(id -un)@$(uname -n) from $SSH_CONNECTION"
+      logged in as demo@omarchy-cloud-test from 10.0.2.2 47264 10.0.2.15 22
+
+[PASS] password authentication is refused
+      $ ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=10 "$(id -un)@localhost" true 2>&1 | tail -2
+      Warning: Permanently added 'localhost' (ED25519) to the list of known hosts.
+      demo@localhost: Permission denied (publickey).
+
+[PASS] root cannot log in over ssh
+      $ ~/.lab-sudo sshd -T 2>/dev/null | grep -iE "^(permitrootlogin|passwordauthentication|kbdinteractiveauthentication|permitemptypasswords) "
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitEmptyPasswords no
+
+[PASS] networkd brought the link up by DHCP
+      $ networkctl status --no-pager 2>&1 | sed -n "1,25p"; ip -4 -o addr show scope global | awk "{print \$2, \$4}"
+      ● Interfaces: 1, 2
+             State: routable
+      Online state: online
+           Address: 10.0.2.15 on enp0s3
+                    fec0::5054:ff:fe12:3456 on enp0s3
+                    fe80::5054:ff:fe12:3456 on enp0s3
+           Gateway: 10.0.2.2 on enp0s3
+                    fe80::2 on enp0s3
+               DNS: 10.0.2.3
+                    fec0::3
+      
+      Aug 29 17:32:09 omarchy-cloud-test systemd[1]: Starting Network Management...
+      Aug 29 17:32:09 omarchy-cloud-test systemd-networkd[544]: lo: Link UP
+      Aug 29 17:32:09 omarchy-cloud-test systemd-networkd[544]: lo: Gained carrier
+      Aug 29 17:32:09 omarchy-cloud-test systemd[1]: Started Network Management.
+      Aug 29 17:32:09 omarchy-cloud-test systemd-networkd[544]: enp0s3: Configuring with /etc/systemd/network/20-wired.network.
+      Aug 29 17:32:09 omarchy-cloud-test systemd-networkd[544]: enp0s3: Link UP
+      Aug 29 17:32:09 omarchy-cloud-test systemd-networkd[544]: enp0s3: Gained carrier
+      Aug 29 17:32:09 omarchy-cloud-test systemd-networkd[544]: enp0s3: DHCPv4 address 10.0.2.15/24, gateway 10.0.2.2 acquired from 10.0.2.2
+      Aug 29 17:32:10 omarchy-cloud-test systemd-networkd[544]: enp0s3: Gained IPv6LL
+      enp0s3 10.0.2.15/24
+
+[PASS] resolved answers through the stub resolver
+      $ readlink -f /etc/resolv.conf; resolvectl status --no-pager | sed -n "1,12p"; getent hosts archlinux.org | head -1 && echo dns-ok
+      /run/systemd/resolve/stub-resolv.conf
+      Global
+                 Protocols: -LLMNR -mDNS -DNSOverTLS DNSSEC=no/unsupported
+          resolv.conf mode: stub
+        Current DNS Server: 9.9.9.9#dns.quad9.net
+      Fallback DNS Servers: 9.9.9.9#dns.quad9.net 2620:fe::9#dns.quad9.net
+                            1.1.1.1#cloudflare-dns.com
+                            2606:4700:4700::1111#cloudflare-dns.com 8.8.8.8#dns.google
+                            2001:4860:4860::8888#dns.google
+      
+      Link 2 (enp0s3)
+          Current Scopes: DNS
+               Protocols: +DefaultRoute -LLMNR -mDNS -DNSOverTLS DNSSEC=no/unsupported
+      2604:cac0:a104:d::3 archlinux.org
+      dns-ok
+
+[PASS] sudo works with the lab password
+      $ ~/.lab-sudo id -un
+      root
+
+[PASS] ufw is active and rate-limits 22
+      $ ~/.lab-sudo ufw status verbose
+      Status: active
+      Logging: on (low)
+      Default: deny (incoming), allow (outgoing), disabled (routed)
+      New profiles: skip
+      
+      To                         Action      From
+      --                         ------      ----
+      22/tcp                     LIMIT IN    Anywhere                  
+      22/tcp (v6)                LIMIT IN    Anywhere (v6)              # omarchy-sshd
+
+[PASS] nothing listens except ssh
+      $ ~/.lab-sudo ss -ltnpH | awk "{print \$4}" | grep -v "^127\." | sort -u | tee /dev/stderr | grep -qvE ":22$" && echo unexpected-listener || echo only-ssh
+      only-ssh
+      0.0.0.0:22
+      [::]:22
+
+[PASS] factory snapshot exists and snapper is configured
+      $ ~/.lab-sudo snapper list; ~/.lab-sudo btrfs subvolume list / | grep -i factory; ~/.lab-sudo ls /etc/snapper/configs/
+      # | Type   | Pre # | Date | User | Cleanup | Description | Userdata
+      --+--------+-------+------+------+---------+-------------+---------
+      0 | single |       |      | root |         | current     |
+      ID 264 gen 18 top level 5 path @factory
+      root
+
+[PASS] /boot/limine.conf lists snapshot entries once a snapshot exists
+      $ ~/.lab-sudo snapper -c root create -d acceptance >/dev/null 2>&1; ~/.lab-sudo systemctl start limine-snapper-sync.service >/dev/null 2>&1; sleep 3; ~/.lab-sudo snapper -c root list | tail -3; ~/.lab-sudo grep -iE "snapshot" /boot/limine.conf | head -6
+      --+--------+-------+--------------------------+------+---------+-------------+---------
+      0 | single |       |                          | root |         | current     |
+      1 | single |       | Sat Aug 29 17:32:19 2026 | root |         | acceptance  |
+           //Snapshots
+           comment: 1 snapshots
+           cmdline: root=PARTUUID=eddadfc4-5246-459d-80d8-e71ca2f644ae zswap.enabled=0 rootflags=subvol=/@/.snapshots/1/snapshot rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
+
+[PASS] pacman -Qq | wc -l in 150-260
+      $ n=$(pacman -Qq | wc -l); echo "packages=$n"; [ "$n" -ge 150 ] && [ "$n" -le 260 ] && echo in-range || echo out-of-range
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+      packages=250
+      in-range
+
+[PASS] installed size and disk used < 3 GB
+      $ LC_ALL=C pacman -Qi | awk "/^Installed Size/ { v=\$4; u=\$5; if (u==\"B\") v/=1048576; if (u==\"KiB\") v/=1024; if (u==\"GiB\") v*=1024; s+=v } END { printf \"installed=%.0f MiB\n\", s }"; used=$(df --output=used -BM / | tail -1 | tr -dc 0-9); echo "used=${used}MiB"; [ "$used" -lt 3072 ] && echo under-3g || echo over-3g
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+      installed=1428 MiB
+      used=1193MiB
+      under-3g
+
+[PASS] boot to ssh under 20 s
+      $ systemd-analyze; t=$(systemd-analyze | sed -n "s/.*= \([0-9.]*\)s.*/\1/p"); awk -v t="$t" "BEGIN{print (t+0<20)?\"under-20s\":\"over-20s\"}"
+      Startup finished in 762ms (firmware) + 2.749s (loader) + 781ms (kernel) + 3.123s (userspace) = 7.416s 
+      multi-user.target reached after 3.073s in userspace.
+      under-20s
+
+[PASS] /proc/cmdline has console=ttyS0 and no quiet/splash/resume
+      $ cat /proc/cmdline; grep -q "console=ttyS0" /proc/cmdline && ! grep -qE "quiet|splash|resume=" /proc/cmdline && echo cmdline-ok || echo cmdline-bad
+      root=PARTUUID=eddadfc4-5246-459d-80d8-e71ca2f644ae zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
+      cmdline-ok
+
+[PASS] zram active
+      $ zramctl; swapon --show
+      NAME       ALGORITHM DISKSIZE DATA COMPR TOTAL STREAMS MOUNTPOINT
+      /dev/zram0 zstd          3.9G   4K   64B   20K         [SWAP]
+      NAME       TYPE      SIZE USED PRIO
+      /dev/zram0 partition 3.9G   0B  100
+
+[PASS] /etc/omarchy-profile is server
+      $ cat /etc/omarchy-profile
+      server
+
+[PASS] omarchy-version reports the profile release (4.0.1-N)
+      $ omarchy-version 2>/dev/null
+      4.0.1-10
+
+[FAIL] the hostname defaults to omarchy when cidata gives none
+      $ hostnamectl hostname; [ "$(hostnamectl hostname)" = omarchy ] && echo default-hostname-ok || echo wrong-hostname
+      omarchy-cloud-test
+      wrong-hostname
+
+[PASS] os-release identifies the edition
+      $ grep -E "^(NAME|PRETTY_NAME|ID|ID_LIKE|ANSI_COLOR|LOGO)=" /etc/os-release
+      NAME="Omarchy Server"
+      PRETTY_NAME="Omarchy Server 4.0.1"
+      ID=omarchy-server
+      ID_LIKE="omarchy arch"
+      ANSI_COLOR="0;32"
+      LOGO=omarchy
+
+[PASS] /etc/issue carries the logo, the version and the machine fields
+      $ grep -c . /etc/issue; grep -q "Omarchy Server" /etc/issue && grep -qF "S{VERSION_ID}" /etc/issue && grep -q "███" /etc/issue && grep -qP "\x1b\[32m" /etc/issue && echo issue-ok || echo issue-bad
+      14
+      issue-ok
+
+[PASS] the serial console gets its own logo-free issue
+      $ cat /etc/issue.serial; grep -q "issue-file /etc/issue.serial" /etc/systemd/system/serial-getty@.service.d/10-omarchy-issue.conf && ! grep -q "███" /etc/issue.serial && echo serial-issue-ok || echo serial-issue-bad
+      [1;32mOmarchy Server[0m [32m\S{VERSION_ID}[0m
+      [2mhost[0m \n   [2mtty[0m \l   [2mipv4[0m \4
+      
+      serial-issue-ok
+
+[PASS] the VT palette unit ran and left the serial console alone
+      $ systemctl is-enabled omarchy-tty-palette.service; systemctl is-active omarchy-tty-palette.service; systemctl show -p ExecMainStatus --value omarchy-tty-palette.service; ! grep -v "^#" /usr/bin/omarchy-tty-palette | grep -q ttyS && echo palette-ok || echo palette-bad
+      enabled
+      active
+      0
+      palette-ok
+
+[PASS] /boot/limine.conf is branded, waits 2 s and points at the wallpaper
+      $ ~/.lab-sudo grep -E "^(timeout|interface_branding|wallpaper|wallpaper_style):" /boot/limine.conf
+      timeout: 2
+      interface_branding: Omarchy Server
+      wallpaper: boot():/limine-wallpaper.png
+      wallpaper_style: stretched
+
+[PASS] the wallpaper is on the ESP
+      $ ~/.lab-sudo ls -l /boot/limine-wallpaper.png; ~/.lab-sudo file /boot/limine-wallpaper.png 2>/dev/null || ~/.lab-sudo head -c 8 /boot/limine-wallpaper.png | od -c | head -1
+      -rwx------ 1 root root 17941 Aug 29 17:30 /boot/limine-wallpaper.png
+      /boot/limine-wallpaper.png: PNG image data, 1920 x 1080, 8-bit/color RGB, non-interlaced
+
+[PASS] the login banner prints the machine identity
+      $ bash -lc "COLUMNS=120 omarchy-server-motd" | sed "s/\x1b\[[0-9;]*m//g"
+      
+                         ▄▄▄
+         ▄█████▄    ▄███████████▄    ▄███████   ▄███████   ▄███████   ▄█   █▄    ▄█   █▄
+        ███   ███  ███   ███   ███  ███   ███  ███   ███  ███   ███  ███   ███  ███   ███
+        ███   ███  ███   ███   ███  ███   ███  ███   ███  ███   █▀   ███   ███  ███   ███
+        ███   ███  ███   ███   ███ ▄███▄▄▄███ ▄███▄▄▄██▀  ███       ▄███▄▄▄███▄ ███▄▄▄███
+        ███   ███  ███   ███   ███ ▀███▀▀▀███ ▀███▀▀▀▀    ███      ▀▀███▀▀▀███  ▀▀▀▀▀▀███
+        ███   ███  ███   ███   ███  ███   ███ ██████████  ███   █▄   ███   ███  ▄██   ███
+        ███   ███  ███   ███   ███  ███   ███  ███   ███  ███   ███  ███   ███  ███   ███
+         ▀█████▀    ▀█   ███   █▀   ███   █▀   ███   ███  ███████▀   ███   █▀    ▀█████▀
+                                               ███   █▀
+      
+        os        Omarchy Server 4.0.1
+        host      omarchy-cloud-test
+        kernel    7.1.11-arch1-1
+        uptime    0 minute
+        packages  250 installed
+        updates   none pending
+        memory    0.6 GiB of 7.7 GiB used
+        ip        10.0.2.15/24
+
+[PASS] the banner is wired into every login shell
+      $ test -f /etc/profile.d/omarchy-motd.sh && grep -q omarchy-server-motd /etc/profile.d/omarchy-motd.sh && echo motd-wired || echo motd-missing
+      motd-wired
+
+[PASS] fwall is not in the base
+      $ pacman -Qq fwall 2>/dev/null || echo fwall-absent
+      fwall-absent
+
+[PASS] omarchy-server-addon docker installs and runs a container
+      $ ~/.lab-sudo omarchy-server-addon docker 2>&1 | tail -5; ~/.lab-sudo systemctl start docker.socket; ~/.lab-sudo docker run --rm hello-world 2>&1 | sed -n "/Hello from Docker/,+3p"
+      Please restart UFW service manually by using the following command:
+          sudo systemctl restart ufw
+      Created symlink '/etc/systemd/system/sockets.target.wants/docker.socket' → '/usr/lib/systemd/system/docker.socket'.
+      Firewall reloaded
+      Addon 'docker' installed.
+      Hello from Docker!
+      This message shows that your installation appears to be working correctly.
+      
+      To generate this message, Docker took the following steps:
+
+[PASS] the docker addon opens only the container DNS stub
+      $ ~/.lab-sudo ss -ltnpH | awk "{print \$4}" | grep -vE "^127\.|^172\.17\.0\.1:53$" | sort -u | tee /dev/stderr | grep -qvE ":22$" && echo unexpected-listener || echo expected-only; ~/.lab-sudo ufw status | grep -c allow-docker-dns
+      0.0.0.0:22
+      [::]:22
+      expected-only
+      2
+
+[PASS] the update timer ships disabled and toggles
+      $ shipped=$(systemctl is-enabled omarchy-server-update.timer 2>&1);
+   ~/.lab-sudo omarchy-server-update enable >/dev/null 2>&1;
+   on=$(systemctl is-enabled omarchy-server-update.timer 2>&1);
+   ~/.lab-sudo omarchy-server-update disable >/dev/null 2>&1;
+   off=$(systemctl is-enabled omarchy-server-update.timer 2>&1);
+   echo "shipped=$shipped enabled=$on disabled=$off"
+      shipped=disabled enabled=enabled disabled=disabled
+
+[PASS] the free-space check uses the server threshold
+      $ bash -x /usr/bin/omarchy-update-requires-free-space 2>&1 | grep -E "^\+ required_gib=" | tail -1;
+   omarchy-update-requires-free-space; echo "rc=$?"; df -h --output=avail / | tail -1
+      + required_gib=2
+      rc=0
+        37G
+
+[PASS] omarchy-server-update runs non-interactively to completion
+      $ timeout 2400 ~/.lab-sudo omarchy-server-update 2>&1 | tail -40 | ~/.lab-redact; echo "rc=${PIPESTATUS[0]}"
+      [32m
+      Prune package cache[0m
+      ]3008;start=57389963d1724b70b18a21bd135f4905;user=root;hostname=omarchy-cloud-test;machineid=5b08a83112af46099b9a3c188f9b2f36;bootid=58ce265b03a14eeaaeab80e26d93e5cf;pid=2217;pidfdid=8739;comm=sudo;targetuser=root;type=session\^@[1m[32m==>[0m[1m no candidate packages found for pruning[0m
+      ]3008;end=57389963d1724b70b18a21bd135f4905\
+      [32mCreate system snapshot[0m
+      ]3008;start=149c131992f54015b990155a94855d38;user=root;hostname=omarchy-cloud-test;machineid=5b08a83112af46099b9a3c188f9b2f36;bootid=58ce265b03a14eeaaeab80e26d93e5cf;pid=2274;pidfdid=8763;comm=sudo;targetuser=root;type=session\]3008;end=149c131992f54015b990155a94855d38\]3008;start=2376bd17a71f40c2b1a086272b522084;user=root;hostname=omarchy-cloud-test;machineid=5b08a83112af46099b9a3c188f9b2f36;bootid=58ce265b03a14eeaaeab80e26d93e5cf;pid=2289;pidfdid=478;comm=sudo;targetuser=root;type=session\]3008;end=2376bd17a71f40c2b1a086272b522084\Snapshots can be selected during boot.
+      [32m
+      Update Arch signing keys[0m
+      Keys are correct
+      [32m
+      Update system packages[0m
+      ]3008;start=4a2b52050f6a45a4a41fc1f4ac6af811;user=root;hostname=omarchy-cloud-test;machineid=5b08a83112af46099b9a3c188f9b2f36;bootid=58ce265b03a14eeaaeab80e26d93e5cf;pid=2579;pidfdid=12938;comm=sudo;targetuser=root;type=session\[?25l[1;34m::[0;1m Synchronizing package databases...
+      [0m core
+       extra
+       multilib
+       omarchy
+       omarchy-server
+      [5F core is up to date[K[2E multilib is up to date[K[1F extra is up to date[K[2E omarchy is up to date[K[1E omarchy-server is up to date[K[1E[1;34m::[0;1m Starting full system upgrade...
+      [0m there is nothing to do
+      [?25h]3008;end=4a2b52050f6a45a4a41fc1f4ac6af811\[1;33mwarning: [0momarchy-server: local (4.0.1-10) is newer than omarchy-server (4.0.1-9)
+      
+      [32m
+      Restarting shell[0m
+      All plugins have been reloaded
+      Omarchy shell config not found: /usr/share/omarchy/shell
+      
+      restarted: none
+      deferred: none
+      reboot required: no
+      rc=0
+
+[PASS] the unattended update pruned the cache and took a snapshot
+      $ ~/.lab-sudo grep -aq "Prune package cache" /tmp/omarchy-update.log && p=yes || p=no;
+   ~/.lab-sudo grep -aq "Create system snapshot" /tmp/omarchy-update.log && s=yes || s=no;
+   echo "pruned=$p snapshotted=$s";
+   ~/.lab-sudo snapper -c root --csvout list | tail -n +2
+      pruned=yes snapshotted=yes
+      root,/,0,no,no,single,,,root,,,current,
+      root,/,1,no,no,single,,2026-08-29 17:32:19,root,,,acceptance,
+      root,/,2,no,no,single,,2026-08-29 17:32:36,root,,number,4.0.1-10,
+
+[PASS] no prompt was rendered during the unattended update
+      $ ~/.lab-sudo grep -ac "Continue with update?" /tmp/omarchy-update.log | sed "s/^/confirm-prompts=/";
+   ~/.lab-sudo grep -a "not rebooting: unattended update" /tmp/omarchy-update.log || echo "no reboot was required"
+      confirm-prompts=0
+      no reboot was required
+
+[PASS] the update reported restarts, deferrals and a reboot verdict
+      $ ~/.lab-sudo omarchy-server-update-restart --dry-run 2>&1 | grep -cE "^(restarted|deferred|reboot required):"
+      3
+
+[PASS] a userspace-only transaction restarts services and requires no reboot
+      $ offset=$(~/.lab-sudo stat -c %s /var/log/pacman.log);
+   ~/.lab-sudo pacman -S --noconfirm openssl openssh >/dev/null 2>&1; echo "reinstall-rc=$?";
+   ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required;
+   ~/.lab-sudo env HOME=/root omarchy-server-update-restart --since-offset "$offset" 2>&1 | grep -E "^(restarted|deferred|reboot required):";
+   ~/.lab-sudo test -f /root/.local/state/omarchy/reboot-required && echo "marker=set" || echo "marker=absent"
+      reinstall-rc=0
+      restarted: systemd-resolved
+      deferred: none
+      reboot required: no
+      marker=absent
+
+[PASS] sshd is restarted by openssh's own alpm hooks, before the classifier sees it
+      $ ls /usr/share/libalpm/hooks/ | grep -E "openssh.*(restart|mark)";
+   before=$(pgrep -x sshd | head -1);
+   ~/.lab-sudo pacman -S --noconfirm openssh >/dev/null 2>&1;
+   after=$(pgrep -x sshd | head -1);
+   exe=$(~/.lab-sudo readlink /proc/$after/exe);
+   echo "listener $before -> $after exe=$exe";
+   case "$exe" in *"(deleted)"*) echo "verdict=listener-is-stale" ;;
+   *) [ "$before" != "$after" ] && echo "verdict=restarted-by-the-package" || echo "verdict=not-restarted-but-current" ;; esac
+      10-openssh-mark-sshd-for-restart.hook
+      70-openssh-restart-sshd.hook
+      listener 4079 -> 4758 exe=/usr/bin/sshd
+      verdict=restarted-by-the-package
+
+[PASS] an ssh session survives the sshd restart it triggers
+      $ before=$$; systemctl show -p KillMode --value sshd.service;
+   ~/.lab-sudo systemctl restart sshd.service; sleep 1;
+   echo "same-shell=$([[ $$ == $before ]] && echo yes || echo no) still-connected=$([[ -n $SSH_CONNECTION ]] && echo yes || echo no)"
+      process
+      same-shell=yes still-connected=yes
+
+[PASS] a firmware upgrade sets the reboot-required marker
+      $ ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required;
+   printf "[ALPM] upgraded linux-firmware (20260801-1 -> 20260901-1)\n" >~/fake-pacman.log;
+   ~/.lab-sudo env HOME=/root OMARCHY_PACMAN_LOG="$HOME/fake-pacman.log" omarchy-server-update-restart --no-restart 2>&1 | grep "^reboot required:";
+   ~/.lab-sudo test -f /root/.local/state/omarchy/reboot-required && echo "marker=set" || echo "marker=absent";
+   ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required; rm -f ~/fake-pacman.log
+      reboot required: linux-firmware 20260801-1 -> 20260901-1
+      marker=set
+
+[PASS] a kernel transaction sets the reboot marker only when the kernel moved
+      $ offset=$(~/.lab-sudo stat -c %s /var/log/pacman.log);
+   ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required;
+   before=$(pacman -Q linux | awk "{print \$2}");
+   timeout 900 ~/.lab-sudo pacman -S --noconfirm linux 2>&1 | tail -12 | ~/.lab-redact; echo "pacman-rc=${PIPESTATUS[0]}";
+   after=$(pacman -Q linux | awk "{print \$2}");
+   ~/.lab-sudo env HOME=/root omarchy-server-update-restart --since-offset "$offset" --no-restart 2>&1 | grep -E "^(kernel package|reboot required)";
+   ~/.lab-sudo test -f /root/.local/state/omarchy/reboot-required && marker=set || marker=absent;
+   echo "linux $before -> $after marker=$marker";
+   if [ "$before" = "$after" ] && [ "$marker" = absent ]; then echo "verdict=reinstall-no-reboot";
+   elif [ "$before" != "$after" ] && [ "$marker" = set ]; then echo "verdict=upgrade-reboot-required";
+   else echo "verdict=disagreement"; fi;
+   ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required
+        -> Running build hook: [encrypt]
+      ==> WARNING: Possibly missing firmware for module: 'qat_6xxx'
+        -> Running build hook: [filesystems]
+        -> Running build hook: [fsck]
+        -> Running build hook: [btrfs-overlayfs]
+      ==> Generating module dependencies
+      ==> Creating zstd-compressed initcpio image
+        -> Early uncompressed CPIO image generation successful
+      ==> Initcpio image generation successful
+      ==> Creating unified kernel image: '/tmp/limine-mkinitcpio.Qje0oO/linux.efi'
+      ==> Unified kernel image generation successful
+      Updated: /boot/limine.conf
+      pacman-rc=0
+      kernel package changed, but 7.1.11-arch1-1 is still an installed kernel: no reboot for it
+      reboot required: no
+      linux 7.1.11.arch1-1 -> 7.1.11.arch1-1 marker=absent
+      verdict=reinstall-no-reboot
+
+[PASS] kexec is an addon, absent from the base
+      $ pacman -Qq kexec-tools >/dev/null 2>&1 && echo "kexec-tools=present" || echo "kexec-tools=absent";
+   omarchy-server-addon --list | tr "\n" " "
+      kexec-tools=absent
+      apparmor cli-tools cloud dev docker editor fwall kexec net-tools secureboot selinux-tools selinux tailscale vm 
+
+=== 43 passed, 1 failed ===

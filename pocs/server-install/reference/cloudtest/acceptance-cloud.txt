@@ -1,0 +1,226 @@
+=== Cloud image acceptance — VM 'cloudtest' — 2026-08-29T17:31:58-03:00 ===
+
+[PASS] cloud-init finished its run
+      $ cloud-init status --wait 2>&1 | tail -3; echo "exit=$?"
+      status: done
+      exit=0
+
+[PASS] the datasource is one of the five this image declares
+      $ cloud-init query platform 2>/dev/null; cloud-init query --format "{{ v1.cloud_name }} / {{ v1.distro }}" 2>/dev/null;
+   grep -h "^datasource_list" /etc/cloud/cloud.cfg.d/05-omarchy-server.cfg
+      nocloud
+      unknown / omarchy-server
+      datasource_list: [ NoCloud, ConfigDrive, OpenStack, Oracle, Ec2, None ]
+
+[PASS] hostname came from the metadata
+      $ echo "hostname: $(uname -n)"; echo "wanted: omarchy-cloud-test"; hostnamectl --static
+      hostname: omarchy-cloud-test
+      wanted: omarchy-cloud-test
+      omarchy-cloud-test
+
+[PASS] the user the seed named exists, with its key and passwordless sudo
+      $ id "$(id -un)"; echo "--- authorized_keys ---"; cut -d" " -f1,3 ~/.ssh/authorized_keys;
+   echo "--- sudo ---"; sudo -n true && echo "sudo-n-ok"
+      uid=1000(demo) gid=1000(demo) groups=1000(demo),998(wheel)
+      --- authorized_keys ---
+      ssh-ed25519 omarchy-cloud-seed
+      --- sudo ---
+      sudo-n-ok
+
+[PASS] the build account is gone
+      $ echo "build user: imgbuild"; id imgbuild 2>&1;
+   echo "--- accounts with a uid over 999 ---";
+   awk -F: '$3>=1000 && $3<65534 {print $1, $3}' /etc/passwd;
+   echo "--- home ---"; ls /home
+      build user: imgbuild
+      id: 'imgbuild': no such user
+      --- accounts with a uid over 999 ---
+      demo 1000
+      --- home ---
+      demo
+
+[PASS] root carries no password
+      $ sudo -n awk -F: "\$1==\"root\" {print \"root field: [\" \$2 \"]\"; print (\$2==\"!\" || \$2==\"*\" || \$2==\"!!\" || \$2==\"\") ? \"root_locked=yes\" : \"root_locked=no\"}" /etc/shadow;
+   sudo -n passwd -S root
+      root field: [!]
+      root_locked=yes
+      root L 2026-08-29 -1 -1 -1 -1
+
+[PASS] no build credentials anywhere on the image
+      $ ls -la /home/*/.lab-pw /home/*/.lab-sudo /etc/sudoers.d/ 2>&1 | tail -20;
+   echo "leftovers=$(ls /home/*/.lab-pw /home/*/.lab-sudo /etc/sudoers.d/imgbuild 2>/dev/null | wc -l)"
+      ls: cannot access '/home/*/.lab-pw': No such file or directory
+      ls: cannot access '/home/*/.lab-sudo': No such file or directory
+      ls: cannot open directory '/etc/sudoers.d/': Permission denied
+      leftovers=0
+
+[PASS] machine-id was generated on this machine
+      $ echo "machine-id: $(cat /etc/machine-id)"; echo "length: $(wc -c </etc/machine-id)";
+   sudo -n systemd-id128 machine-id 2>/dev/null | head -1
+      machine-id: 5b08a83112af46099b9a3c188f9b2f36
+      length: 33
+      5b08a83112af46099b9a3c188f9b2f36
+
+[PASS] ssh host keys were regenerated at first boot
+      $ ls -l --time-style=+%F_%T /etc/ssh/ssh_host_*_key.pub;
+   echo "count=$(ls /etc/ssh/ssh_host_*_key 2>/dev/null | wc -l)"
+      -rw-r--r-- 1 root root 185 2026-08-29_17:31:48 /etc/ssh/ssh_host_ecdsa_key.pub
+      -rw-r--r-- 1 root root 105 2026-08-29_17:31:48 /etc/ssh/ssh_host_ed25519_key.pub
+      -rw-r--r-- 1 root root 577 2026-08-29_17:31:48 /etc/ssh/ssh_host_rsa_key.pub
+      count=3
+
+[PASS] the first-boot unit ran and said what it did
+      $ systemctl is-enabled omarchy-server-firstboot.service 2>&1;
+   sudo -n journalctl -u omarchy-server-firstboot --no-pager 2>/dev/null | tail -12;
+   echo "marker: $(sudo -n cat /var/lib/omarchy/firstboot-done 2>/dev/null)"
+      enabled
+      Aug 29 17:31:49 omarchy-cloud-test omarchy-server-firstboot[648]:   -> Running build hook: [fsck]
+      Aug 29 17:31:49 omarchy-cloud-test omarchy-server-firstboot[648]:   -> Running build hook: [btrfs-overlayfs]
+      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[648]: ==> Generating module dependencies
+      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[648]: ==> Creating zstd-compressed initcpio image
+      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[648]:   -> Early uncompressed CPIO image generation successful
+      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[648]: ==> Initcpio image generation successful
+      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[648]: ==> Creating unified kernel image: '/tmp/limine-mkinitcpio.LiNog6/linux.efi'
+      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[648]: ==> Unified kernel image generation successful
+      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[4285]: Updated: /boot/limine.conf
+      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[509]: firstboot: removed the build machine's boot entry (374c2b64738846d28afa702410786a97)
+      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[509]: firstboot: done
+      Aug 29 17:31:50 omarchy-cloud-test systemd[1]: Finished Omarchy Server first boot (ssh host keys, Secure Boot keys).
+      marker: 2026-08-29T17:31:50-03:00
+
+[PASS] the image's journal mentions nothing of the build machine
+      $ echo "boots recorded: $(sudo -n journalctl --list-boots --no-pager 2>/dev/null | wc -l)";
+   echo "first entry: $(sudo -n journalctl --no-pager -o short-iso 2>/dev/null | head -1)";
+   echo "build_user_mentions=$(sudo -n journalctl --no-pager 2>/dev/null | grep -c 'imgbuild')"
+      boots recorded: 2
+      first entry: 2026-08-29T17:31:45-03:00 omarchy-server kernel: Linux version 7.1.11-arch1-1 (linux@archlinux) (gcc (GCC) 16.2.1 20260810, GNU ld (GNU Binutils) 2.47) #1 SMP PREEMPT_DYNAMIC Fri, 28 Aug 2026 03:36:07 +0000
+      build_user_mentions=0
+
+[PASS] growpart + btrfs resize filled the 40 GiB disk
+      $ lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS /dev/vda;
+   df -h /; echo "--- btrfs ---"; sudo -n btrfs filesystem usage / 2>/dev/null | head -6;
+   echo "root_gib=$(df --output=size -BG / | tail -1 | tr -dc '0-9')"
+      NAME   SIZE TYPE MOUNTPOINTS
+      vda     40G disk 
+      |-vda1   2G part /boot
+      `-vda2  38G part /var/log
+                       /var/cache/pacman/pkg
+                       /home
+                       /
+      Filesystem      Size  Used Avail Use% Mounted on
+      /dev/vda2        38G  1.2G   37G   3% /
+      --- btrfs ---
+      Overall:
+          Device size:		  38.00GiB
+          Device allocated:		   3.52GiB
+          Device unallocated:		  34.47GiB
+          Device missing:		     0.00B
+          Device slack:		     0.00B
+      root_gib=38
+
+[PASS] growpart and resizefs are in the cloud-init log, not assumed
+      $ sudo -n grep -hiE "growpart|resizefs|resize" /var/log/cloud-init.log 2>/dev/null | tail -8
+      2026-08-29 20:31:48,187 - modules.py[DEBUG]: Running module resizefs (<module 'cloudinit.config.cc_resizefs' from '/usr/lib/python3.14/site-packages/cloudinit/config/cc_resizefs.py'>) with frequency always
+      2026-08-29 20:31:48,187 - handlers.py[DEBUG]: start: init-network/config-resizefs: running config-resizefs with frequency always
+      2026-08-29 20:31:48,187 - helpers.py[DEBUG]: Running config-resizefs using lock (<cloudinit.helpers.DummyLock object at 0x7f87b431ce10>)
+      2026-08-29 20:31:48,187 - cc_resizefs.py[DEBUG]: resize_info: dev=/dev/vda2 mnt_point=/ path=/
+      2026-08-29 20:31:48,188 - cc_resizefs.py[DEBUG]: Resizing / (btrfs) using btrfs filesystem resize --enqueue max /
+      2026-08-29 20:31:48,188 - subp.py[DEBUG]: Running command ('btrfs', 'filesystem', 'resize', '--enqueue', 'max', '/') with allowed return codes [0] (shell=False, capture=True)
+      2026-08-29 20:31:48,189 - cc_resizefs.py[DEBUG]: Resized root filesystem (type=btrfs, val=True)
+      2026-08-29 20:31:48,189 - handlers.py[DEBUG]: finish: init-network/config-resizefs: SUCCESS: config-resizefs ran successfully and took 0.002 seconds (duration: 0.002s)
+
+[PASS] os-release, issue and MOTD still say Omarchy
+      $ grep -E "^(NAME|PRETTY_NAME|ID)=" /etc/os-release; echo "--- issue ---";
+   head -3 /etc/issue; echo "--- motd ---"; omarchy-server-motd 2>/dev/null | head -5
+      NAME="Omarchy Server"
+      PRETTY_NAME="Omarchy Server 4.0.1"
+      ID=omarchy-server
+      --- issue ---
+      [32m
+                         ▄▄▄
+         ▄█████▄    ▄███████████▄    ▄███████   ▄███████   ▄███████   ▄█   █▄    ▄█   █▄
+      --- motd ---
+      
+      [1;32m  Omarchy Server[0m
+      
+        [2mos       [0m Omarchy Server 4.0.1
+        [2mhost     [0m omarchy-cloud-test
+
+[PASS] profile marker and version survived
+      $ echo "profile: $(cat /etc/omarchy-profile)"; echo "version: $(omarchy-version 2>/dev/null)";
+   pacman -Q omarchy-server omarchy-server-settings 2>&1
+      profile: server
+      version: 4.0.1-10
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+      omarchy-server 4.0.1-10
+      omarchy-server-settings 4.0.1-4
+
+[PASS] the update entry point works on a machine nobody logs into
+      $ omarchy-server-update status 2>&1 | head -12
+      mode: in-place
+      disabled
+      ○ omarchy-server-update.timer - Daily Omarchy server system update
+           Loaded: loaded (/usr/lib/systemd/system/omarchy-server-update.timer; disabled; preset: disabled)
+           Active: inactive (dead)
+          Trigger: n/a
+         Triggers: ● omarchy-server-update.service
+
+[PASS] the firewall is up and rate-limits ssh
+      $ sudo -n ufw status verbose 2>&1 | head -12
+      Status: active
+      Logging: on (low)
+      Default: deny (incoming), allow (outgoing), disabled (routed)
+      New profiles: skip
+      
+      To                         Action      From
+      --                         ------      ----
+      22/tcp                     LIMIT IN    Anywhere                  
+      22/tcp (v6)                LIMIT IN    Anywhere (v6)              # omarchy-sshd
+
+[PASS] sshd still refuses passwords and root
+      $ sudo -n sshd -T 2>/dev/null | grep -iE "^(permitrootlogin|passwordauthentication|kbdinteractiveauthentication) "
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+
+[PASS] no failed units
+      $ systemctl --failed --no-pager; echo "failed=$(systemctl --failed --no-pager --plain --no-legend | wc -l)"
+        UNIT LOAD ACTIVE SUB DESCRIPTION
+      
+      0 loaded units listed.
+      failed=0
+
+[PASS] the boot is still a server's boot
+      $ systemd-analyze 2>&1; systemd-analyze blame 2>/dev/null | head -8
+      Startup finished in 512ms (firmware) + 2.885s (loader) + 785ms (kernel) + 5.428s (userspace) = 9.612s 
+      multi-user.target reached after 5.381s in userspace.
+      2.719s omarchy-server-firstboot.service
+      1.150s dev-vda2.device
+      1.027s systemd-tmpfiles-setup-dev-early.service
+      1.010s systemd-userdbd.service
+       636ms cloud-config.service
+       272ms cloud-init-network.service
+       269ms cloud-init-main.service
+       124ms ufw.service
+
+[PASS] @factory is present beside @
+      $ sudo -n btrfs subvolume list / | awk "{print \$NF}" | grep -E "^@[^/]*$" | sort;
+   echo "factory=$(sudo -n btrfs subvolume list / | awk "{print \$NF}" | grep -cx "@factory")"
+      @
+      @factory
+      @home
+      @log
+      @pkg
+      factory=1
+
+[PASS] the package cache shipped empty
+      $ echo "cached=$(ls /var/cache/pacman/pkg/*.pkg.tar.* 2>/dev/null | wc -l)";
+   du -sh /var/cache/pacman/pkg 2>/dev/null
+      cached=0
+      0	/var/cache/pacman/pkg
+
+=== 22 passed, 0 failed ===

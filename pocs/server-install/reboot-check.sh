@@ -24,8 +24,14 @@ echo "before:"
 run 'uptime -s; uname -r; omarchy-version 2>/dev/null'
 boot_before=$(run 'uptime -s')
 
-"$lab" "$vm" ssh 'cat >~/.lab-pw && chmod 600 ~/.lab-pw' <"$LAB_OUT/lab-password"
-run 'printf "%s\n" "#!/bin/bash" "exec sudo -S -p \"\" \"\$@\" <\$HOME/.lab-pw" >~/.lab-sudo && chmod 700 ~/.lab-sudo' >/dev/null
+# No lab password on a machine booted from the cloud image: it ships no account
+# with one, and the account cloud-init made has NOPASSWD sudo. See surface.sh.
+if [[ -f $LAB_OUT/lab-password ]]; then
+  "$lab" "$vm" ssh 'cat >~/.lab-pw && chmod 600 ~/.lab-pw' <"$LAB_OUT/lab-password"
+  run 'printf "%s\n" "#!/bin/bash" "exec sudo -S -p \"\" \"\$@\" <\$HOME/.lab-pw" >~/.lab-sudo && chmod 700 ~/.lab-sudo' >/dev/null
+else
+  run 'printf "%s\n" "#!/bin/bash" "exec sudo -n \"\$@\"" >~/.lab-sudo && chmod 700 ~/.lab-sudo' >/dev/null
+fi
 echo
 echo "rebooting..."
 run '~/.lab-sudo systemctl reboot' >/dev/null 2>&1

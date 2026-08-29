@@ -31,8 +31,17 @@ export SSH_USER="${SSH_USER:-omarchy}"
 
 run() { "$lab" "$vm" ssh "$@"; }
 
-"$lab" "$vm" ssh 'cat >~/.lab-pw && chmod 600 ~/.lab-pw' <"$LAB_OUT/lab-password"
-run 'printf "%s\n" "#!/bin/bash" "exec sudo -S -p \"\" \"\$@\" <\$HOME/.lab-pw" >~/.lab-sudo && chmod 700 ~/.lab-sudo' >/dev/null
+# A machine installed from a cidata drive has a lab password; a machine booted
+# from the CLOUD IMAGE has none at all, because the image ships no account with
+# one and the only account on it was created by cloud-init with NOPASSWD sudo.
+# Both get a ~/.lab-sudo that works, and the absence of a password file is a
+# property of the machine rather than a broken harness.
+if [[ -f $LAB_OUT/lab-password ]]; then
+  "$lab" "$vm" ssh 'cat >~/.lab-pw && chmod 600 ~/.lab-pw' <"$LAB_OUT/lab-password"
+  run 'printf "%s\n" "#!/bin/bash" "exec sudo -S -p \"\" \"\$@\" <\$HOME/.lab-pw" >~/.lab-sudo && chmod 700 ~/.lab-sudo' >/dev/null
+else
+  run 'printf "%s\n" "#!/bin/bash" "exec sudo -n \"\$@\"" >~/.lab-sudo && chmod 700 ~/.lab-sudo' >/dev/null
+fi
 cleanup() { run 'rm -f ~/.lab-pw ~/.lab-sudo' >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 

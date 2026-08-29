@@ -5,7 +5,7 @@
 # with ssh forwarded to localhost:$SSH_PORT, VNC on 127.0.0.1:$VNC, and a QEMU
 # monitor socket for screenshots.
 #
-# Usage: vm.sh <name> create [--disk-gb 40] [--data-disk-gb N] [--iso PATH] [--cidata PATH] [--secboot]
+# Usage: vm.sh <name> create [--disk-gb 40] [--data-disk-gb N] [--from-image PATH] [--secboot]
 #        vm.sh <name> start  [--iso PATH] [--cidata PATH] [--secboot]
 #        vm.sh <name> stop | status | screenshot | ssh [cmd...] | wait-ssh [secs]
 #        vm.sh <name> snapshot <tag> | restore <tag>
@@ -48,10 +48,16 @@ cidata="$out/cidata.iso"
 disk_gb=40
 data_disk_gb=0
 secboot=0
+# `create --from-image PATH`: start from a built cloud image instead of an
+# empty disk. The image is copied (never used in place — a test must not be
+# able to write into the artifact it is testing) and grown to --disk-gb, which
+# is what gives growpart something to grow into.
+from_image=""
 
 while (($#)); do
   case "$1" in
     --disk-gb) disk_gb="$2"; shift 2 ;;
+    --from-image) from_image="$2"; shift 2 ;;
     --data-disk-gb) data_disk_gb="$2"; shift 2 ;;
     --iso) iso="$2"; shift 2 ;;
     --cidata) cidata="$2"; shift 2 ;;
@@ -82,7 +88,16 @@ case "$cmd" in
   create)
     mkdir -p "$vm"
     [[ -f $disk ]] && { echo "disk exists: $disk (delete it to recreate)" >&2; exit 1; }
-    qemu-img create -q -f qcow2 "$disk" "${disk_gb}G"
+    if [[ -n $from_image ]]; then
+      [[ -f $from_image ]] || { echo "no such image: $from_image" >&2; exit 1; }
+      # A full convert rather than a backing file: a qcow2 with a backing file
+      # would make every write in the test a delta against the artifact, and
+      # the artifact would then have to stay where it is for the VM to boot.
+      qemu-img convert -O qcow2 "$from_image" "$disk"
+      qemu-img resize -q "$disk" "${disk_gb}G"
+    else
+      qemu-img create -q -f qcow2 "$disk" "${disk_gb}G"
+    fi
     (( data_disk_gb )) && qemu-img create -q -f qcow2 "$data_disk" "${data_disk_gb}G"
     if (( secboot )); then
       # The distro's secboot variable store is NOT in Setup Mode: it ships with
@@ -118,6 +133,7 @@ case "$cmd" in
     # wrongly and boot a firmware that cannot see its own variables.
     (( secboot )) && : >"$vm/secboot"
     note=""; (( secboot )) && note=" [firmware in setup mode]"
+    [[ -n $from_image ]] && note+=" [from ${from_image##*/}]"
     (( data_disk_gb )) && note+=" [data disk ${data_disk_gb}G]"
     echo "created $vm (disk ${disk_gb}G, secboot=$secboot)$note"
     ;;

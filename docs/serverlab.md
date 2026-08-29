@@ -33,6 +33,9 @@ the first failure, and appends to a run log.
 | `serverlab lab up NAME [flags]` | `pocs/lab/mkcidata.sh` → `vm.sh create` → `vm.sh start` → `vm.sh wait-ssh` |
 | `serverlab lab test NAME [--suite S]` | `collect.sh` → `surface.sh` → `acceptance*.sh` → `reboot-check.sh`, then publishes the evidence into `pocs/server-install/reference/<name>/` unless `--no-publish` |
 | `serverlab lab down\|status\|ssh\|screenshot NAME` | the matching `vm.sh` command |
+| `serverlab image build [flags]` | `mkcidata.sh` → `vm.sh create/start/wait-ssh` → `pocs/image/generalize.sh` → `pocs/image/convert.sh`. An ordinary unattended install with the `cloud` addon and a throwaway account, then stripped and compressed into a qcow2 under `pocs/image/out/` |
+| `serverlab image test [flags]` | `pocs/image/mkseed.sh` → `vm.sh create --from-image` → `acceptance-cloud.sh` → `surface.sh` → `reboot-check.sh` |
+| `serverlab image publish --yes` | `gh release create image-<date>` with the qcow2 and its `.sha256`. Refuses to run without `--yes` |
 | `serverlab report NAME` | no script: writes `reports/YYYY-MM-DD-<name>.md` from the evidence files |
 | `serverlab all` | all of the above, in order, with a summary table |
 
@@ -104,6 +107,18 @@ list that ran is in the report; one that never ran costs nothing.
 
 Evidence goes to `pocs/lab/out-<name>/evidence/`, one directory per machine, so
 two labs never overwrite each other's record.
+
+### An image test is a lab too
+
+`serverlab image test` writes the same `lab.json` a `lab up` does, into the same
+`pocs/lab/out-<name>/`, so `serverlab report <name>` writes it up with no
+special case. Two fields tell the two kinds apart: `image` (the qcow2 the disk
+was copied from, which makes the report label the medium **Image** and the
+provisioning row **NoCloud seed**) and `sshUser` (an installed lab is reached as
+`omarchy`; an image test is reached as the account the seed asked cloud-init to
+create). The `cloud` suite is in `optionalSuites` for the same reason
+`transactional` is: no install-time marker can imply it, so nothing runs it by
+accident, and `report` still picks its evidence up.
 
 ## Evidence that a reader can open
 

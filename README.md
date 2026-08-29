@@ -16,10 +16,12 @@ pkgs/            build.sh (Docker) and test.sh for the packages; the signing key
 profile/server/  package list, addons, services, overlay (install/server/*,
                  settings) and patches applied on top of the upstream tree
 iso/             build.sh + overlay/patches for the ISO --profile server
-pocs/            lab scripts and measured results (QEMU/OVMF, cidata autoinstall)
+pocs/            lab scripts and measured results (QEMU/OVMF, cidata autoinstall);
+                 pocs/image/ builds and validates the cloud image, pocs/image/oci/
+                 is the OCI import + demo-instance recipe
 tools/serverlab/ the Go driver that runs all of the above in order (make serverlab)
 docs/            technical docs: packaging.md, iso-server.md, secure-boot.md, mac.md,
-                 transactional.md, serverlab.md, screenshots/
+                 transactional.md, cloud-image.md, serverlab.md, screenshots/
 ```
 
 The **PKGBUILDs are not here**. They live in
@@ -288,6 +290,57 @@ install-time relabel; the fix is written and not yet re-run.
 reason for every inclusion and every omission, the `--ask=4` package-replacement
 problem, the lockstep obligation the rebuild set creates, and what each route
 actually confines on a headless machine.
+
+## Cloud image
+
+The ISO installs one machine. The other shape of the same profile is an
+**image**: one qcow2, copied onto many machines, where nothing that makes a
+machine itself may be baked in.
+
+```bash
+./bin/serverlab image build            # install a throwaway machine, strip it, convert it
+./bin/serverlab image test             # boot it with a NoCloud seed and assert
+./bin/serverlab image publish --yes    # upload it to a GitHub release
+```
+
+`image build` is deliberately not a separate build path: it is an ordinary
+unattended install of this profile with the `cloud` addon and a throwaway
+account, followed by `omarchy-server-generalize`. That command lives in the
+profile rather than in the pipeline, because the machine is what knows where
+its snapper store, its ESP and its btrfs top level are — and an operator who
+built a golden machine by hand is entitled to the same one-liner:
+
+```bash
+sudo omarchy-server-generalize --yes --remove-user builder --poweroff
+```
+
+It removes the six things that become a shared secret the moment a disk is
+copied — ssh host keys, the machine-id, the Secure Boot keys, the entropy seed
+and sealed-credential secret, the build account, and the machine's logs,
+snapshots and package cache — then takes `@factory`, a read-only btrfs snapshot
+of the finished root beside `@`, and trims the filesystem so the conversion
+produces a small image rather than a large one full of deleted files.
+
+What replaces all of it is decided on the machine that boots the image, by two
+agents with a clean split. **cloud-init** owns what the platform knows:
+hostname, users, ssh keys, and growing the root into whatever boot volume it
+was launched onto. **`omarchy-server-firstboot`** owns what no metadata service
+can supply: the ssh host identity, and — on an image built `--secboot` — a
+Secure Boot key set this machine generates and enrolls for itself, because an
+image that shipped one would hand every machine that boots it the key that
+signs the others' kernels.
+
+The image carries **no account with a password and no default user with keys**.
+`omarchy` exists as a name for a platform's metadata keys to land on; with no
+keys in the metadata it is an account nobody can log into.
+
+`docs/cloud-image.md` is the design, the full generalization list, how to boot
+it on libvirt, Proxmox and OCI, what the OCI import flags are and why
+(`--source-image-type QCOW2`, `--launch-mode PARAVIRTUALIZED`, and the image
+capability schema declaring `Compute.Firmware = UEFI_64` without which the
+image imports cleanly and never boots), and what the image does **not** cover.
+`pocs/image/oci/` is the recipe for the demo box; both of its scripts refuse to
+run without `--yes` and print the plan instead.
 
 ## Measurements
 

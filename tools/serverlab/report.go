@@ -88,14 +88,21 @@ func RenderReport(in ReportInput) string {
 	fmt.Fprintf(&b, "| VM | `%s`, QEMU/KVM `q35`, %d vCPU, %s RAM, %d GiB virtio disk%s |\n",
 		in.Lab.Name, in.Lab.CPUs, humanMemory(in.Lab.MemoryMB), in.Lab.DiskGB, dataDiskNote(in.Lab))
 	fmt.Fprintf(&b, "| Firmware | %s |\n", firmwareNote(in.Lab))
-	fmt.Fprintf(&b, "| ISO | `%s` |\n", in.ISO.Name)
+	// An image lab was not installed from an ISO at all: its disk is a copy of
+	// a built artifact. Labelling that row "ISO" would be the one line of the
+	// report a reader would be right to distrust the rest over.
+	medium := "ISO"
+	if in.Lab.Image != "" {
+		medium = "Image"
+	}
+	fmt.Fprintf(&b, "| %s | `%s` |\n", medium, in.ISO.Name)
 	if in.ISO.Size > 0 {
-		fmt.Fprintf(&b, "| ISO size | %s (%d bytes) |\n", humanSize(in.ISO.Size), in.ISO.Size)
+		fmt.Fprintf(&b, "| %s size | %s (%d bytes) |\n", medium, humanSize(in.ISO.Size), in.ISO.Size)
 	}
 	if in.ISO.SHA256 != "" {
-		fmt.Fprintf(&b, "| ISO sha256 | `%s` |\n", in.ISO.SHA256)
+		fmt.Fprintf(&b, "| %s sha256 | `%s` |\n", medium, in.ISO.SHA256)
 	}
-	fmt.Fprintf(&b, "| Autoinstall | `%s` |\n", cidataCommand(in.Lab))
+	fmt.Fprintf(&b, "| %s | `%s` |\n", provisioningLabel(in.Lab), cidataCommand(in.Lab))
 	if timestamp := runTimestamp(in); timestamp != "" {
 		fmt.Fprintf(&b, "| Run | `%s` |\n", timestamp)
 	}
@@ -195,6 +202,14 @@ func RenderReport(in ReportInput) string {
 
 func scopeParagraph(in ReportInput) string {
 	var b strings.Builder
+	if in.Lab.Image != "" {
+		fmt.Fprintf(&b, "One machine of the `%s` profile, **launched from the cloud image below** onto a\n", in.Lab.Profile)
+		fmt.Fprintf(&b, "%d GiB disk it was not built on, told about itself by nothing but a NoCloud\n", in.Lab.DiskGB)
+		b.WriteString("seed, and then asked whether it had become a machine of its own: the metadata\n")
+		b.WriteString("applied, nothing of the build machine left, the root grown into the disk, and\n")
+		b.WriteString("still recognisably Omarchy Server afterwards.\n")
+		return b.String()
+	}
 	fmt.Fprintf(&b, "One machine of the `%s` profile, installed headless from the ISO below by an\n", in.Lab.Profile)
 	b.WriteString("autoinstall `cidata` drive with no keyboard and no configurator, then measured\n")
 	b.WriteString("and put through the acceptance lists it was installed for")
@@ -241,7 +256,27 @@ func humanMemory(mb int) string {
 
 // cidataCommand reconstructs the mkcidata.sh invocation the lab was built
 // with, so the Environment table says exactly what the machine was asked for.
+// provisioningLabel names the row that says how the machine was told about
+// itself: an autoinstall drive for an install, a NoCloud seed for an image.
+func provisioningLabel(lab *Lab) string {
+	if lab.Image != "" {
+		return "NoCloud seed"
+	}
+	return "Autoinstall"
+}
+
 func cidataCommand(lab *Lab) string {
+	// An image lab never ran mkcidata: what decided this machine is the seed.
+	if lab.Image != "" {
+		parts := []string{"mkseed.sh"}
+		if lab.Hostname != "" {
+			parts = append(parts, "--hostname", lab.Hostname)
+		}
+		if lab.SSHUser != "" {
+			parts = append(parts, "--user", lab.SSHUser)
+		}
+		return strings.Join(parts, " ")
+	}
 	parts := []string{"mkcidata.sh", "--profile", lab.Profile}
 	if lab.Hostname != "" {
 		parts = append(parts, "--hostname", lab.Hostname)
@@ -259,6 +294,14 @@ func cidataCommand(lab *Lab) string {
 		parts = append(parts, "--unattended-updates")
 	}
 	return strings.Join(parts, " ")
+}
+
+// orNone keeps an empty flag value out of a command line a reader would copy.
+func orNone(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return value
 }
 
 func runTimestamp(in ReportInput) string {
@@ -472,6 +515,8 @@ func suiteHeading(suite string, enforced bool) string {
 		return "Acceptance — AppArmor, as installed"
 	case "transactional":
 		return "Acceptance — transactional updates"
+	case "cloud":
+		return "Acceptance — the cloud image, booted from a NoCloud seed"
 	default:
 		return "Acceptance — " + suite
 	}
@@ -479,6 +524,8 @@ func suiteHeading(suite string, enforced bool) string {
 
 func defaultTitle(lab *Lab) string {
 	switch {
+	case lab.Image != "":
+		return "The cloud image, booted and measured"
 	case lab.SecureBoot:
 		return "Headless install with Secure Boot, measured"
 	case lab.MAC != "":
@@ -489,6 +536,9 @@ func defaultTitle(lab *Lab) string {
 }
 
 func defaultSubject(lab *Lab) string {
+	if lab.Image != "" {
+		return fmt.Sprintf("one machine launched from `%s` onto a %d GiB disk with a NoCloud seed and nothing else", filepath.Base(lab.Image), lab.DiskGB)
+	}
 	return fmt.Sprintf("one `%s` machine installed from a `cidata` drive and put through the acceptance lists it was installed for", lab.Profile)
 }
 
@@ -496,6 +546,21 @@ func defaultSubject(lab *Lab) string {
 // serverlab commands first, because that is the one-command path, and the
 // scripts they call underneath, because those are what actually ran.
 func reportMethods(lab *Lab) []string {
+	if lab.Image != "" {
+		return []string{
+			"serverlab image build --mac " + orNone(lab.MAC),
+			"serverlab image test " + lab.Name + " --image " + filepath.Base(lab.Image) +
+				" --disk-gb " + strconv.Itoa(lab.DiskGB),
+			"serverlab report " + lab.Name,
+			"",
+			"# what those run underneath:",
+			"#   pocs/lab/mkcidata.sh --profile server --user imgbuild --addons cloud",
+			"#   pocs/image/generalize.sh + pocs/image/convert.sh",
+			"#   pocs/image/mkseed.sh --hostname " + lab.Hostname + " --user " + lab.SSHUser,
+			"#   pocs/lab/vm.sh " + lab.Name + " create --from-image <image> --disk-gb " + strconv.Itoa(lab.DiskGB),
+			"#   pocs/server-install/acceptance-cloud.sh|surface.sh|reboot-check.sh " + lab.Name,
+		}
+	}
 	up := "serverlab lab up " + lab.Name + " --profile " + lab.Profile
 	if len(lab.Addons) > 0 {
 		up += " --addons " + strings.Join(lab.Addons, ",")

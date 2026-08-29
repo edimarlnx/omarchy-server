@@ -28,15 +28,30 @@ run() { "$lab" "$vm" ssh "$@" 2>&1; }
 
 # Stage the password and the sudo wrapper. The password travels on stdin, so it
 # is never part of a command line this script prints or the VM's shell history.
-"$lab" "$vm" ssh 'cat >~/.lab-pw && chmod 600 ~/.lab-pw' <"$LAB_OUT/lab-password" || {
-  echo "could not stage the lab password in the VM" >&2
-  exit 1
-}
-run 'printf "%s\n" "#!/bin/bash" "exec sudo -S -p \"\" \"\$@\" <\$HOME/.lab-pw" >~/.lab-sudo && chmod 700 ~/.lab-sudo' >/dev/null
+# A machine booted from the CLOUD IMAGE has no lab password: the image ships no
+# account with one, and the account cloud-init created has NOPASSWD sudo. The
+# wrapper is the same shape either way, so every check below reads identically
+# on both kinds of machine.
+if [[ -f $LAB_OUT/lab-password ]]; then
+  "$lab" "$vm" ssh 'cat >~/.lab-pw && chmod 600 ~/.lab-pw' <"$LAB_OUT/lab-password" || {
+    echo "could not stage the lab password in the VM" >&2
+    exit 1
+  }
+  run 'printf "%s\n" "#!/bin/bash" "exec sudo -S -p \"\" \"\$@\" <\$HOME/.lab-pw" >~/.lab-sudo && chmod 700 ~/.lab-sudo' >/dev/null
+else
+  run 'printf "%s\n" "#!/bin/bash" "exec sudo -n \"\$@\"" >~/.lab-sudo && chmod 700 ~/.lab-sudo' >/dev/null
+fi
 # Some steps of omarchy-update echo their stdin back (yay does), and stdin is
 # where the password is fed, so anything that becomes evidence goes through
 # this filter first.
-run 'printf "%s\n" "#!/bin/bash" "sed \"s|\$(cat \$HOME/.lab-pw)|<lab-password>|g\"" >~/.lab-redact && chmod 700 ~/.lab-redact' >/dev/null
+# With no password staged there is nothing to redact, and a filter built around
+# an empty `cat` would hand sed an empty pattern -- which reuses the last regex
+# rather than matching nothing.
+if [[ -f $LAB_OUT/lab-password ]]; then
+  run 'printf "%s\n" "#!/bin/bash" "sed \"s|\$(cat \$HOME/.lab-pw)|<lab-password>|g\"" >~/.lab-redact && chmod 700 ~/.lab-redact' >/dev/null
+else
+  run 'printf "%s\n" "#!/bin/bash" "exec cat" >~/.lab-redact && chmod 700 ~/.lab-redact' >/dev/null
+fi
 cleanup() { run 'rm -f ~/.lab-pw ~/.lab-sudo ~/.lab-redact' >/dev/null 2>&1; }
 trap cleanup EXIT
 

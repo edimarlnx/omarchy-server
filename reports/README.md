@@ -19,6 +19,7 @@ scripts and artifacts live in `pocs/`.
 
 | Date | Report | Subject | Result |
 |---|---|---|---|
+| 2026-08-29 | [The cloud image, built and booted](2026-08-29-cloud-image.md) | one qcow2 generalized from an ordinary install, launched onto a 40 GiB disk with a NoCloud seed and nothing else | 65 passed, 1 failed |
 | 2026-08-29 | [Transactional updates, and the case against an immutable root](2026-08-29-transactional-updates.md) | an update that never writes to the running root: the snapshot, the subvolume swap that selects it, rollback, and what a read-only `/` would cost on top | 63 passed, 0 failed (34 of them transactional); mode B: not now |
 | 2026-08-29 | [kexec under Secure Boot](2026-08-29-secure-boot-kexec.md) | whether a machine that boots a signed UKI under lockdown can jump straight into the next kernel, and what that is worth | 29 passed, 0 failed |
 | 2026-08-29 | [A kernel update under SELinux enforcing](2026-08-29-selinux-kernel-update.md) | a kernel transaction, a UKI rebuild and the disable path on an enforcing machine; and the root cause of the mkinitcpio failure §11.5 could not explain | 103 passed, 1 failed |
