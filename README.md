@@ -56,12 +56,18 @@ git clone https://github.com/basecamp/omarchy.git upstream/omarchy
 git clone https://github.com/omacom-io/omarchy-iso.git upstream/omarchy-iso
 ```
 
-The `fwall` addon package is built from the **tui-tools** checkout, expected
-beside this repository (`../tui-tools`, or `TUI_TOOLS_DIR`):
+The `tui-firewall` and `tui-systemd` addon packages are built from the
+**tui-tools** checkouts, one repository per tool, expected side by side in a
+directory beside this one (`../tui-tools-org`, or `TUI_TOOLS_DIR`):
 
 ```bash
-git clone https://github.com/edimarlnx/tui-tools.git ../tui-tools
+git clone https://github.com/tui-tools/tui-firewall.git ../tui-tools-org/tui-firewall
+git clone https://github.com/tui-tools/tui-systemd.git ../tui-tools-org/tui-systemd
 ```
+
+`tui-firewall` was called `fwall` while the tools lived in one monorepo; the
+package `provides`/`replaces` that name, so a machine that installed it takes
+the rename as an ordinary upgrade.
 
 Published Omarchy packages: `https://pkgs.omarchy.org/stable/x86_64/`
 (`omarchy.db`). The upstream PKGBUILD repo is private, so the server packages
@@ -125,7 +131,7 @@ ssh and be firewalled, and nothing else. What a machine needs on top comes from
 an addon, bundled in the ISO's offline mirror but not installed:
 
 ```bash
-omarchy-server-addon --list          # cli-tools dev docker editor fwall kexec net-tools secureboot tailscale vm
+omarchy-server-addon --list          # cli-tools dev docker editor kexec net-tools secureboot tailscale tui-firewall tui-systemd vm
 omarchy-server-addon docker
 pocs/lab/mkcidata.sh --profile server --addons docker    # or at install time
 ```

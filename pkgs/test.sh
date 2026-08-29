@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Install the three packages from the local signed repo into a fresh
+# Install the packages from the local signed repo into a fresh
 # archlinux:latest container and assert the acceptance criteria of the packaging step
 #: the server profile must install without pulling a single desktop
 # dependency, and the commands the ISO and omarchy-update rely on must work.
@@ -223,7 +223,7 @@ EOF
     check "omarchy-server-addon is linked into /usr/bin" bash -c \
       "test -L /usr/bin/omarchy-server-addon"
     check "omarchy-server-addon --list names every addon" bash -c \
-      "for a in cli-tools dev docker editor fwall net-tools secureboot tailscale vm; do omarchy-server-addon --list | grep -qx \"\$a\" || exit 1; done"
+      "for a in cli-tools dev docker editor net-tools secureboot tailscale tui-firewall tui-systemd vm; do omarchy-server-addon --list | grep -qx \"\$a\" || exit 1; done"
     check "omarchy-server-addon --help does not touch the system" \
       omarchy-server-addon --help
     check "an unknown addon fails" bash -c \
@@ -252,25 +252,43 @@ EOF
       "test -L /usr/bin/omarchy-server-secureboot && bash -n /usr/share/omarchy/bin/omarchy-server-secureboot"
     check "omarchy-server-secureboot --help does not touch the system" \
       omarchy-server-secureboot --help
-    check "fwall is an addon, not part of the base" bash -c \
-      "grep -qx fwall /usr/share/omarchy/install/server/addons/fwall.packages && ! pacman -Qq fwall >/dev/null 2>&1"
+    check "the tui-* tools are addons, not part of the base" bash -c \
+      "grep -qx tui-firewall /usr/share/omarchy/install/server/addons/tui-firewall.packages && grep -qx tui-systemd /usr/share/omarchy/install/server/addons/tui-systemd.packages && ! pacman -Qq tui-firewall >/dev/null 2>&1 && ! pacman -Qq tui-systemd >/dev/null 2>&1"
 
     echo
-    echo "== fwall =="
+    echo "== tui-firewall =="
     # Installed here rather than through omarchy-server-addon, which would need
     # sudo and a real firewall; what is being checked is the package.
-    pacman -S --noconfirm fwall >/dev/null
-    check "fwall installs a static binary" bash -c \
-      "test -x /usr/bin/fwall && ! ldd /usr/bin/fwall 2>&1 | grep -q libc.so"
-    check "fwall --version reports the packaged version" bash -c \
-      "fwall --version | grep -q 0.1.0"
-    check "fwall ships a ufw-pinned configuration" bash -c \
-      "grep -qx \"backend = \\\"ufw\\\"\" /etc/fwall/config.toml"
+    pacman -S --noconfirm tui-firewall >/dev/null
+    check "tui-firewall installs a static binary" bash -c \
+      "test -x /usr/bin/tui-firewall && ! ldd /usr/bin/tui-firewall 2>&1 | grep -q libc.so"
+    check "tui-firewall --version reports the packaged version" bash -c \
+      "tui-firewall --version | grep -q 0.1.0"
+    check "tui-firewall ships a ufw-pinned configuration" bash -c \
+      "grep -qx \"backend = \\\"ufw\\\"\" /etc/tui-firewall/config.toml"
     # The README is read out of the package file, not the filesystem: the
     # archlinux container image carries NoExtract = usr/share/doc/* .
-    check "fwall ships its licence and README" bash -c \
-      "test -s /usr/share/licenses/fwall/LICENSE && bsdtar -tf /repo/fwall-*.pkg.tar.zst | grep -qx usr/share/doc/fwall/README.md"
-    pacman -Rns --noconfirm fwall >/dev/null
+    check "tui-firewall ships its licence and README" bash -c \
+      "test -s /usr/share/licenses/tui-firewall/LICENSE && bsdtar -tf /repo/tui-firewall-*.pkg.tar.zst | grep -qx usr/share/doc/tui-firewall/README.md"
+    # The tool was called fwall until it moved to the tui-tools organization.
+    # A machine that installed the old name has to take this package as an
+    # upgrade rather than a second copy of the same binary.
+    check "tui-firewall replaces the old fwall package" bash -c \
+      "pacman -Qi tui-firewall | grep -q \"^Replaces .*fwall\" && pacman -Qi tui-firewall | grep -q \"^Provides .*fwall\""
+    pacman -Rns --noconfirm tui-firewall >/dev/null
+
+    echo
+    echo "== tui-systemd =="
+    pacman -S --noconfirm tui-systemd >/dev/null
+    check "tui-systemd installs a static binary" bash -c \
+      "test -x /usr/bin/tui-systemd && ! ldd /usr/bin/tui-systemd 2>&1 | grep -q libc.so"
+    check "tui-systemd --version reports the packaged version" bash -c \
+      "tui-systemd --version | grep -q 0.1.0"
+    check "tui-systemd ships the machine-wide configuration it reads" bash -c \
+      "grep -q \"^sudo = \" /etc/tui-systemd/config.toml"
+    check "tui-systemd ships its licence and README" bash -c \
+      "test -s /usr/share/licenses/tui-systemd/LICENSE && bsdtar -tf /repo/tui-systemd-*.pkg.tar.zst | grep -qx usr/share/doc/tui-systemd/README.md"
+    pacman -Rns --noconfirm tui-systemd >/dev/null
 
     echo
     echo "== measurements =="

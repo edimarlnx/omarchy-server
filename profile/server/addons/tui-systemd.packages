@@ -1,0 +1,7 @@
+# A terminal UI for systemd units and their journal.
+#
+# Same reasoning as tui-firewall: systemctl and journalctl are what a machine
+# needs, and this is the convenience for the machines somebody works on. It
+# opens on what failed, reads the journal beside it, previews the exact command
+# line of every change, and keeps nothing running after it quits.
+tui-systemd

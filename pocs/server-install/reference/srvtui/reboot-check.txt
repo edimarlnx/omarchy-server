@@ -1,0 +1,37 @@
+=== reboot survival — VM 'srvtui' — 2026-08-29T19:49:10-03:00 ===
+
+before:
+2026-08-29 19:43:35
+7.1.11-arch1-1
+4.0.1-12
+
+rebooting...
+rebooted: boot time moved from 2026-08-29 19:43:35 to 2026-08-29 19:49:15
+ssh answered 0s after the reboot request
+
+after:
+2026-08-29 19:49:15
+7.1.11-arch1-1
+profile: server
+version: 4.0.1-12
+default target: multi-user.target
+cmdline: root=PARTUUID=1dc1e27f-08b8-4958-af22-786a3fd309fc zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
+Startup finished in 849ms (firmware) + 2.656s (loader) + 908ms (kernel) + 2.734s (userspace) = 7.149s 
+multi-user.target reached after 2.733s in userspace.
+--- failed units ---
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+
+0 loaded units listed.
+--- firewall ---
+Status: active
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     LIMIT       Anywhere                  
+172.17.0.1 53/udp          ALLOW       172.16.0.0/12              # allow-docker-dns
+--- listening ---
+0.0.0.0:22
+127.0.0.53%lo:53
+127.0.0.54:53
+172.17.0.1:53
+[::]:22

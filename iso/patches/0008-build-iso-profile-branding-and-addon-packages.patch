@@ -12,11 +12,11 @@ index c7ad72b..1945986 100755
 +    # Packages built from the local checkouts that are not the runtime or the
 +    # settings. omarchy-server-keyring signs the future [omarchy-server]
 +    # repository and is a hard dependency of the runtime, so the offline mirror
-+    # has to carry it. fwall is an addon package built from its own source tree
-+    # (see EXTRA_SOURCE_DIRS in build-omarchy-packages.sh): it is bundled in
-+    # the mirror and installed only by `omarchy-server-addon fwall`, never by
-+    # the base profile.
-+    OMARCHY_EXTRA_PACKAGES="omarchy-server-keyring fwall"
++    # has to carry it. tui-firewall and tui-systemd are addon packages built
++    # from their own source trees (see the *_SRC block in
++    # build-omarchy-packages.sh): they are bundled in the mirror and installed
++    # only by `omarchy-server-addon <name>`, never by the base profile.
++    OMARCHY_EXTRA_PACKAGES="omarchy-server-keyring tui-firewall tui-systemd"
      ;;
    *)
      echo "ERROR: unknown profile: $OMARCHY_PROFILE" >&2

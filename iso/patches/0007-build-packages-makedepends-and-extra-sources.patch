@@ -2,7 +2,7 @@ diff --git a/builder/build-omarchy-packages.sh b/builder/build-omarchy-packages.
 index acbcd0d..22e572f 100755
 --- a/builder/build-omarchy-packages.sh
 +++ b/builder/build-omarchy-packages.sh
-@@ -38,6 +38,23 @@ pacman -Sy --noconfirm
+@@ -38,6 +38,26 @@ pacman -Sy --noconfirm
  git config --system --add safe.directory /omarchy-source
  git config --system --add safe.directory /omarchy-pkgs
  
@@ -19,8 +19,11 @@ index acbcd0d..22e572f 100755
 +  done
 +fi
 +# One line per addon package that builds from its own tree.
-+if [[ -d /omarchy-pkgs/src/tui-tools ]]; then
-+  extra_source_env+=("FWALL_SRC=/omarchy-pkgs/src/tui-tools")
++if [[ -d /omarchy-pkgs/src/tui-firewall ]]; then
++  extra_source_env+=("TUI_FIREWALL_SRC=/omarchy-pkgs/src/tui-firewall")
++fi
++if [[ -d /omarchy-pkgs/src/tui-systemd ]]; then
++  extra_source_env+=("TUI_SYSTEMD_SRC=/omarchy-pkgs/src/tui-systemd")
 +fi
 +
  # Unset-only defaults (`=`, not `:=`): build-iso.sh exports all four, and a

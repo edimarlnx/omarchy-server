@@ -136,7 +136,7 @@ else
   # which explains nothing.
   if ! pacman-conf --repo-list 2>/dev/null | grep -qx omarchy-server; then
     echo "Warning: the [omarchy-server] repository is not configured." >&2
-    echo "         Addons whose packages are built by this profile (fwall) will not be found." >&2
+    echo "         Addons whose packages are built by this profile (tui-firewall, tui-systemd) will not be found." >&2
     echo "         Expected: an Include for /etc/pacman.d/omarchy-server.conf in /etc/pacman.conf." >&2
   fi
   # `-Syu`, not `-Sy` followed by `-S`: pulling a package built against newer

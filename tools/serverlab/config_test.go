@@ -11,7 +11,7 @@ func TestParseTOML(t *testing.T) {
 # a comment line
 [paths]
 pkgs_repo = "../omarchy-server-pkgs"   # trailing comment
-tui_tools = '../tui-tools'
+tui_tools = '../tui-tools-org'
 
 [vm]
 disk_gb = 40
@@ -23,7 +23,7 @@ cpus = 4
 	if got := sections["paths"]["pkgs_repo"]; got != "../omarchy-server-pkgs" {
 		t.Errorf("pkgs_repo = %q", got)
 	}
-	if got := sections["paths"]["tui_tools"]; got != "../tui-tools" {
+	if got := sections["paths"]["tui_tools"]; got != "../tui-tools-org" {
 		t.Errorf("tui_tools = %q", got)
 	}
 	if got := sections["vm"]["disk_gb"]; got != "40" {

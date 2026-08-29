@@ -1,8 +1,8 @@
 # Packaging the server profile
 
 The three profile packages (`omarchy-server-keyring`, `omarchy-server-settings`,
-`omarchy-server`) plus the addon packages built from source (`fwall`) are built,
-signed and tested in a clean Arch container.
+`omarchy-server`) plus the addon packages built from source (`tui-firewall`,
+`tui-systemd`) are built, signed and tested in a clean Arch container.
 
 ---
 
@@ -117,8 +117,8 @@ because the same files are what GitHub Actions builds the published
 PKGBUILD that disagrees with itself. `pkgs/build.sh` and `iso/build.sh` read
 them from there. See §5.
 
-Three of them build the profile; `fwall` (§2.4) is an addon package built from
-its own upstream. Common source: the fork
+Three of them build the profile; `tui-firewall` and `tui-systemd` (§2.4) are
+addon packages built from their own upstreams. Common source: the fork
 `https://github.com/edimarlnx/omarchy.git`, branch `server`, **pinned** at
 commit `468b511249b1a341311c46f5a7cf81aa5bc5af92`, plus
 `profile/server/overlay/` packed as a source tarball. A builder that already
@@ -394,51 +394,65 @@ an unrefreshed system is the partial upgrade Arch warns about.
 | `dev` | base-devel, git, yay, mise-bin | — |
 | `editor` | omarchy-nvim | seeds `~/.config/nvim` for existing users |
 | `net-tools` | inotify-tools, rsync, socat, unzip, whois | — |
-| `fwall` | fwall | — |
+| `tui-firewall` | tui-firewall | — |
+| `tui-systemd` | tui-systemd | — |
 | `vm` | qemu-guest-agent | enables `qemu-guest-agent.service` |
 
-`fwall` is the one addon whose package is not in any public repository: it is
-built from source by `pkgs/build.sh` and by the ISO builder, and reaches a
-machine either through the ISO's offline mirror (`mkcidata.sh --addons fwall`,
-or `omarchy-server-addon fwall` during the install) or from the
-`[omarchy-server]` repository once that is published. On an installed machine
-with only the Arch and `[omarchy]` mirrors configured, `omarchy-server-addon
-fwall` has nowhere to fetch it from and says so.
+`tui-firewall` and `tui-systemd` are the addons whose packages are in no public
+Arch repository: they are built from source by `pkgs/build.sh` and by the ISO
+builder, and reach a machine either through the ISO's offline mirror
+(`mkcidata.sh --addons tui-firewall,tui-systemd`, or `omarchy-server-addon
+tui-firewall` during the install) or from the `[omarchy-server]` repository once
+that is published. On an installed machine with only the Arch and `[omarchy]`
+mirrors configured, `omarchy-server-addon tui-firewall` has nowhere to fetch it
+from and says so.
 
 ---
 
-### 2.4 `fwall` (1.5 MB compressed, 3.7 MB installed)
+### 2.4 `tui-firewall` and `tui-systemd`, the addon packages built from source
 
-A terminal UI for the firewall this profile already configures, from the
-`tui-tools` monorepo (`github.com/edimarlnx/tui-tools`). It reads the live ufw
-state and previews the exact command line of every change before running it.
-Not in the core: a headless machine does not need a TUI to boot, and the core
-list is what it needs to boot.
+Two terminal UIs from the [`tui-tools`](https://github.com/tui-tools)
+organization, one repository each: `tui-firewall` drives the firewall this
+profile already configures, `tui-systemd` drives the units and reads their
+journal. Both preview the exact command line of every change before running it
+and keep no state of their own — no daemon, no listening socket. Neither is in
+the core: a headless machine does not need a TUI to boot, and the core list is
+what it needs to boot.
 
-`pkgs/pkgbuilds/fwall/PKGBUILD` follows the same contract as the others — a
-pinned commit consumed through `git+file://`, with the checkout's location
-supplied by an environment variable (`FWALL_SRC`, `OMARCHY_SRC`'s counterpart;
-`FWALL_GIT_URL` replaces the whole URL once the repository is public).
+`tui-firewall` was `fwall`, in the `edimarlnx/tui-tools` monorepo, until the
+tools moved to the organization. The package carries `provides=(fwall)` and
+`replaces=(fwall)`, which is what makes `pacman -Syu` on a machine that has
+`fwall` installed swap it for this package rather than leave both.
+
+`<pkgs-checkout>/pkgbuilds/tui-{firewall,systemd}/PKGBUILD` follow the same
+contract as the others, with the upstream **release tag** (`v0.1.0`, annotated
+and unmoving) where the Omarchy packages have a pinned commit, consumed through
+`git+file://` when a checkout's location is supplied by an environment variable
+(`TUI_FIREWALL_SRC` / `TUI_SYSTEMD_SRC`, `OMARCHY_SRC`'s counterparts;
+`TUI_FIREWALL_GIT_URL` / `TUI_SYSTEMD_GIT_URL` replace the whole URL).
 
 | Aspect | Choice |
 |---|---|
-| Build | `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$pkgver"` — one static binary, same bytes from the same commit |
+| Build | `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$pkgver"` — one static binary, same bytes from the same tag |
 | Modules | `go mod download` in `prepare()`, so `build()` and `check()` are offline; `go.sum` pins what is fetched |
-| `depends` | none: the binary is static and shells out to `ufw` rather than linking anything |
-| `optdepends` | `ufw` (the backend), `sudo` (unless started as root) |
+| `depends` | none: the binaries are static and shell out to `ufw` / `systemctl` rather than linking anything |
+| `optdepends` | `tui-firewall`: `ufw` (the backend), `sudo` (unless started as root); `tui-systemd`: `sudo` |
 | `options` | `!debug !strip` — the ldflags already dropped the symbol and DWARF tables |
-| Files | `/usr/bin/fwall`, `/etc/fwall/config.toml` (`backup=`), the README and the MIT licence |
+| Files | `/usr/bin/<name>`, `/etc/<name>/config.toml` (`backup=`), the README and the MIT licence |
 | Tests | `check()` runs `go test ./...`; the build fails if they do |
 
-`/etc/fwall/config.toml` is the shipped `examples/config.toml` with
+`/etc/tui-firewall/config.toml` is the shipped `examples/config.toml` with
 `backend = "auto"` rewritten to `backend = "ufw"`, and `package()` fails if that
 rewrite did not take. `ufw` is the firewall `install/server/firewall-server.sh`
 configures and the only one the server package list can produce, so leaving the
 autodetection on would only add a way for it to guess wrong.
+`/etc/tui-systemd/config.toml` is the upstream example verbatim: there is
+nothing this profile has to pin, and it is installed so the keys are
+discoverable on the machine.
 
 Both builders need a Go toolchain. Rather than adding one unconditionally,
-`pkgs/build.sh` installs `go` only when `fwall` is among the packages of that
-run, and the ISO builder reads each PKGBUILD's `makedepends` out of
+`pkgs/build.sh` installs `go` only when one of these packages is in that run,
+and the ISO builder reads each PKGBUILD's `makedepends` out of
 `makepkg --printsrcinfo` and installs exactly those — a general mechanism, since
 `makepkg --nodeps` (deliberate, see §3) otherwise installs nothing at all.
 
@@ -677,11 +691,12 @@ Two places, and neither is `[omarchy-server]` yet:
 ./pkgs/test.sh                  # install in a clean Arch container and verify
 ```
 
-`fwall` needs a second checkout, `../tui-tools` by default (`TUI_TOOLS_DIR`
-moves it). It is bind mounted read-only at `/src/tui-tools`, the way
+`tui-firewall` and `tui-systemd` need a checkout each, under `../tui-tools-org`
+by default (`TUI_TOOLS_DIR` moves the directory that holds them). They are bind
+mounted read-only at `/src/tui-firewall` and `/src/tui-systemd`, the way
 `upstream/omarchy` is mounted at `/src/omarchy`, and reached through
-`FWALL_SRC`. Building only the Omarchy packages does not need it and does not
-install a Go toolchain.
+`TUI_FIREWALL_SRC` / `TUI_SYSTEMD_SRC`. Building only the Omarchy packages does
+not need them and does not install a Go toolchain.
 
 `build.sh` runs everything in an `archlinux:latest` container as user
 `builder` (the same design the GitHub Actions workflow in `omarchy-server-pkgs`
@@ -712,16 +727,17 @@ installing the package with full verification. On a real install the
 equivalent step is the ISO's offline mirror, which pacman reads with
 `SigLevel = Optional TrustAll`.
 
-### Results (2026-08-29)
+### Results (2026-08-29, re-run after the `tui-*` rename)
 
-66 assertions, all PASS. Measured in the container:
+80 assertions, all PASS. Measured in the container:
 
 | Item | Value |
 |---|---|
-| `omarchy-server` | 448 KB compressed / **1.21 MiB** installed (upstream `omarchy`: 120 MB / 126 MB) |
-| `omarchy-server-settings` | 65 KB / **145 KiB** (upstream: 724 KB / 1.3 MB) |
+| `omarchy-server` | 543 KB compressed / **1.49 MiB** installed (upstream `omarchy`: 120 MB / 126 MB) |
+| `omarchy-server-settings` | 66 KB / **145 KiB** (upstream: 724 KB / 1.3 MB) |
 | `omarchy-server-keyring` | 3.7 KB / 295 B |
-| `fwall` (addon, not installed by the base) | 1.5 MB / **3.7 MiB** |
+| `tui-firewall` (addon, not installed by the base) | 1.5 MB / **3.70 MiB** |
+| `tui-systemd` (addon, not installed by the base) | 1.8 MB / **4.28 MiB** |
 | Dependency closure | **193 packages**, **739 MiB** installed |
 | Graphical packages present | none (`hyprland sddm pipewire quickshell plymouth wireplumber uwsm gnome-keyring xdg-desktop-portal-hyprland`) |
 
@@ -751,9 +767,10 @@ install leaf that copies it, `/etc/issue` (logo, `\S{VERSION_ID}`, an ESC byte)
 against `/etc/issue.serial` (no logo) and the drop-in that points agetty at it,
 `/etc/issue.net` carrying no escapes, the palette unit and command with the
 serial console explicitly untouched, and the login banner both wired and
-rendering. An `== fwall ==` block installs the addon package in the container
-and checks the static binary, `--version`, the ufw-pinned configuration and the
-licence.
+rendering. An `== tui-firewall ==` block installs the addon package in the
+container and checks the static binary, `--version`, the ufw-pinned
+configuration, the licence and that it replaces the old `fwall` package; an
+`== tui-systemd ==` block does the same for the other tool.
 
 What **cannot** be verified in a container and is checked in the VM install:
 `systemctl enable/mask`, `ufw`, `ufw-docker install`, `mkinitcpio`/UKI,
@@ -898,9 +915,9 @@ container and puts it through the real client path. 13 assertions, all PASS:
 |---|---|
 | transport | the database is fetched over HTTP |
 | bootstrap | the key is read out of the keyring package, locally signed, the package installed under verification, `pacman-key --populate omarchy-server` |
-| install | `pacman -Sy` syncs `omarchy-server.db`; `fwall` and `omarchy-server` install with `SigLevel = PackageRequired` in force |
+| install | `pacman -Sy` syncs `omarchy-server.db`; `tui-firewall` and `omarchy-server` install with `SigLevel = PackageRequired` in force |
 | client wiring | the installed `/etc/pacman.d/omarchy-server.conf` carries the real `Server` line |
-| **hostile mirror** | the same repository re-served with `fwall` signed by a **freshly generated stranger's key** and the database rebuilt so every checksum agrees → pacman refuses it (`required key missing from keyring`) and nothing installs |
+| **hostile mirror** | the same repository re-served with `tui-firewall` signed by a **freshly generated stranger's key** and the database rebuilt so every checksum agrees → pacman refuses it (`required key missing from keyring`) and nothing installs |
 | **unsigned** | the same package with its `.sig` removed → pacman refuses to complete the transaction and nothing installs |
 
 The hostile-mirror case is the one that matters. A checksum proves nothing

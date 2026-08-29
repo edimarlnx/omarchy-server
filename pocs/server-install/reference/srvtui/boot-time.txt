@@ -1,0 +1,28 @@
+Startup finished in 570ms (firmware) + 2.642s (loader) + 905ms (kernel) + 2.914s (userspace) = 7.033s 
+multi-user.target reached after 2.914s in userspace.
+
+1.223s dev-vda2.device
+1.041s systemd-tmpfiles-setup-dev-early.service
+1.016s systemd-userdbd.service
+ 173ms ufw.service
+ 122ms ldconfig.service
+  91ms systemd-networkd.service
+  87ms user@1000.service
+  74ms sshdgenkeys.service
+  64ms systemd-vconsole-setup.service
+  62ms systemd-journal-flush.service
+  55ms systemd-remount-fs.service
+  41ms systemd-resolved.service
+  41ms systemd-udev-trigger.service
+  37ms systemd-tmpfiles-setup.service
+  30ms dev-zram0.swap
+  30ms systemd-timesyncd.service
+  28ms user-runtime-dir@1000.service
+  26ms systemd-sysusers.service
+  26ms systemd-oomd.service
+  25ms systemd-boot-random-seed.service
+  24ms boot.mount
+  23ms systemd-tmpfiles-setup-dev.service
+  20ms systemd-udevd.service
+  19ms linux-modules-cleanup.service
+  19ms omarchy-tty-palette.service

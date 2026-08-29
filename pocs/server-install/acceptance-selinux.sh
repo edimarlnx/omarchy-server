@@ -389,9 +389,9 @@ check "the size of that disagreement is recorded, not repaired" \
   'echo "differs-from-static-policy=$(~/.lab-sudo restorecon -nvR /var/lib/docker /var/lib/containerd 2>/dev/null | wc -l)"' \
   '^differs-from-static-policy=[0-9]+$'
 
-check "the fwall addon installs" \
-  '~/.lab-sudo omarchy-server-addon fwall 2>&1 | tail -3; command -v fwall' \
-  '/fwall$'
+check "the tui-firewall addon installs" \
+  '~/.lab-sudo omarchy-server-addon tui-firewall 2>&1 | tail -3; command -v tui-firewall' \
+  '/tui-firewall$'
 
 check "the firewall still answers" \
   '~/.lab-sudo ufw status verbose | head -8' \

@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Build the server packages (omarchy-server-keyring, omarchy-server-settings,
-# omarchy-server) plus the addon packages built from source (fwall) in a
-# throwaway archlinux:latest container, then assemble a signed pacman repo in
-# pkgs/repo/.
+# omarchy-server) plus the addon packages built from source (tui-firewall,
+# tui-systemd) in a throwaway archlinux:latest container, then assemble a
+# signed pacman repo in pkgs/repo/.
 #
 #   ./pkgs/build.sh              build everything
 #   ./pkgs/build.sh omarchy-server   build one package
@@ -19,10 +19,11 @@
 # does not go through a commit and a CI run.
 #
 # The build runs as an unprivileged `builder` user, the way the workflow does.
-# The upstream checkouts are bind mounted read-only at /src/omarchy and
-# /src/tui-tools and reached through OMARCHY_SRC / FWALL_SRC, so a local build
-# needs no network and never depends on a branch having moved; without those
-# variables the PKGBUILDs default to the public repositories over https.
+# The upstream checkouts are bind mounted read-only at /src/omarchy,
+# /src/tui-firewall and /src/tui-systemd and reached through OMARCHY_SRC /
+# TUI_FIREWALL_SRC / TUI_SYSTEMD_SRC, so a local build needs no network and
+# never depends on a branch having moved; without those variables the PKGBUILDs
+# default to the public repositories over https.
 
 set -euo pipefail
 
@@ -50,7 +51,7 @@ pkgs_repo=$(cd "$pkgs_repo" && pwd)
 pkgbuilds_dir="$pkgs_repo/pkgbuilds"
 
 if ((${#packages[@]} == 0)); then
-  packages=(omarchy-server-keyring omarchy-server-settings omarchy-server fwall)
+  packages=(omarchy-server-keyring omarchy-server-settings omarchy-server tui-firewall tui-systemd)
 fi
 
 if [[ ! -d $repo_root/upstream/omarchy/.git ]]; then
@@ -59,16 +60,20 @@ if [[ ! -d $repo_root/upstream/omarchy/.git ]]; then
 fi
 
 # The addon packages that are not built from the Omarchy checkout carry their
-# own source tree. fwall comes from the tui-tools monorepo, cloned beside this
-# repository by default; TUI_TOOLS_DIR moves it.
-tui_tools_dir=${TUI_TOOLS_DIR:-$repo_root/../tui-tools}
-if [[ " ${packages[*]} " == *" fwall "* ]]; then
-  if [[ ! -d $tui_tools_dir/.git ]]; then
-    echo "Error: $tui_tools_dir is not a git clone (set TUI_TOOLS_DIR)." >&2
+# own source tree: one repository per tool under the tui-tools organization,
+# checked out side by side in a directory beside this repository by default
+# (TUI_TOOLS_DIR moves it). Each requested tool is resolved to its own clone.
+tui_tools_dir=${TUI_TOOLS_DIR:-$repo_root/../tui-tools-org}
+tui_srcs=()
+for tool in tui-firewall tui-systemd; do
+  [[ " ${packages[*]} " == *" $tool "* ]] || continue
+  if [[ ! -d $tui_tools_dir/$tool/.git ]]; then
+    echo "Error: $tui_tools_dir/$tool is not a git clone (set TUI_TOOLS_DIR)." >&2
+    echo "       git clone https://github.com/tui-tools/$tool.git $tui_tools_dir/$tool" >&2
     exit 1
   fi
-  tui_tools_dir=$(cd "$tui_tools_dir" && pwd)
-fi
+  tui_srcs+=("$(cd "$tui_tools_dir/$tool" && pwd)")
+done
 
 # The lab signing key. Generated on first run; see pkgs/keys/gen-lab-key.sh.
 bash "$pkgs_dir/keys/gen-lab-key.sh"
@@ -90,8 +95,9 @@ done
 install -d "$pkgs_dir/out" "$pkgs_dir/repo"
 
 mounts=(-v "$repo_root/upstream/omarchy:/src/omarchy:ro")
-[[ " ${packages[*]} " == *" fwall "* ]] &&
-  mounts+=(-v "$tui_tools_dir:/src/tui-tools:ro")
+for src in "${tui_srcs[@]}"; do
+  mounts+=(-v "$src:/src/${src##*/}:ro")
+done
 
 docker run --rm \
   "${mounts[@]}" \
@@ -108,7 +114,7 @@ docker run --rm \
     # Go is only pulled in when something in this run needs to compile: the
     # three Omarchy packages are file bundles and would pay 250 MiB for it.
     case " $OMARCHY_PACKAGES " in
-      *" fwall "*) pacman -S --noconfirm --needed go ;;
+      *" tui-firewall "* | *" tui-systemd "*) pacman -S --noconfirm --needed go ;;
     esac
 
     useradd -m builder
@@ -117,9 +123,11 @@ docker run --rm \
 
     # git refuses to read a repository owned by another user.
     git config --system --add safe.directory /src/omarchy
-    if [[ -d /src/tui-tools ]]; then
-      git config --system --add safe.directory /src/tui-tools
-    fi
+    for tool in tui-firewall tui-systemd; do
+      if [[ -d /src/$tool ]]; then
+        git config --system --add safe.directory /src/$tool
+      fi
+    done
 
     install -d -o builder -g builder /home/builder/work /home/builder/gnupg
     cp -a /build/keys/gnupg/. /home/builder/gnupg/
@@ -141,13 +149,15 @@ docker run --rm \
         # at the read-only bind mounts instead, so a local build needs no
         # network and never depends on a branch having moved.
         export OMARCHY_SRC=/src/omarchy
-        if [[ -d /src/tui-tools ]]; then export FWALL_SRC=/src/tui-tools; fi
+        if [[ -d /src/tui-firewall ]]; then export TUI_FIREWALL_SRC=/src/tui-firewall; fi
+        if [[ -d /src/tui-systemd ]]; then export TUI_SYSTEMD_SRC=/src/tui-systemd; fi
         cd /home/builder/work/$package
         # --nodeps, not -s: the Omarchy packages are arch=any file bundles with
         # no compile step, and their depends() name each other plus five
         # packages that only exist in the [omarchy] repo. Installing ~200 MiB
         # of runtime dependencies would buy the build nothing. The makedepends
-        # that are real -- git, and go for fwall -- are installed above.
+        # that are real -- git, and go for the tui-* addons -- are installed
+        # above.
         makepkg --noconfirm --nodeps --sign --key $OMARCHY_SIGN_KEY
       "
       cp -f "/home/builder/work/$package"/*.pkg.tar.zst* /out/

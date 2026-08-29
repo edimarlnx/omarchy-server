@@ -234,9 +234,47 @@ check "the banner is wired into every login shell" \
   'test -f /etc/profile.d/omarchy-motd.sh && grep -q omarchy-server-motd /etc/profile.d/omarchy-motd.sh && echo motd-wired || echo motd-missing' \
   '^motd-wired$'
 
-check "fwall is not in the base" \
-  'pacman -Qq fwall 2>/dev/null || echo fwall-absent' \
-  '^fwall-absent$'
+# tui-firewall and tui-systemd are addons. On a machine installed without them
+# they are simply absent; on one installed with `--addons tui-firewall,\
+# tui-systemd` they are present but nothing in the base may depend on them,
+# which is what "required-by=None" says. Both states pass, and the evidence
+# records which machine this is.
+check "the tui-* tools are addons, not base dependencies" \
+  'for p in tui-firewall tui-systemd; do
+     if pacman -Qq $p >/dev/null 2>&1; then
+       echo "$p: installed-by-addon, required-by=$(pacman -Qi $p | sed -n "s/^Required By *: //p")"
+     else
+       echo "$p: absent-from-base"
+     fi
+   done >/tmp/tui-state; cat /tmp/tui-state
+   echo "base-dependencies=$(grep -cv "absent-from-base\|required-by=None" /tmp/tui-state)"' \
+  '^base-dependencies=0$'
+
+# A TUI that installs but does not draw is not installed in any useful sense,
+# and neither binary draws anything without a terminal. `script` (util-linux,
+# in the base) gives the command a pty on a connection that has none, and the
+# in-guest `timeout` ends it once the first frame is out -- a keystroke would
+# not do: both tools query the terminal for its background colour on startup
+# and answer nothing until that query times out, which is most of the wait.
+# On a machine without the addons there is nothing to render and the check says
+# so rather than failing.
+check "an installed tui-* tool renders a frame under a pty" \
+  'installed=$(for p in tui-firewall tui-systemd; do command -v $p >/dev/null 2>&1 && echo $p; done)
+   if [ -z "$installed" ]; then
+     echo "frames-missing=0 (neither tool is installed on this machine)"
+   else
+     for p in $installed; do
+       TERM=xterm-256color COLUMNS=120 LINES=40 \
+         script -qec "timeout -s TERM 12 $p --demo" /dev/null </dev/null >/tmp/$p.frame 2>&1
+       if sed "s/\x1b\[[0-9;?]*[a-zA-Z]//g" /tmp/$p.frame | grep -q "demo (no changes are applied)"; then
+         echo "$p: frame-ok"
+       else
+         echo "$p: no-frame"
+       fi
+     done >/tmp/tui-frames; cat /tmp/tui-frames
+     echo "frames-missing=$(grep -c no-frame /tmp/tui-frames)"
+   fi' \
+  '^frames-missing=0'
 
 # The addon mechanism, end to end: install the docker addon from the ISO's
 # offline mirror and run a container with it. On a VM installed with

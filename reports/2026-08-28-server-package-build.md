@@ -4,6 +4,11 @@
 **Subject:** `omarchy-server-keyring`, `omarchy-server-settings`, `omarchy-server`, and later the `fwall` addon package
 **Result:** all four build reproducibly and install in a clean Arch container — **66 assertions, 0 failures** in the final run
 
+> **Note, 2026-08-29:** the `fwall` package named throughout this report is now
+> `tui-firewall`, built from `github.com/tui-tools/tui-firewall` at tag `v0.1.0`,
+> with `provides`/`replaces` on the old name. A second addon, `tui-systemd`, is
+> built the same way. The report is kept as recorded.
+
 ## Scope
 
 The upstream PKGBUILD repository is private. To ship a server edition at all,

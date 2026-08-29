@@ -163,9 +163,9 @@ check "the docker addon installs and runs a container" \
   '~/.lab-sudo omarchy-server-addon docker >/tmp/addon-docker.log 2>&1; echo "addon-exit=$?"; tail -3 /tmp/addon-docker.log; ~/.lab-sudo docker run --rm hello-world >/tmp/hello.log 2>&1; echo "run-exit=$?"; grep -c "Hello from Docker" /tmp/hello.log' \
   'run-exit=0'
 
-check "the fwall addon installs" \
-  '~/.lab-sudo omarchy-server-addon fwall 2>&1 | tail -3; command -v fwall' \
-  '/fwall$'
+check "the tui-firewall addon installs" \
+  '~/.lab-sudo omarchy-server-addon tui-firewall 2>&1 | tail -3; command -v tui-firewall' \
+  '/tui-firewall$'
 
 check "the firewall still answers" \
   '~/.lab-sudo ufw status verbose | head -8' \

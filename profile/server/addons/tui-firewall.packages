@@ -1,0 +1,9 @@
+# A terminal UI for the firewall the profile already configures.
+#
+# ufw is in the core because a server has to be firewalled; reading and editing
+# its rules from a TUI is not something a machine needs to boot, so it is here.
+# tui-firewall previews the exact command line of every change before running
+# it and keeps no state of its own, so it adds no daemon and no listening
+# socket. It was called `fwall` until the tools moved to the tui-tools
+# organization; the package replaces that name.
+tui-firewall

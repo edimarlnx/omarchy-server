@@ -163,16 +163,17 @@ else
   # marks safe for git and hands to the PKGBUILD through <NAME>_SRC. A clone
   # rather than a copy: the working tree's uncommitted state must not decide what
   # a package contains, and the PKGBUILDs consume a pinned commit anyway.
-  tui_tools_dir=${TUI_TOOLS_DIR:-$repo_root/../tui-tools}
-  if [[ -d $tui_tools_dir/.git ]]; then
-    echo "› cloning $tui_tools_dir into $pkgs_scratch/src/tui-tools"
-    mkdir -p "$pkgs_scratch/src"
-    git clone --quiet --no-hardlinks "$tui_tools_dir" "$pkgs_scratch/src/tui-tools"
-  else
-    echo "Error: $tui_tools_dir is not a git clone; the fwall addon needs it." >&2
-    echo "       Set TUI_TOOLS_DIR to the checkout." >&2
-    exit 1
-  fi
+  tui_tools_dir=${TUI_TOOLS_DIR:-$repo_root/../tui-tools-org}
+  mkdir -p "$pkgs_scratch/src"
+  for tool in tui-firewall tui-systemd; do
+    if [[ ! -d $tui_tools_dir/$tool/.git ]]; then
+      echo "Error: $tui_tools_dir/$tool is not a git clone; the $tool addon needs it." >&2
+      echo "       Set TUI_TOOLS_DIR to the directory holding the checkouts." >&2
+      exit 1
+    fi
+    echo "› cloning $tui_tools_dir/$tool into $pkgs_scratch/src/$tool"
+    git clone --quiet --no-hardlinks "$tui_tools_dir/$tool" "$pkgs_scratch/src/$tool"
+  done
 fi
 
 # ── 5. build ────────────────────────────────────────────────────────────────

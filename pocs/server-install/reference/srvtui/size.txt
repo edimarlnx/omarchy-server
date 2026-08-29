@@ -1,0 +1,3 @@
+1410.70 MiB total installed
+222 packages
+used on /1.2G

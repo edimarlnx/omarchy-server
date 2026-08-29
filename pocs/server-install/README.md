@@ -43,15 +43,19 @@ orchestrator applies it in the chroot from the ISO's offline mirror:
   --hostname omarchy-srv-docker --out pocs/lab/out-server-docker
 ```
 
-The `fwall` addon is verified this way rather than through
-`omarchy-server-addon` on a running machine, because it is the one addon whose
-package exists only in the ISO's offline mirror until the `[omarchy-server]`
-repository is published:
+The `tui-firewall` and `tui-systemd` addons are verified this way rather than
+through `omarchy-server-addon` on a running machine, because their packages
+exist only in the ISO's offline mirror until the `[omarchy-server]` repository
+is published:
 
 ```bash
-./pocs/lab/mkcidata.sh --profile server --addons fwall --out pocs/lab/out-server-fwall
-LAB_OUT=$PWD/pocs/lab/out-server-fwall ./pocs/lab/vm.sh srvf create --disk-gb 40
+./pocs/lab/mkcidata.sh --profile server --addons tui-firewall,tui-systemd \
+  --out pocs/lab/out-server-tui
+LAB_OUT=$PWD/pocs/lab/out-server-tui ./pocs/lab/vm.sh srvtui create --disk-gb 40
 ```
+
+`serverlab lab up srvtui --addons tui-firewall,tui-systemd` does the same thing
+in one command.
 
 Note `--disk-gb 40`: the cidata JSON carries an absolute partition layout for a
 40 GiB disk, and a smaller VM disk fails the install at the first phase with
@@ -107,7 +111,7 @@ ENFORCE=1 LAB_OUT=$PWD/pocs/lab/out-server-apparmor ./pocs/server-install/accept
 Both scripts end by rebooting the VM, which is the only way to prove that a
 machine which is now refusing things can still be logged into. Run `collect.sh`
 and `surface.sh` **before** them, as with the base acceptance: the workload
-installs the `docker` and `fwall` addons and runs an update.
+installs the `docker` and `tui-firewall` addons and runs an update.
 
 The design is `docs/mac.md`; the results are
 `reports/2026-08-29-mandatory-access-control.md`.
@@ -299,6 +303,12 @@ The addon path was also verified the other way round, on a second VM
 mirror, and the machine comes up with docker installed, `docker.socket` enabled
 and the three drop-ins in `/etc`, without ever reaching the network.
 
+> **The addon is called `tui-firewall` since 2026-08-29**, when the tools moved
+> to the `tui-tools` organization and `fwall` became a repository of its own.
+> The run below is kept as it was recorded; the current names, and the
+> `tui-systemd` addon beside it, are re-verified in "tui-firewall and
+> tui-systemd" below.
+
 The `fwall` addon was verified the same way, on a VM (`srvf`) installed with
 `mkcidata.sh --addons fwall`. It is the case that needs this route rather than
 `omarchy-server-addon` on a running machine: the package is built by the ISO
@@ -314,6 +324,30 @@ repository is published.
 | `fwall --demo` on the console | renders, in the same palette the rest of the machine uses |
 
 ![fwall running on the console of a server installed with the addon](../../docs/screenshots/fwall.png)
+
+### `tui-firewall` and `tui-systemd` (2026-08-29)
+
+The tools moved to the [`tui-tools`](https://github.com/tui-tools) organization,
+one repository each, and `fwall` became `tui-firewall`. Both addons were
+installed by the same route on a VM called `srvtui`:
+
+```bash
+serverlab lab up srvtui --addons tui-firewall,tui-systemd
+serverlab lab test srvtui --suite base
+```
+
+| Check | Result |
+|---|---|
+| packages installed by the `Installing addons` phase | `tui-firewall 0.1.0-1` (3.70 MiB) and `tui-systemd 0.1.0-1` (4.28 MiB), both MIT |
+| package count against the base | 222, two more than the 220 of the lean base |
+| `--version` | `tui-firewall 0.1.0`, `tui-systemd 0.1.0` |
+| `/etc/tui-firewall/config.toml` | `backend = "ufw"` |
+| `/etc/tui-systemd/config.toml` | the upstream example, verbatim |
+| neither is a base dependency | `required-by=None` for both, install reason "explicitly installed" |
+| `--demo` under a pty | both render their first frame (`script` + a 12 s `timeout`; the startup wait is the terminal background-colour query) |
+
+**45 of 45 acceptance checks pass** on that machine, the reboot check included.
+Evidence: `pocs/server-install/reference/srvtui/`.
 
 ### The update path
 

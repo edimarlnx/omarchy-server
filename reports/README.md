@@ -34,7 +34,7 @@ scripts and artifacts live in `pocs/`.
 | 2026-08-29 | [Omarchy identity](2026-08-29-omarchy-identity.md) | bootloader, console, palette, MOTD, `os-release` — at zero new packages | 33/33; still 220 packages / 1402 MiB |
 | 2026-08-28 | [Lean secure base](2026-08-28-lean-secure-base.md) | cutting the base to what a headless machine needs, and the addon mechanism | 23/23; 320 → 220 packages, 2344 → 1402 MiB |
 | 2026-08-28 | [Server profile ISO and first install](2026-08-28-server-profile-iso-and-install.md) | `--profile server` in the ISO builder, and the first headless install | 17/17; orchestrator 30.6 s |
-| 2026-08-28 | [Server package build](2026-08-28-server-package-build.md) | the three profile packages plus `fwall`: layout, sizes, container test | 66 assertions, all pass |
+| 2026-08-28 | [Server package build](2026-08-28-server-package-build.md) | the three profile packages plus `fwall` (now `tui-firewall`): layout, sizes, container test | 66 assertions, all pass |
 | 2026-08-28 | [Desktop reference install](2026-08-28-desktop-reference-install.md) | stock Omarchy 4.0.1 desktop, the baseline everything is compared against | 942 packages, 8.08 GiB, 12.2 s boot |
 
 ## A note on the raw artifacts

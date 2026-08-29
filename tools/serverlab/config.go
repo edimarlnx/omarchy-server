@@ -24,7 +24,7 @@ type Config struct {
 	Path string
 
 	PkgsRepo           string // the omarchy-server-pkgs checkout (repo B)
-	TuiTools           string // the tui-tools checkout, source of the fwall addon
+	TuiTools           string // holds the tui-tools checkouts (tui-firewall, tui-systemd)
 	UpstreamOmarchy    string // upstream/omarchy clone
 	UpstreamOmarchyISO string // upstream/omarchy-iso clone
 
@@ -46,7 +46,7 @@ func defaultConfig(root string) *Config {
 	return &Config{
 		Root:               root,
 		PkgsRepo:           filepath.Join(filepath.Dir(root), "omarchy-server-pkgs"),
-		TuiTools:           filepath.Join(filepath.Dir(root), "tui-tools"),
+		TuiTools:           filepath.Join(filepath.Dir(root), "tui-tools-org"),
 		UpstreamOmarchy:    filepath.Join(root, "upstream", "omarchy"),
 		UpstreamOmarchyISO: filepath.Join(root, "upstream", "omarchy-iso"),
 		Profile:            "server",

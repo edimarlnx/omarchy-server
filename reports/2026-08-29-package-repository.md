@@ -4,6 +4,11 @@
 **Subject:** `[omarchy-server]` — built and signed by CI, served from a release, consumed by an installed machine
 **Result:** **13/13** local assertions including two tamper cases; the release is live and three CI runs have published to it
 
+> **Note, 2026-08-29:** the `fwall` package named throughout this report is now
+> `tui-firewall`, built from `github.com/tui-tools/tui-firewall` at tag `v0.1.0`,
+> with `provides`/`replaces` on the old name. A second addon, `tui-systemd`, is
+> built the same way. The report is kept as recorded.
+
 ## Scope
 
 Until this point the profile's packages existed only inside the ISO's offline
