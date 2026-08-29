@@ -91,9 +91,34 @@ if ((EUID != 0)); then
 fi
 
 mapfile -t packages < <(grep -v '^#\|^$' "$packages_file")
+
+# An addon may need extra pacman flags. `selinux` does: ten of its packages
+# `provides=`/`conflicts=` a package the base already has, and under plain
+# --noconfirm pacman takes the default answer to "X and Y are in conflict.
+# Remove Y?" -- which is no -- and fails the whole transaction. Its
+# selinux.pacman-args carries `--ask=4`, ALPM's QUESTION_CONFLICT_PKG
+# pre-answered yes. The file is a list, one flag per line, comments allowed,
+# so what an addon asks for is readable beside the packages it asks for.
+extra_pacman_args=()
+extra_args_file="$addons_dir/$addon.pacman-args"
+if [[ -f $extra_args_file ]]; then
+  mapfile -t extra_pacman_args < <(grep -v '^#\|^$' "$extra_args_file")
+fi
 if ((${#packages[@]} == 0)); then
   echo "omarchy-server-addon: $addon lists no packages." >&2
   exit 1
+fi
+
+# A preflight leaf, when the addon has one, runs BEFORE anything is installed.
+# The two mandatory-access-control addons need it: they are mutually exclusive,
+# and refusing the second one only in its setup leaf would mean nineteen
+# packages had already been installed on a machine that is not going to use
+# them. Same convention as the setup leaf -- sourced, no shebang -- but this one
+# may exit, and exiting is how it refuses.
+preflight="$addons_dir/$addon.preflight.sh"
+if [[ -f $preflight ]]; then
+  # shellcheck disable=SC1090
+  source "$preflight"
 fi
 
 echo "Installing addon '$addon': ${packages[*]}"
@@ -102,7 +127,7 @@ if ((${#pacman_args[@]})); then
   # were installed from it, so refreshing its database is a local file copy and
   # there is nothing to upgrade against.
   pacman "${pacman_args[@]}" -Sy --noconfirm
-  pacman "${pacman_args[@]}" -S --needed --noconfirm "${packages[@]}"
+  pacman "${pacman_args[@]}" -S --needed --noconfirm "${extra_pacman_args[@]}" "${packages[@]}"
 else
   # Packages that exist in no public Arch repository come from this profile's
   # own [omarchy-server] repository, which omarchy-server-settings enables by
@@ -121,7 +146,7 @@ else
   # install ran off the ISO's offline mirror), so a refresh is required, not
   # optional. The refresh is also what pulls the current [omarchy-server]
   # database down from the release assets.
-  pacman -Syu --needed --noconfirm "${packages[@]}"
+  pacman -Syu --needed --noconfirm "${extra_pacman_args[@]}" "${packages[@]}"
 fi
 
 setup="$addons_dir/$addon.sh"

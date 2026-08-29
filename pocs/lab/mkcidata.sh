@@ -6,7 +6,8 @@
 #
 # Usage: mkcidata.sh [--profile desktop|server] [--hostname NAME] [--user NAME]
 #                    [--disk /dev/vda] [--disk-size-gb 40] [--addons a,b]
-#                    [--unattended-updates] [--secureboot] [--out DIR]
+#                    [--unattended-updates] [--secureboot] [--mac selinux|apparmor]
+#                    [--out DIR]
 # Output: $OUT/cidata/* (the plain files) and $OUT/cidata.iso (volume label
 # "cidata", ISO9660+Joliet+RockRidge, which udev exposes as
 # /dev/disk/by-label/cidata inside the live ISO).
@@ -24,6 +25,7 @@ disk_size_gb=40
 addons=""
 unattended_updates=0
 secureboot=0
+mac=""
 out="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/out"
 timezone="${TZ_NAME:-America/Sao_Paulo}"
 keyboard="${KB_LAYOUT:-us}"
@@ -40,6 +42,7 @@ while (($#)); do
     --addons) addons="$2"; shift 2 ;;
     --unattended-updates) unattended_updates=1; shift ;;
     --secureboot) secureboot=1; shift ;;
+    --mac) mac="$2"; shift 2 ;;
     --out) out="$2"; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
@@ -228,6 +231,21 @@ if ((secureboot)); then
   echo "enabled" >"$dir/secureboot"
 fi
 
+# One more marker, and the same shape: `selinux` or `apparmor` turns on the
+# server profile's mandatory-access-control addon of that name during the
+# install, in its permissive / complain mode. The orchestrator turns the marker
+# into an addon, ahead of the addons named by --addons, so the relabel happens
+# before the rest of the install writes more files. Both at once is refused by
+# the orchestrator; refuse it here too, where the message is cheaper.
+case "$mac" in
+  "") ;;
+  selinux | apparmor) echo "enabled" >"$dir/$mac" ;;
+  *)
+    echo "mkcidata: --mac takes 'selinux' or 'apparmor', not '$mac'" >&2
+    exit 2
+    ;;
+esac
+
 echo "$full_name" >"$dir/user_full_name.txt"
 echo "$email" >"$dir/user_email_address.txt"
 echo false >"$dir/user_encrypt_installation.txt"
@@ -244,5 +262,5 @@ done
 jq . "$dir/user_configuration.json" >/dev/null # validate
 
 xorriso -as mkisofs -quiet -V cidata -J -r -o "$out/cidata.iso" "$dir" 2>/dev/null
-echo "cidata: $out/cidata.iso (profile=$profile host=${hostname:-<installer default>} user=$username disk=$disk ${disk_size_gb}G addons=${addons:-none} unattended-updates=$unattended_updates secureboot=$secureboot)"
+echo "cidata: $out/cidata.iso (profile=$profile host=${hostname:-<installer default>} user=$username disk=$disk ${disk_size_gb}G addons=${addons:-none} unattended-updates=$unattended_updates secureboot=$secureboot mac=${mac:-none})"
 echo "password: $password_file"

@@ -1,0 +1,37 @@
+[Unit]
+# One-shot filesystem relabel, gated on /.autorelabel.
+#
+# The `selinux` addon relabels the filesystem offline, inside the install
+# chroot, because a relabel is minutes of I/O and the install is already
+# writing. What it cannot label is anything created AFTER it runs -- and the
+# orchestrator creates the user's home directory in a later phase. A machine
+# installed without this unit comes up with /home/<user> unlabeled, which is
+# invisible in permissive and locks the operator out the moment SELinux goes
+# enforcing: user_t may not search unlabeled_t, so the session cannot reach its
+# own home, and `sudo` is unreachable with it.
+#
+# That is a measured failure, not a hypothesis:
+# reports/2026-08-29-mandatory-access-control.md.
+#
+# Ordering: nothing early. The machine boots PERMISSIVE after the addon, so
+# there is no window where a wrong label refuses anything; the relabel just has
+# to happen before anyone switches to enforcing. Running it in multi-user, once,
+# keeps it out of the boot path of every subsequent boot -- the flag is removed
+# when it succeeds.
+Description=Relabel the filesystem for SELinux (one-shot)
+Documentation=man:setfiles(8)
+ConditionPathExists=/.autorelabel
+ConditionSecurity=selinux
+After=local-fs.target
+Before=sshd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+# The command removes /.autorelabel itself when setfiles succeeds, which is
+# what stops this from running again.
+ExecStart=/usr/bin/omarchy-server-selinux relabel
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+# File contexts this profile adds to the reference policy, applied with
+# `semanage fcontext -a` by install/server/selinux-server.sh.
+#
+# Format: <path regex> <whitespace> <SELinux type>. Comments and blank lines
+# are ignored. One line per rule, because that is one `semanage` call and one
+# thing to remove.
+#
+# Why semanage rather than a policy module: a module has to contain at least
+# one rule to compile at all -- `checkmodule` rejects a module whose only
+# content is a file-context file -- and this profile has no measured denial
+# that needs a rule yet. `semanage fcontext` is the supported way to add a
+# label without inventing policy, it survives a policy upgrade, and
+# `semanage fcontext -l -C` lists exactly what was added locally.
+#
+# /usr/share/omarchy/bin holds programs, not data, and the reference policy's
+# default for anything below /usr/share is usr_t. Labelling them bin_t is what
+# lets the existing policy treat them as what they are: a root shell executes
+# them and systemd execs them from a unit, and both of those are questions the
+# policy already has answers for. /usr/share/omarchy/install is the setup tree
+# -- sourced, never executed -- and stays data.
+
+/usr/share/omarchy/bin(/.*)?	bin_t

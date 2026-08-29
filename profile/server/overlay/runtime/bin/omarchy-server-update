@@ -55,7 +55,24 @@ case "${1:-run}" in
     # -y as well as the environment variable: the flag is the documented
     # promise and the variable is what survives the `script` re-exec into every
     # step below it.
-    exec env OMARCHY_NONINTERACTIVE=1 omarchy-update -y
+    #
+    # OMARCHY_PATH is set here rather than inherited. Several of the steps
+    # omarchy-update runs read it under `set -u` -- omarchy-update-dev does it
+    # on its first line -- and it normally arrives from
+    # /etc/profile.d/omarchy-path.sh, which only a LOGIN shell reads. An
+    # unattended run has no login shell: it comes from a systemd timer, or from
+    # `sudo omarchy-server-update` in a non-interactive ssh command, and in
+    # both cases the variable may simply not be there.
+    #
+    # This was measured, not guessed: on the SELinux lab machine the update
+    # died with `omarchy-update-dev: line 7: OMARCHY_PATH: unbound variable`
+    # while the same command on the AppArmor machine, whose ssh session
+    # happened to carry the variable, succeeded. Depending on the caller's
+    # environment is the bug; this line is the fix, and it is right whether or
+    # not any MAC is installed.
+    exec env OMARCHY_NONINTERACTIVE=1 \
+      OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}" \
+      omarchy-update -y
     ;;
   -h | --help)
     echo "Usage: omarchy-server-update [run|enable|disable|status]"

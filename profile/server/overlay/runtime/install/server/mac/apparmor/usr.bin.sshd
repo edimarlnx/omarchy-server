@@ -1,0 +1,205 @@
+# AppArmor profile for the OpenSSH daemon on Arch.
+#
+# Shipped by the server profile's `apparmor` addon and installed into
+# /etc/apparmor.d/usr.bin.sshd, in COMPLAIN mode (a symlink under
+# /etc/apparmor.d/force-complain/). `omarchy-server-apparmor enforce` removes
+# that symlink.
+#
+# Provenance: this is usr.sbin.sshd from AppArmor's own
+# /usr/share/apparmor/extra-profiles, which Arch's `apparmor` package ships but
+# does NOT enable, and which upstream's README describes as "not as mature as
+# the profiles in /etc/apparmor.d". It is here because there is no other sshd
+# profile to have: the ~200 profiles Arch enables by default are for desktop
+# software, and none of them names a daemon a headless machine runs.
+#
+# Three changes from that file, and no others:
+#
+#   1. paths. Arch builds OpenSSH with --sbindir=/usr/bin and
+#      --libexecdir=/usr/lib/ssh, so /usr/sbin/sshd and /usr/lib/openssh/* --
+#      which are Debian's layout -- match nothing here. A profile whose
+#      attachment path does not exist is a profile that never loads, which is
+#      the quiet failure mode this route has to avoid.
+#
+#   2. the internal-sftp block. Upstream grants `/ r`, `/** r` and
+#      `owner /** rwl` so that the in-process SFTP server can serve any path.
+#      Those three lines give the confined daemon read access to every file on
+#      the machine, which is most of what confining it was supposed to prevent.
+#      They are commented out here. A machine that actually uses
+#      `Subsystem sftp internal-sftp` puts them back in
+#      /etc/apparmor.d/local/usr.bin.sshd, where they are the operator's
+#      decision and not a default. The out-of-process /usr/lib/ssh/sftp-server
+#      is unaffected: it is PUx, so it runs unconfined either way.
+#
+#   3. the local include, renamed to match the new profile name.
+#
+# Everything else, including the `passwd` child profile and the shells listed
+# Uxr (a login shell leaves the profile -- AppArmor confines sshd, not the
+# session it hands off to), is upstream's.
+
+# ------------------------------------------------------------------
+#
+#    Copyright (C) 2002-2005 Novell/SUSE
+#    Copyright (C) 2012 Canonical Ltd.
+#    Copyright (C) 2015-2016 Simon Deziel
+#
+#    This program is free software; you can redistribute it and/or
+#    modify it under the terms of version 2 of the GNU General Public
+#    License published by the Free Software Foundation.
+#
+# ------------------------------------------------------------------
+# will need to revalidate this profile once we finish re-architecting
+# the change_hat patch.
+#
+# vim:syntax=apparmor
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+/usr/bin/sshd {
+  include <abstractions/authentication>
+  include <abstractions/base>
+  include <abstractions/consoles>
+  include <abstractions/libpam-systemd>
+  include <abstractions/nameservice>
+  include <abstractions/wutmp>
+  include <abstractions/hosts_access>
+
+  capability sys_chroot,
+  capability sys_resource,
+  capability sys_tty_config,
+  capability net_bind_service,
+  capability chown,
+  capability fowner,
+  capability fsetid,
+  capability kill,
+  capability setgid,
+  capability setuid,
+  capability audit_control,
+  capability audit_write,
+  capability dac_override,
+  capability dac_read_search,
+  capability sys_ptrace,
+
+  # sshd doesn't require net_admin. libpam-systemd tries to
+  # use it if available to set the send/receive buffers size,
+  # but will fall back to a non-privileged version if it fails.
+  deny capability net_admin,
+
+  # needed when /proc is mounted with hidepid>=1
+  ptrace (read,trace) peer="unconfined",
+
+  unix (bind) type=stream addr="@*/bus/sshd/system",
+
+  dbus (send)
+       bus=system
+       path=/org/freedesktop/login1
+       interface=org.freedesktop.login1.Manager
+       member=CreateSessionWithPIDFD
+       peer=(label=unconfined),
+
+  /dev/ptmx rw,
+  /dev/pts/[0-9]* rw,
+  /dev/urandom r,
+  /etc/default/locale r,
+  /etc/environment r,
+  /etc/modules.conf r,
+  /etc/security/** r,
+  /etc/ssh/** r,
+  /etc/ssl/openssl.cnf r,
+  /usr/bin/sshd mrix,
+  /usr/share/ssh/blacklist.* r,
+  /var/log/btmp rw,
+  owner @{run}/sshd{,.init}.pid wl,
+  @{HOME}/.ssh/authorized_keys{,2} r,
+
+  @{PROC}/cmdline r,
+  @{PROC}/1/environ r,
+  @{PROC}/@{pids}/fd/ r,  # pid of the just-logged in user's shell
+  owner @{PROC}/@{pid}/loginuid rw,
+  owner @{PROC}/@{pid}/limits r,
+  owner @{PROC}/@{pid}/uid_map r,
+  owner @{PROC}/@{pid}/mounts r,
+  owner @{PROC}/@{pid}/oom_adj rw,
+  owner @{PROC}/@{pid}/oom_score_adj rw,
+
+  @{run}/systemd/notify w,
+
+  @{sys}/fs/cgroup/*/user/*/[0-9]*/ rw,
+  @{sys}/fs/cgroup/systemd/user.slice/user-[0-9]*.slice/session-c[0-9]*.scope/ rw,
+
+  /{usr/,}bin/ash      Uxr,
+  /{usr/,}bin/bash     Uxr,
+  /{usr/,}bin/bash2    Uxr,
+  /{usr/,}bin/bsh      Uxr,
+  /{usr/,}bin/csh      Uxr,
+  /{usr/,}bin/dash     Uxr,
+  /{usr/,}bin/ksh      Uxr,
+  /{usr/,}bin/sh       Uxr,
+  /{usr/,}bin/tcsh     Uxr,
+  /{usr/,}bin/zsh      Uxr,
+  /{usr/,}bin/zsh4     Uxr,
+  /{usr/,}bin/zsh5     Uxr,
+  /{usr/,}sbin/nologin Uxr,
+  /{usr/,}bin/false    Uxr,
+
+  # XXX: this needs to be enabled otherwise we risk locking out a user
+  # Call passwd for password change when expired
+  /usr/bin/passwd Cx -> passwd,
+
+  # to set memory protection for passwd
+  @{PROC}/@{pid}/task/@{pid}/attr/exec w,
+  profile passwd {
+    include <abstractions/authentication>
+    include <abstractions/base>
+    include <abstractions/nameservice>
+
+    capability audit_write,
+    capability chown,
+    capability fsetid,
+    capability setuid,
+    capability setgid,
+
+    /usr/bin/passwd r,
+    /dev/pts/[0-9]* rw,
+    @{run}/utmp rwk,
+
+    owner /etc/.pwd.lock rwk,
+    owner /etc/nshadow rw,
+    owner /etc/shadow  rw,
+    owner @{PROC}/@{pid}/loginuid r,
+
+    # XXX: put into another subprofile?
+    /usr/bin/gnome-keyring-daemon ix,
+    capability ipc_lock,
+    owner @{PROC}/@{pid}/status r,
+    owner @{HOME}/.cache/keyring-*/        rw,
+    owner @{HOME}/.cache/keyring-*/control rw,
+  }
+
+  /etc/legal r,
+  /etc/motd r,
+  @{run}/motd{,.dynamic}{,.new} rw,
+  @{run}/motd.d/ r,
+  @{run}/motd.d/* r,
+  owner @{HOME}/.cache/ w,
+  owner @{HOME}/.cache/motd.legal-displayed w,
+  /tmp/krb5cc* wk,
+  /tmp/ssh-[a-zA-Z0-9]*/ w,
+  /tmp/ssh-[a-zA-Z0-9]*/agent.[0-9]* wl,
+
+  # for internal-sftp -- deliberately NOT granted here; see the header.
+  # Put these three lines in /etc/apparmor.d/local/usr.bin.sshd if this machine
+  # serves SFTP through `Subsystem sftp internal-sftp`.
+  #   /         r,
+  #   /**       r,
+  #   owner /** rwl,
+
+  /usr/lib/ssh/sshd-auth ix,
+  /usr/lib/ssh/sshd-session ix,
+
+  /usr/lib/ssh/sftp-server PUx,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/usr.bin.sshd>
+}

@@ -1,0 +1,292 @@
+=== SELinux acceptance — VM 'srvsel' — 2026-08-29T07:58:18-03:00 ===
+mode under test: enforcing1
+
+[PASS] the kernel initialised SELinux
+      $ ls -d /sys/fs/selinux 2>&1; grep -o "lsm=[^ ]*" /proc/cmdline
+      /sys/fs/selinux
+      lsm=landlock,lockdown,yama,integrity,selinux,bpf
+
+[PASS] lsm= names selinux, with lockdown ahead of it and bpf last
+      $ grep -o "lsm=[^ ]*" /proc/cmdline
+      lsm=landlock,lockdown,yama,integrity,selinux,bpf
+
+[PASS] the cmdline came from inside the UKI, not from limine.conf
+      $ ~/.lab-sudo grep -c "lsm=" /boot/limine.conf 2>/dev/null; echo "in-cmdline=$(grep -c "lsm=landlock" /proc/cmdline)"
+      4
+      in-cmdline=1
+
+[PASS] the refpolicy-arch policy is loaded
+      $ sestatus
+      SELinux status:                 enabled
+      SELinuxfs mount:                /sys/fs/selinux
+      SELinux root directory:         /etc/selinux
+      Loaded policy name:             refpolicy-arch
+      Current mode:                   permissive
+      Mode from config file:          permissive
+      Policy MLS status:              disabled
+      Policy deny_unknown status:     denied
+      Memory protection checking:     actual (secure)
+      Max kernel policy version:      35
+
+[PASS] /etc/selinux/config says what the addon wrote
+      $ grep -E "^(SELINUX|SELINUXTYPE)=" /etc/selinux/config; readlink -f /etc/selinux/config
+      SELINUX=permissive
+      SELINUXTYPE=refpolicy-arch
+      /etc/selinux/config.refpolicy-arch
+
+[PASS] the profile's own file contexts are in the policy store
+      $ ~/.lab-sudo semanage fcontext -l -C
+      SELinux fcontext                                   type               Context
+      
+      /usr/share/omarchy/bin(/.*)?                       all files          system_u:object_r:bin_t 
+
+[PASS] and they are what the profile's commands actually carry
+      $ ls -Z /usr/share/omarchy/bin/omarchy-server-update
+      user_u:object_r:bin_t /usr/share/omarchy/bin/omarchy-server-update
+
+[PASS] every binary that needs libselinux reaches it
+      /usr/lib/systemd/systemd                 dlopen
+      /usr/bin/ls                              linked
+      /usr/bin/id                              linked
+      /usr/bin/sudo                            linked
+      /usr/lib/ssh/sshd-session                linked
+      /usr/bin/useradd                         linked
+      /usr/bin/mount                           linked
+      /usr/lib/security/pam_selinux.so         linked
+
+[PASS] the stock packages were replaced, not installed alongside
+      $ pacman -Qq | grep -E "^(systemd|coreutils|util-linux|shadow|sudo|openssh|pam|pambase)(-selinux)?$" | sort
+      coreutils-selinux
+      openssh-selinux
+      pam-selinux
+      pambase-selinux
+      shadow-selinux
+      sudo-selinux
+      systemd-selinux
+      util-linux-selinux
+
+[PASS] openssh was not downgraded by the rebuild
+      $ pacman -Q openssh-selinux; sshd -V 2>&1 | head -1
+      openssh-selinux 10.5p1-1
+      OpenSSH_10.5p1, OpenSSL 3.6.4 25 Aug 2026
+
+[PASS] init runs in a domain of its own
+      $ tr -d "\0" </proc/1/attr/current
+      system_u:system_r:init_t
+
+[PASS] sshd runs in a domain of its own
+      $ for p in $(pgrep -x sshd); do tr -d "\0" </proc/$p/attr/current; echo; done | sort -u
+      system_u:system_r:sshd_t
+
+[PASS] the ssh session is not simply sshd's own context
+      $ id -Z; echo "---"; tr -d "\0" </proc/$$/attr/current
+      user_u:user_r:user_t
+      ---
+      user_u:user_r:user_t
+
+[PASS] the profile's pam_faillock settings survived the pambase replacement
+      $ grep -n "pam_faillock" /etc/pam.d/system-auth; ls /etc/pam.d/*.pacnew 2>/dev/null
+      3:auth       required                    pam_faillock.so preauth silent deny=10 unlock_time=120
+      8:auth       [default=die]               pam_faillock.so authfail deny=10 unlock_time=120
+      11:auth       required                    pam_faillock.so      authsucc
+      12:# If you drop the above call to pam_faillock.so the lock will be done also
+
+[PASS] the transition is pam_selinux's, and it is in the sshd stack
+      $ grep -rn selinux /etc/pam.d/sshd /etc/pam.d/system-login 2>/dev/null
+      /etc/pam.d/system-login:13:# pam_selinux.so close should be the first session rule
+      /etc/pam.d/system-login:14:session    required   pam_selinux.so close
+      /etc/pam.d/system-login:19:# pam_selinux.so open should only be followed by sessions to be executed in the user context
+      /etc/pam.d/system-login:20:session    required   pam_selinux.so open
+
+[PASS] /etc and /usr carry real labels, not unlabeled_t
+      $ ls -Zd /etc /usr /usr/bin/sshd /etc/shadow
+            system_u:object_r:etc_t /etc
+         system_u:object_r:shadow_t /etc/shadow
+            system_u:object_r:usr_t /usr
+      system_u:object_r:sshd_exec_t /usr/bin/sshd
+
+[PASS] there is no significant pocket of unlabeled files
+      $ ~/.lab-sudo find /etc /usr /var -xdev -context "*unlabeled_t*" 2>/dev/null | head -20; echo "unlabeled=$(~/.lab-sudo find /etc /usr /var -xdev -context "*unlabeled_t*" 2>/dev/null | wc -l)"
+      unlabeled=0
+
+[PASS] the relabel flag was cleared, so the next boot does not repeat it
+      $ ls -l /.autorelabel 2>&1
+      ls: cannot access '/.autorelabel': No such file or directory
+
+--- switching to enforcing ---
+SELinux is now enforcing, and enforcing on the next boot.
+
+If this locks something out, the way back is the kernel command line:
+hold the Limine menu, edit the entry and add `enforcing=0`, or from a
+console: sudo omarchy-server-selinux permissive
+
+[PASS] the machine is enforcing
+      $ getenforce
+      Could not chdir to home directory /home/omarchy: Permission denied
+      Enforcing
+
+[FAIL] and it will still be enforcing after a reboot
+      $ grep "^SELINUX=" /etc/selinux/config
+      Could not chdir to home directory /home/omarchy: Permission denied
+      SELINUX=permissive
+
+[FAIL] sudo still works
+      $ ~/.lab-sudo id -un
+      Could not chdir to home directory /home/omarchy: Permission denied
+      bash: line 1: /home/omarchy/.lab-sudo: Permission denied
+
+[FAIL] a snapper snapshot can be taken
+      $ ~/.lab-sudo snapper -c root create -d selinux-acceptance --print-number && ~/.lab-sudo snapper -c root list | tail -3
+      Could not chdir to home directory /home/omarchy: Permission denied
+      bash: line 1: /home/omarchy/.lab-sudo: Permission denied
+
+[FAIL] pacman can run a transaction
+      $ ~/.lab-sudo pacman -Sy --noconfirm >/dev/null 2>&1; ~/.lab-sudo pacman -Q pacman-contrib && echo pacman-ok
+      Could not chdir to home directory /home/omarchy: Permission denied
+      bash: line 1: /home/omarchy/.lab-sudo: Permission denied
+
+[FAIL] the docker addon installs and runs a container
+      $ ~/.lab-sudo omarchy-server-addon docker >/tmp/addon-docker.log 2>&1; echo "addon-exit=$?"; tail -3 /tmp/addon-docker.log; ~/.lab-sudo docker run --rm hello-world >/tmp/hello.log 2>&1; echo "run-exit=$?"; grep -c "Hello from Docker" /tmp/hello.log
+      Could not chdir to home directory /home/omarchy: Permission denied
+      addon-exit=126
+      bash: line 1: /home/omarchy/.lab-sudo: Permission denied
+      run-exit=126
+      0
+
+[PASS] the fwall addon installs
+      $ ~/.lab-sudo omarchy-server-addon fwall 2>&1 | tail -3; command -v fwall
+      Could not chdir to home directory /home/omarchy: Permission denied
+      bash: line 1: /home/omarchy/.lab-sudo: Permission denied
+      /usr/bin/fwall
+
+[FAIL] the firewall still answers
+      $ ~/.lab-sudo ufw status verbose | head -8
+      Could not chdir to home directory /home/omarchy: Permission denied
+      bash: line 1: /home/omarchy/.lab-sudo: Permission denied
+
+[FAIL] a login on the serial console reaches a shell in a user domain
+      $ ~/.lab-sudo systemctl is-active serial-getty@ttyS0.service
+      Could not chdir to home directory /home/omarchy: Permission denied
+      bash: line 1: /home/omarchy/.lab-sudo: Permission denied
+
+[FAIL] omarchy-server-update completes
+      $ ~/.lab-sudo omarchy-server-update >/tmp/update.log 2>&1; echo "update-exit=$?"; tail -8 /tmp/update.log
+      Could not chdir to home directory /home/omarchy: Permission denied
+      update-exit=126
+      bash: line 1: /home/omarchy/.lab-sudo: Permission denied
+
+--- AVC denials accumulated by the workload above ---
+Could not chdir to home directory /home/omarchy: Permission denied
+      == AVC denials since boot ==
+      audit: type=1400 audit(1788000953.891:3): avc:  denied  { read } for  pid=288 comm="systemd-fstab-g" name="config" dev="vda2" ino=81965 scontext=system_u:system_r:systemd_generator_t tcontext=system_u:object_r:selinux_config_t tclass=lnk_file permissive=1
+      audit: type=1400 audit(1788000954.064:4): avc:  denied  { read } for  pid=312 comm="systemd-network" name="/" dev="tmpfs" ino=1 scontext=system_u:system_r:systemd_networkd_t tcontext=system_u:object_r:tmpfs_t tclass=dir permissive=1
+      audit: type=1400 audit(1788000954.065:5): avc:  denied  { open } for  pid=312 comm="systemd-network" path="/run/credentials/systemd-network-generator.service" dev="tmpfs" ino=1 scontext=system_u:system_r:systemd_networkd_t tcontext=system_u:object_r:tmpfs_t tclass=dir permissive=1
+      audit: type=1400 audit(1788000954.069:6): avc:  denied  { search } for  pid=311 comm="systemd-journal" name="/" dev="tmpfs" ino=1 scontext=system_u:system_r:syslogd_t tcontext=system_u:object_r:tmpfs_t tclass=dir permissive=1
+      audit: type=1400 audit(1788000954.069:7): avc:  denied  { search } for  pid=311 comm="systemd-journal" name="/" dev="tmpfs" ino=1 scontext=system_u:system_r:syslogd_t tcontext=system_u:object_r:tmpfs_t tclass=dir permissive=1
+      audit: type=1400 audit(1788000954.070:8): avc:  denied  { getattr } for  pid=311 comm="systemd-journal" path="/sys/fs/cgroup/system.slice/systemd-journald.service/memory.pressure" dev="cgroup2" ino=1348 scontext=system_u:system_r:syslogd_t tcontext=system_u:object_r:cgroup_t tclass=file permissive=1
+      audit: type=1400 audit(1788000954.070:9): avc:  denied  { read write } for  pid=311 comm="systemd-journal" name="memory.pressure" dev="cgroup2" ino=1348 scontext=system_u:system_r:syslogd_t tcontext=system_u:object_r:cgroup_t tclass=file permissive=1
+      audit: type=1400 audit(1788000954.070:10): avc:  denied  { open } for  pid=311 comm="systemd-journal" path="/sys/fs/cgroup/system.slice/systemd-journald.service/memory.pressure" dev="cgroup2" ino=1348 scontext=system_u:system_r:syslogd_t tcontext=system_u:object_r:cgroup_t tclass=file permissive=1
+      audit: type=1400 audit(1788000958.051:70): avc:  denied  { search } for  pid=542 comm="sshd-session" name="omarchy" dev="vda2" ino=257 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
+      audit: type=1400 audit(1788000958.051:71): avc:  denied  { search } for  pid=542 comm="sshd-session" name=".ssh" dev="vda2" ino=401 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
+      audit: type=1400 audit(1788000958.051:72): avc:  denied  { getattr } for  pid=542 comm="sshd-session" path="/home/omarchy/.ssh/authorized_keys" dev="vda2" ino=402 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788000958.051:73): avc:  denied  { search } for  pid=542 comm="sshd-session" name="omarchy" dev="vda2" ino=257 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
+      audit: type=1400 audit(1788000958.051:74): avc:  denied  { search } for  pid=542 comm="sshd-session" name=".ssh" dev="vda2" ino=401 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
+      audit: type=1400 audit(1788000958.051:75): avc:  denied  { read } for  pid=542 comm="sshd-session" name="authorized_keys" dev="vda2" ino=402 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788000958.051:76): avc:  denied  { open } for  pid=542 comm="sshd-session" path="/home/omarchy/.ssh/authorized_keys" dev="vda2" ino=402 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788000958.051:77): avc:  denied  { search } for  pid=542 comm="sshd-session" name="omarchy" dev="vda2" ino=257 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
+      audit: type=1400 audit(1788000958.051:78): avc:  denied  { search } for  pid=542 comm="sshd-session" name="omarchy" dev="vda2" ino=257 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
+      audit: type=1400 audit(1788000958.051:79): avc:  denied  { search } for  pid=542 comm="sshd-session" name=".ssh" dev="vda2" ino=401 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001001.192:137): avc:  denied  { search } for  pid=593 comm="sshd-session" name="omarchy" dev="vda2" ino=257 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001001.192:138): avc:  denied  { search } for  pid=593 comm="sshd-session" name="omarchy" dev="vda2" ino=257 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001001.192:139): avc:  denied  { search } for  pid=593 comm="sshd-session" name=".ssh" dev="vda2" ino=401 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001005.982:140): avc:  denied  { getattr } for  pid=311 comm="systemd-journal" path="/var/log/journal/8622cf4e8a764dc49b6ed4ab51641c0f/system@51b7852c6c7d486189b25547509a1fc9-0000000000000001-00065a2d6520a707.journal" dev="vda2" ino=273 scontext=system_u:system_r:syslogd_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788001014.073:141): avc:  denied  { write } for  pid=601 comm="bash" name="omarchy" dev="vda2" ino=257 scontext=user_u:user_r:user_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001014.073:142): avc:  denied  { add_name } for  pid=601 comm="bash" name=".p" scontext=user_u:user_r:user_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001014.073:143): avc:  denied  { create } for  pid=601 comm="bash" name=".p" scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788001014.074:144): avc:  denied  { write open } for  pid=601 comm="bash" path="/home/omarchy/.p" dev="vda2" ino=405 scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788001014.076:145): avc:  denied  { setattr } for  pid=600 comm="chmod" name=".p" dev="vda2" ino=405 scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788001014.101:146): avc:  denied  { read } for  pid=603 comm="bash" name=".p" dev="vda2" ino=405 scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788001014.101:147): avc:  denied  { read } for  pid=603 comm="sudo" path="/home/omarchy/.p" dev="vda2" ino=405 scontext=user_u:user_r:user_sudo_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788001014.110:148): avc:  denied  { net_admin } for  pid=603 comm="sudo" capability=12  scontext=user_u:user_r:user_sudo_t tcontext=user_u:user_r:user_sudo_t tclass=capability permissive=1
+      audit: type=1400 audit(1788001014.120:149): avc:  denied  { lock } for  pid=603 comm="sudo" path="/home/omarchy/.p" dev="vda2" ino=405 scontext=user_u:user_r:user_sudo_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788001014.120:150): avc:  denied  { ioctl } for  pid=603 comm="sudo" path="/home/omarchy/.p" dev="vda2" ino=405 ioctlcmd=0x542a scontext=user_u:user_r:user_sudo_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788001036.867:157): avc:  denied  { getattr } for  pid=311 comm="systemd-journal" path="/var/log/journal/8622cf4e8a764dc49b6ed4ab51641c0f/system@51b7852c6c7d486189b25547509a1fc9-0000000000000001-00065a2d6520a707.journal" dev="vda2" ino=273 scontext=system_u:system_r:syslogd_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788001093.153:158): avc:  denied  { write } for  pid=827 comm="sed" name="pam.d" dev="vda2" ino=16217 scontext=user_u:user_r:user_t tcontext=system_u:object_r:etc_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001093.153:159): avc:  denied  { add_name } for  pid=827 comm="sed" name="sedPbWPma" scontext=user_u:user_r:user_t tcontext=system_u:object_r:etc_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001093.153:160): avc:  denied  { create } for  pid=827 comm="sed" name="sedPbWPma" scontext=user_u:user_r:user_t tcontext=user_u:object_r:etc_t tclass=file permissive=1
+      audit: type=1400 audit(1788001093.153:161): avc:  denied  { write } for  pid=827 comm="sed" path="/etc/pam.d/sedPbWPma" dev="vda2" ino=90928 scontext=user_u:user_r:user_t tcontext=user_u:object_r:etc_t tclass=file permissive=1
+      audit: type=1400 audit(1788001093.153:162): avc:  denied  { setattr } for  pid=827 comm="sed" name="sedPbWPma" dev="vda2" ino=90928 scontext=user_u:user_r:user_t tcontext=user_u:object_r:etc_t tclass=file permissive=1
+      audit: type=1400 audit(1788001093.153:163): avc:  denied  { write } for  pid=827 comm="sed" name="pam.d" dev="vda2" ino=16217 scontext=user_u:user_r:user_t tcontext=system_u:object_r:etc_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001093.153:164): avc:  denied  { write } for  pid=827 comm="sed" name="pam.d" dev="vda2" ino=16217 scontext=user_u:user_r:user_t tcontext=system_u:object_r:etc_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001093.153:165): avc:  denied  { remove_name } for  pid=827 comm="sed" name="sedPbWPma" dev="vda2" ino=90928 scontext=user_u:user_r:user_t tcontext=system_u:object_r:etc_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001093.153:166): avc:  denied  { rename } for  pid=827 comm="sed" name="sedPbWPma" dev="vda2" ino=90928 scontext=user_u:user_r:user_t tcontext=user_u:object_r:etc_t tclass=file permissive=1
+      audit: type=1400 audit(1788001093.153:167): avc:  denied  { unlink } for  pid=827 comm="sed" name="system-auth" dev="vda2" ino=62462 scontext=user_u:user_r:user_t tcontext=system_u:object_r:etc_t tclass=file permissive=1
+      audit: type=1400 audit(1788001098.157:185): avc:  denied  { execute } for  pid=841 comm="bash" name=".lab-sudo" dev="vda2" ino=407 scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788001098.157:186): avc:  denied  { execute_no_trans } for  pid=841 comm="bash" path="/home/omarchy/.lab-sudo" dev="vda2" ino=407 scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788001098.228:187): avc:  denied  { search } for  pid=850 comm="sudo" name="556" dev="proc" ino=6125 scontext=user_u:user_r:user_sudo_t tcontext=system_u:system_r:sshd_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001098.228:188): avc:  denied  { read } for  pid=850 comm="sudo" name="stat" dev="proc" ino=11748 scontext=user_u:user_r:user_sudo_t tcontext=system_u:system_r:sshd_t tclass=file permissive=1
+      audit: type=1400 audit(1788001098.228:189): avc:  denied  { open } for  pid=850 comm="sudo" path="/proc/556/stat" dev="proc" ino=11748 scontext=user_u:user_r:user_sudo_t tcontext=system_u:system_r:sshd_t tclass=file permissive=1
+      audit: type=1400 audit(1788001098.252:190): avc:  denied  { search } for  pid=854 comm="semanage" name="vm" dev="proc" ino=1454 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:sysctl_vm_t tclass=dir permissive=1
+      audit: type=1400 audit(1788001098.252:191): avc:  denied  { read } for  pid=854 comm="semanage" name="overcommit_memory" dev="proc" ino=10491 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:sysctl_vm_overcommit_t tclass=file permissive=1
+      audit: type=1400 audit(1788001098.252:192): avc:  denied  { open } for  pid=854 comm="semanage" path="/proc/sys/vm/overcommit_memory" dev="proc" ino=10491 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:sysctl_vm_overcommit_t tclass=file permissive=1
+      audit: type=1400 audit(1788001098.263:193): avc:  denied  { getattr } for  pid=854 comm="semanage" path="/home/omarchy/.lab-pw" dev="vda2" ino=406 scontext=user_u:user_r:user_sudo_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788001098.477:194): avc:  denied  { search } for  pid=854 comm="semanage" name="selinux" dev="vda2" ino=81962 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:semanage_store_t tclass=dir permissive=1
+      
+      == summary: count, source domain, target context, class, permissions ==
+          10  system_u:system_r:sshd_t -> system_u:object_r:unlabeled_t : dir { search }
+           3  user_u:user_r:user_t -> system_u:object_r:etc_t : dir { write }
+           2  system_u:system_r:syslogd_t -> system_u:object_r:unlabeled_t : file { getattr }
+           2  system_u:system_r:syslogd_t -> system_u:object_r:tmpfs_t : dir { search }
+           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { write open }
+           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { setattr }
+           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { read }
+           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { execute_no_trans }
+           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { execute }
+           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { create }
+           1  user_u:user_r:user_t -> user_u:object_r:etc_t : file { write }
+           1  user_u:user_r:user_t -> user_u:object_r:etc_t : file { setattr }
+           1  user_u:user_r:user_t -> user_u:object_r:etc_t : file { rename }
+           1  user_u:user_r:user_t -> user_u:object_r:etc_t : file { create }
+           1  user_u:user_r:user_t -> system_u:object_r:unlabeled_t : dir { write }
+           1  user_u:user_r:user_t -> system_u:object_r:unlabeled_t : dir { add_name }
+           1  user_u:user_r:user_t -> system_u:object_r:etc_t : file { unlink }
+           1  user_u:user_r:user_t -> system_u:object_r:etc_t : dir { remove_name }
+           1  user_u:user_r:user_t -> system_u:object_r:etc_t : dir { add_name }
+           1  user_u:user_r:user_sudo_t -> user_u:user_r:user_sudo_t : capability { net_admin }
+           1  user_u:user_r:user_sudo_t -> user_u:object_r:unlabeled_t : file { read }
+           1  user_u:user_r:user_sudo_t -> user_u:object_r:unlabeled_t : file { lock }
+           1  user_u:user_r:user_sudo_t -> user_u:object_r:unlabeled_t : file { ioctl }
+           1  user_u:user_r:user_sudo_t -> user_u:object_r:unlabeled_t : file { getattr }
+           1  user_u:user_r:user_sudo_t -> system_u:system_r:sshd_t : file { read }
+           1  user_u:user_r:user_sudo_t -> system_u:system_r:sshd_t : file { open }
+           1  user_u:user_r:user_sudo_t -> system_u:system_r:sshd_t : dir { search }
+           1  user_u:user_r:user_sudo_t -> system_u:object_r:sysctl_vm_t : dir { search }
+           1  user_u:user_r:user_sudo_t -> system_u:object_r:sysctl_vm_overcommit_t : file { read }
+           1  user_u:user_r:user_sudo_t -> system_u:object_r:sysctl_vm_overcommit_t : file { open }
+           1  user_u:user_r:user_sudo_t -> system_u:object_r:semanage_store_t : dir { search }
+           1  system_u:system_r:systemd_networkd_t -> system_u:object_r:tmpfs_t : dir { read }
+           1  system_u:system_r:systemd_networkd_t -> system_u:object_r:tmpfs_t : dir { open }
+           1  system_u:system_r:systemd_generator_t -> system_u:object_r:selinux_config_t : lnk_file { read }
+           1  system_u:system_r:syslogd_t -> system_u:object_r:cgroup_t : file { read write }
+           1  system_u:system_r:syslogd_t -> system_u:object_r:cgroup_t : file { open }
+           1  system_u:system_r:syslogd_t -> system_u:object_r:cgroup_t : file { getattr }
+           1  system_u:system_r:sshd_t -> system_u:object_r:unlabeled_t : file { read }
+           1  system_u:system_r:sshd_t -> system_u:object_r:unlabeled_t : file { open }
+           1  system_u:system_r:sshd_t -> system_u:object_r:unlabeled_t : file { getattr }
+      
+      To turn these into a policy module:
+          journalctl -k -b -g 'avc: *denied' -o cat | audit2allow -m omarchy_server_local
+      Read what it produces before installing it. A rule that allows a denial
+      the machine should not have made is a hole, not a fix.
+
+[FAIL] enforcing: something was denied under the workload
+      53 AVC records this boot — see the dump above
+
+--- rebooting ---
+boot id before: Could not chdir to home directory /home/omarchy: Permission denied
+f3df782e-75e8-428c-aba9-6e8f4b57068e
+
+--- run aborted here ---
+The reboot step could not run: with SELinux enforcing, the user_t session
+cannot execute ~/.lab-sudo, so the script had no way to reach systemctl.
+See reports/2026-08-29-mandatory-access-control.md for what this means.

@@ -1,0 +1,228 @@
+#!/bin/bash
+
+# omarchy:summary=Inspect and switch the AppArmor mode of a headless server
+# omarchy:args=[status|complain|enforce|denials|disable]
+# omarchy:examples=omarchy server-apparmor status | omarchy server-apparmor denials
+# omarchy:requires-sudo=true
+
+# The runtime face of the `apparmor` addon. The addon leaves the profiles it
+# ships in complain mode: loaded, evaluated, nothing refused, everything that
+# would have been refused in the kernel log. This command reads that log
+# (`denials`), moves the machine to enforce once it is quiet (`enforce`), moves
+# it back (`complain`), and turns the module off at boot (`disable`).
+#
+# `status` also answers the question that matters most about this route on a
+# headless Arch machine: how many of the loaded profiles name a binary that is
+# actually installed. See docs/mac.md in the omarchy-server repository.
+
+set -uo pipefail
+
+argv=("$@")
+profile_dir=/etc/apparmor.d
+
+require_root() {
+  if ((EUID != 0)); then
+    exec sudo -E "$0" "${argv[@]}"
+  fi
+}
+
+require_userland() {
+  if ! command -v apparmor_parser >/dev/null; then
+    echo "omarchy-server-apparmor: AppArmor is not installed." >&2
+    echo "                         Run: omarchy-server-addon apparmor" >&2
+    exit 1
+  fi
+}
+
+kernel_has_apparmor() {
+  [[ -d /sys/kernel/security/apparmor ]]
+}
+
+# A profile name is the path of what it confines, with / written as a dot. That
+# is the mapping this uses to ask whether the machine has the binary at all.
+profile_binary() { # profile_binary <profile file name>
+  local name=$1
+  case "$name" in
+    abi | abstractions | disable | force-complain | local | tunables) return 1 ;;
+  esac
+  printf '/%s' "${name//./\/}"
+}
+
+cmd_status() {
+  require_userland
+
+  echo "== kernel =="
+  if kernel_has_apparmor; then
+    echo "securityfs: /sys/kernel/security/apparmor present"
+    echo "enabled:    $(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)"
+    echo "mode:       $(cat /sys/module/apparmor/parameters/mode 2>/dev/null)"
+  else
+    echo "securityfs: ABSENT -- the kernel did not initialise AppArmor this boot"
+    echo "            Check that the running command line names it:"
+    echo "                grep -o 'lsm=[^ ]*' /proc/cmdline"
+    echo "            The drop-in that puts it there is"
+    echo "            /etc/limine-entry-tool.d/omarchy-lsm-apparmor.conf, and it only"
+    echo "            reaches the kernel through a rebuilt UKI (limine-update)."
+  fi
+  grep -o 'lsm=[^ ]*' /proc/cmdline || echo "lsm= is not on the running command line"
+
+  echo
+  echo "== loaded profiles =="
+  if kernel_has_apparmor && command -v aa-status >/dev/null; then
+    aa-status --json 2>/dev/null >/dev/null && aa-status 2>/dev/null | sed -n '1,12p' ||
+      aa-status 2>&1 | sed -n '1,12p'
+  else
+    echo "(nothing loaded: the module is not active)"
+  fi
+
+  # The number that decides whether this route is worth anything here. Arch's
+  # apparmor package ships ~200 profiles, essentially all of them for desktop
+  # software; a profile whose attachment path does not exist confines nothing.
+  echo
+  echo "== coverage =="
+  local total=0 present=0 binary file name matched=()
+  for file in "$profile_dir"/*; do
+    [[ -f $file ]] || continue
+    name=${file##*/}
+    binary=$(profile_binary "$name") || continue
+    ((total++))
+    if [[ -x $binary ]]; then
+      ((present++))
+      matched+=("$name")
+    fi
+  done
+  echo "$present of $total profiles under $profile_dir name a binary this machine has"
+  ((present)) && printf '  %s\n' "${matched[@]}"
+
+  echo
+  echo "== complain-mode overrides shipped by this profile =="
+  if compgen -G "$profile_dir/force-complain/*" >/dev/null; then
+    ls -1 "$profile_dir/force-complain"
+  else
+    echo "(none: every shipped profile is in enforce mode)"
+  fi
+}
+
+cmd_denials() {
+  require_userland
+
+  echo "== AppArmor denials this boot =="
+  local lines
+  lines=$(journalctl -k --no-pager -b -g 'apparmor="DENIED"' -o cat 2>/dev/null)
+  if [[ -z $lines ]]; then
+    echo "(none in this boot's kernel log)"
+    return
+  fi
+
+  echo "$lines"
+  echo
+  echo "== summary: count, profile, operation, denied mask, name =="
+  awk '
+    {
+      profile = operation = mask = name = "?"
+      for (i = 1; i <= NF; i++) {
+        split($i, kv, "=")
+        gsub(/"/, "", kv[2])
+        if (kv[1] == "profile")        profile   = kv[2]
+        if (kv[1] == "operation")      operation = kv[2]
+        if (kv[1] == "requested_mask") mask      = kv[2]
+        if (kv[1] == "name")           name      = kv[2]
+      }
+      key = profile " : " operation " " mask " " name
+      count[key]++
+    }
+    END { for (k in count) printf "%6d  %s\n", count[k], k }
+  ' <<<"$lines" | sort -rn
+
+  echo
+  echo "To turn these into rules, put them in $profile_dir/local/<profile>,"
+  echo "which the shipped profiles include and no package owns. \`aa-logprof\`"
+  echo "walks the same log interactively when python-gobject is installed."
+}
+
+set_mode() { # set_mode <complain|enforce>
+  require_root
+  require_userland
+
+  local mode=$1 file name changed=0
+  install -d "$profile_dir/force-complain"
+
+  for file in "$OMARCHY_MAC_SHIPPED_PROFILES"/*; do
+    [[ -f $file ]] || continue
+    name=${file##*/}
+    [[ -f $profile_dir/$name ]] || continue
+
+    if [[ $mode == complain ]]; then
+      ln -sf "../$name" "$profile_dir/force-complain/$name"
+    else
+      rm -f "$profile_dir/force-complain/$name"
+    fi
+    changed=1
+    echo "$name -> $mode"
+  done
+
+  ((changed)) || {
+    echo "omarchy-server-apparmor: this profile ships no AppArmor profiles to switch." >&2
+    exit 1
+  }
+
+  # apparmor_parser --replace re-reads the profile with the force-complain
+  # override now in place; the change is live without a reboot.
+  if kernel_has_apparmor; then
+    for file in "$OMARCHY_MAC_SHIPPED_PROFILES"/*; do
+      [[ -f $file ]] || continue
+      name=${file##*/}
+      [[ -f $profile_dir/$name ]] || continue
+      apparmor_parser --replace "$profile_dir/$name" ||
+        echo "apparmor_parser failed on $name" >&2
+    done
+  else
+    echo "(the module is not active this boot; the change applies at the next one)"
+  fi
+}
+
+cmd_disable() {
+  require_root
+
+  rm -f /etc/limine-entry-tool.d/omarchy-lsm-apparmor.conf
+  echo "Removed /etc/limine-entry-tool.d/omarchy-lsm-apparmor.conf"
+  systemctl disable apparmor.service 2>/dev/null || true
+
+  if command -v limine-update >/dev/null; then
+    limine-update
+  else
+    echo "limine-update is not installed; rebuild the boot entry by hand." >&2
+  fi
+
+  echo
+  echo "AppArmor will not initialise on the next boot."
+  echo 'The package is still installed; `sudo pacman -Rns apparmor` removes it.'
+}
+
+usage() {
+  echo "Usage: omarchy-server-apparmor <command>"
+  echo
+  echo "  status      is the module active, what loaded, and how much of it applies here"
+  echo "  denials     what would have been (or was) refused this boot, summarised"
+  echo "  complain    load and log, refuse nothing"
+  echo "  enforce     refuse what the profiles do not allow"
+  echo "  disable     stop initialising AppArmor at boot, keep the package"
+}
+
+# The profiles this profile ships, which are the only ones `complain`/`enforce`
+# touch: the ~200 that come with Arch's apparmor package are that package's
+# business and are left in whatever mode it shipped them.
+OMARCHY_MAC_SHIPPED_PROFILES=${OMARCHY_PATH:-/usr/share/omarchy}/install/server/mac/apparmor
+
+case "${1:-status}" in
+  status) cmd_status ;;
+  denials) cmd_denials ;;
+  complain) set_mode complain ;;
+  enforce) set_mode enforce ;;
+  disable) cmd_disable ;;
+  -h | --help | help) usage ;;
+  *)
+    echo "omarchy-server-apparmor: unknown command '$1'. Try --help." >&2
+    exit 2
+    ;;
+esac

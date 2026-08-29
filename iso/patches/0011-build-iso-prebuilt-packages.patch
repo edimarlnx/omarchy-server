@@ -1,0 +1,108 @@
+diff --git a/builder/build-iso.sh b/builder/build-iso.sh
+--- a/builder/build-iso.sh
++++ b/builder/build-iso.sh
+@@ -191,6 +191,74 @@
+   LOCAL_OMARCHY_BUILD=1
+ fi
+ 
++# ─────────────────────────────────────────────────────────────────────────────
++# Prebuilt packages. Some of what a profile's addons offer cannot be built here
++# and cannot be downloaded either: the SELinux package set is ~20 packages, one
++# of which is systemd, and rebuilding it inside every ISO build would add most
++# of an hour to a job that takes minutes. It is built once by the packages
++# repository's scripts/build-selinux.sh and dropped into
++# <pkgs-checkout>/prebuilt/, which the caller populates.
++#
++# They join the offline mirror the way the locally built omarchy* packages do,
++# but in an array of their own. The difference matters: local_package_names is
++# ALSO the list of packages the target install is expected to end up with, and
++# these are addon packages that nothing installs by default -- several of them
++# `provides=`/`conflicts=` a package that IS installed by default, so resolving
++# the two lists together is an unsatisfiable transaction.
++#
++# prebuilt_package_names therefore joins two of the three uses: the exclusion
++# from the online download (nothing here exists on a mirror) and the keep-set
++# the prune step reads. Not the third: the expected-package count.
++#
++# Their DEPENDENCIES are a separate problem and the reason the first attempt at
++# this failed the install: excluding a package from the online download also
++# means nothing pulls what it depends on. setools wants python-networkx and
++# python-setuptools, selinux-python wants python-audit, and none of the three
++# is in the base closure -- so the addon reached the target chroot and pacman
++# refused the transaction. The depends are therefore read out of each package's
++# .PKGINFO and added to the download list, minus the ones another prebuilt
++# package provides.
++#
++# Signatures are deliberately not copied. The offline mirror is unsigned --
++# the packages built above are not signed either -- and a .sig from a key the
++# live environment does not trust is worse than none.
++# ─────────────────────────────────────────────────────────────────────────────
++prebuilt_package_names=()
++prebuilt_dependencies=()
++if [[ -d /omarchy-pkgs/prebuilt ]]; then
++  shopt -s nullglob
++  prebuilt_packages=(/omarchy-pkgs/prebuilt/*.pkg.tar.zst)
++  shopt -u nullglob
++  if ((${#prebuilt_packages[@]})); then
++    echo "Adding ${#prebuilt_packages[@]} prebuilt packages to the offline mirror"
++    for prebuilt_package in "${prebuilt_packages[@]}"; do
++      cp -f "$prebuilt_package" "$offline_mirror_dir/"
++      read -r prebuilt_name _ < <(pacman -Qp "$prebuilt_package" 2>/dev/null) || {
++        echo "ERROR: $prebuilt_package is not a readable package" >&2
++        exit 1
++      }
++      prebuilt_package_names+=("$prebuilt_name")
++    done
++
++    # Second pass, because the first has to finish before a dependency can be
++    # recognised as "provided by another prebuilt package".
++    for prebuilt_package in "${prebuilt_packages[@]}"; do
++      while read -r prebuilt_dep; do
++        prebuilt_dep=${prebuilt_dep%%[<>=]*}
++        # A soname dependency is satisfied by the package that also appears in
++        # the same depends list under its own name, and pacman cannot download
++        # one by soname from a repository it has not synced.
++        [[ $prebuilt_dep == *.so ]] && continue
++        [[ " ${prebuilt_package_names[*]} " == *" $prebuilt_dep "* ]] && continue
++        prebuilt_dependencies+=("$prebuilt_dep")
++      done < <(bsdtar -xOf "$prebuilt_package" .PKGINFO 2>/dev/null |
++        sed -n 's/^depend = //p')
++    done
++    echo "Prebuilt packages depend on: $(printf '%s ' "${prebuilt_dependencies[@]}")"
++    LOCAL_OMARCHY_BUILD=1
++  fi
++fi
++
+ # Node.js binary for offline mise install.
+ NODE_DIST_URL="https://nodejs.org/dist/latest"
+ NODE_SHASUMS=$(curl -fsSL "$NODE_DIST_URL/SHASUMS256.txt")
+@@ -316,6 +384,11 @@
+     # Always include the selected Omarchy packages so the target install can
+     # find the runtime and companion packages in the offline mirror.
+     printf '%s\n' "${local_package_names[@]}"
++    # What the prebuilt packages need and the base closure does not already
++    # have. Nothing else pulls these, and the addon fails in the target chroot
++    # without them. Guarded, because printf on an empty array still writes one
++    # empty line and pacman would be handed an empty target.
++    ((${#prebuilt_dependencies[@]})) && printf '%s\n' "${prebuilt_dependencies[@]}"
+   } | sort -u
+ )
+ 
+@@ -324,7 +397,7 @@
+ # the published versions on top.
+ if [[ -n ${LOCAL_OMARCHY_BUILD:-} ]]; then
+   exclude_args=()
+-  for local_package_name in "${local_package_names[@]}"; do
++  for local_package_name in "${local_package_names[@]}" "${prebuilt_package_names[@]}"; do
+     exclude_args+=(-e "$local_package_name")
+   done
+   mapfile -t all_packages < <(
+@@ -364,7 +437,7 @@
+ # checkouts. Add those exact artifacts back to the keep-set after verifying
+ # that the local build left exactly one file for each selected package name.
+ if [[ -n ${LOCAL_OMARCHY_BUILD:-} ]]; then
+-  for local_package_name in "${local_package_names[@]}"; do
++  for local_package_name in "${local_package_names[@]}" "${prebuilt_package_names[@]}"; do
+     local_package_file=""
+     for candidate in "$offline_mirror_dir/$local_package_name-"*.pkg.tar.*; do
+       [[ -f $candidate && $candidate != *.sig ]] || continue

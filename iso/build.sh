@@ -133,6 +133,25 @@ else
   cp -a "$repo_root/profile/$profile" "$pkgs_scratch/profile/$profile" 2>/dev/null ||
     { [[ $profile == desktop ]] || { echo "Error: no profile/$profile in this repo." >&2; exit 1; }; }
 
+  # Prebuilt packages the ISO builder copies straight into the offline mirror
+  # (iso/patches/0011). This is where the SELinux set arrives: ~20 packages,
+  # one of them systemd, built once by the packages repository's
+  # scripts/build-selinux.sh instead of inside every ISO build.
+  #
+  # Missing is not an error. It means the `selinux` addon will not be
+  # installable from this ISO's offline mirror, which is the right outcome for
+  # somebody who has not built that set -- and the addon says so when it cannot
+  # find its packages.
+  selinux_out="$pkgs_repo/out/selinux"
+  if compgen -G "$selinux_out/*.pkg.tar.zst" >/dev/null; then
+    echo "› bundling $(ls "$selinux_out"/*.pkg.tar.zst | wc -l) prebuilt SELinux packages"
+    mkdir -p "$pkgs_scratch/prebuilt"
+    cp -f "$selinux_out"/*.pkg.tar.zst "$pkgs_scratch/prebuilt/"
+  else
+    echo "› no prebuilt SELinux packages in $selinux_out; the selinux addon will not be bundled"
+    echo "  build them with: (cd $pkgs_repo && ./scripts/build-selinux.sh)"
+  fi
+
   # Same overlay tarball pkgs/build.sh ships as a declared makepkg source.
   for package in omarchy-server-settings omarchy-server; do
     tar -czf "$pkgs_scratch/pkgbuilds/$package/omarchy-server-overlay.tar.gz" \

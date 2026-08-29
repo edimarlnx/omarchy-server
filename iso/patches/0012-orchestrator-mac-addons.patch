@@ -1,0 +1,73 @@
+diff --git a/configs/airootfs/usr/local/bin/omarchy-cidata-load b/configs/airootfs/usr/local/bin/omarchy-cidata-load
+--- a/configs/airootfs/usr/local/bin/omarchy-cidata-load
++++ b/configs/airootfs/usr/local/bin/omarchy-cidata-load
+@@ -52,7 +52,11 @@
+ # `secureboot` is a marker file too: its presence makes the install generate
+ # this machine's own Secure Boot keys, sign the boot chain with them and enroll
+ # them when the firmware is in Setup Mode. Its content is not read.
+-optional_inputs=(user_credentials.json defer-provisioning user_full_name.txt user_email_address.txt user_encrypt_installation.txt authorized_keys tailscale_authkey profile addons unattended-updates secureboot)
++# `selinux` and `apparmor` are marker files as well: each turns on the server
++# profile's mandatory-access-control addon of that name, in its permissive /
++# complain mode. They are mutually exclusive, and the addon refuses the second
++# one rather than silently installing a module the kernel will not run.
++optional_inputs=(user_credentials.json defer-provisioning user_full_name.txt user_email_address.txt user_encrypt_installation.txt authorized_keys tailscale_authkey profile addons unattended-updates secureboot selinux apparmor)
+ for file in user_configuration.json "${optional_inputs[@]}"; do
+   rm -f "$dest/$file"
+ done
+diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
+--- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
++++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
+@@ -168,6 +168,39 @@
+ 
+ SECURE_BOOT_ADDON = "secureboot"
+ 
++# ─────────────────────────────────────────────────────────────────────────────
++# Mandatory access control. Two marker files on the autoinstall drive,
++# `selinux` and `apparmor`, each asking for the server profile's addon of that
++# name. Unlike Secure Boot there is no phase of its own and nothing to enroll:
++# the addon is the whole of it, and the addon phase already knows how to
++# install a package set out of the offline mirror and run its setup leaf.
++#
++# The ordering matters for the same reason Secure Boot's does. Both addons
++# write a /etc/limine-entry-tool.d drop-in that adds `lsm=` to the kernel
++# command line, and the command line is baked into the UKI, which
++# finalize_limine_boot builds after every addon has run.
++#
++# Asking for both is a mistake, not a configuration: the kernel initialises one
++# major LSM. It is refused here, at the drive, rather than half-applied on the
++# target.
++# ─────────────────────────────────────────────────────────────────────────────
++
++MAC_ADDONS = ("selinux", "apparmor")
++
++
++def _requested_mac_addon() -> str | None:
++    if not _is_server_profile():
++        return None
++
++    requested = [name for name in MAC_ADDONS if Path(f"/root/{name}").exists()]
++    if len(requested) > 1:
++        raise RuntimeError(
++            "the autoinstall drive asks for both "
++            + " and ".join(requested)
++            + "; the kernel runs one major LSM, so they are mutually exclusive"
++        )
++    return requested[0] if requested else None
++
+ 
+ def _secure_boot_requested() -> bool:
+     if not _is_server_profile():
+@@ -1329,6 +1362,13 @@
+     if _secure_boot_requested() and SECURE_BOOT_ADDON not in names:
+         names.insert(0, SECURE_BOOT_ADDON)
+ 
++    # After Secure Boot, before anything else: the MAC addon relabels the
++    # filesystem (SELinux) or loads profiles (AppArmor), and both are cheaper
++    # to do before the addons that come after them have written more files.
++    mac_addon = _requested_mac_addon()
++    if mac_addon and mac_addon not in names:
++        names.insert(1 if SECURE_BOOT_ADDON in names else 0, mac_addon)
++
+     return names
+ 
+ 

@@ -578,6 +578,97 @@ by consoles that may have no truecolor — and slot 32 is the one
 
 ---
 
+## 2.6 The SELinux package set
+
+The `selinux` addon needs nineteen packages that exist in no Arch repository.
+They are built by `omarchy-server-pkgs/scripts/build-selinux.sh`, which is a
+second, separate build path from `scripts/build.sh` for three reasons: the
+sources are somebody else's PKGBUILDs, the builds are real compiles rather than
+`arch=any` file bundles, and one of them is systemd.
+
+```bash
+cd ../omarchy-server-pkgs
+./scripts/build-selinux.sh                 # every package in the manifest
+./scripts/build-selinux.sh libselinux      # one
+```
+
+Nothing is vendored. `pkgbuilds/selinux.manifest` holds the pinned upstream
+commit of [`archlinuxhardened/selinux`](https://github.com/archlinuxhardened/selinux),
+the build order, and a paragraph per package saying why it is in the set —
+followed by a paragraph per package saying why the ones that are not, are not.
+The script clones that commit, applies whatever is in
+`pkgbuilds/selinux-overrides/`, and builds into `out/selinux/`. Packages whose
+exact `pkgver-pkgrel` file names are already there are skipped, so an
+interrupted run resumes; `OMARCHY_SELINUX_FORCE=1` rebuilds.
+
+Three things differ from `scripts/build.sh` and each has a reason:
+
+- **Privileges are dropped with `setpriv`, not `su`.** This build installs
+  `pam-selinux` over the container's own pam, because `systemd-selinux` builds
+  against it. Dropping privileges through a PAM stack in the middle of being
+  replaced is not a risk worth taking; `setpriv` is a direct setuid/setgid and
+  never opens a PAM session.
+- **Dependencies are installed as root, not by `makepkg -s`.** `makepkg -s`
+  shells out to `sudo`, which is the same problem, and half of what these
+  PKGBUILDs depend on exists in no repository because an earlier package in the
+  list built it. `pacman -T` reports what is still unsatisfied; anything the
+  sync databases do not know is one of those and is already installed.
+- **`PATH` includes `/usr/bin/vendor_perl`.** `po4a`, a makedepend of
+  `util-linux-selinux`, installs there. Without it meson reports
+  `Program po4a found: NO` and fails a build with the package installed —
+  which is exactly how that line came to be written down.
+
+The two shared halves live in `scripts/gnupg-builder.sh`, sourced by both build
+scripts, so the signing key is prepared the same way in both.
+
+### Lockstep with Arch
+
+Eight of the nineteen `provides=`/`conflicts=` a core Arch package. That
+creates a standing obligation: **if the rebuild is behind Arch, installing it
+is a downgrade**, delivered silently through `provides=`.
+
+At the pinned commit, seven of the eight matched Arch exactly and one did not:
+`openssh-selinux` was 10.4p1-3 against Arch's 10.5p1-1. Installing it would
+have downgraded the one daemon this profile exposes to the network. So
+`pkgbuilds/selinux-overrides/openssh-selinux/` carries Arch's current `openssh`
+PKGBUILD with the four SELinux changes archlinuxhardened makes — the name,
+`libselinux` in `depends`, `conflicts`/`provides`, and `--with-selinux` — and
+nothing else. A second override, `libselinux`, backports the one-line upstream
+fix that lets 3.10 build against Python 3.14.
+
+Checking that by hand does not scale. What a pipeline adopting this needs is a
+job that, for each `*-selinux` package, compares its `pkgver` to the Arch
+package of the same name and fails when the rebuild is behind:
+
+```bash
+# The check, in the form it would take. Not yet wired into CI.
+for pkg in coreutils cronie dbus findutils iproute2 logrotate openssh \
+           pam pambase psmisc shadow sudo systemd util-linux; do
+  ours=$(sed -n 's/^pkgver=//p' "$tree/$pkg-selinux/PKGBUILD")
+  theirs=$(pacman -Si "$pkg" | awk '/^Version/ { print $3 }')
+  [[ $theirs == "$ours"-* ]] || echo "BEHIND: $pkg-selinux $ours vs $theirs"
+done
+```
+
+That job is the largest piece of unfinished work in this route, and
+`docs/mac.md` §3 says so in the same words.
+
+### Where they end up
+
+Two places, and neither is `[omarchy-server]` yet:
+
+- `out/selinux/` — where `iso/build.sh` copies them from, into
+  `<pkgs-checkout>/prebuilt/`, which `iso/patches/0011` drops into the ISO's
+  offline mirror. That is how `omarchy-server-addon selinux` works on a machine
+  that has never seen the network.
+- `scripts/publish.sh` does **not** publish them today. Nineteen packages, one
+  of them a full systemd, is a different release cadence from four `arch=any`
+  file bundles, and pushing them into the same `repo` release without first
+  solving the lockstep check above would ship a downgrade to every installed
+  machine the first time upstream falls behind.
+
+---
+
 ## 3. Build and test
 
 ```bash

@@ -19,6 +19,7 @@ scripts and artifacts live in `pocs/`.
 
 | Date | Report | Subject | Result |
 |---|---|---|---|
+| 2026-08-29 | [Mandatory access control](2026-08-29-mandatory-access-control.md) | SELinux and AppArmor built, installed and run against the same workload, permissive then enforcing | AppArmor 24/24 in enforce; SELinux locked the operator out, root-caused and fixed, not re-validated |
 | 2026-08-29 | [ZFS as a signed kernel module](2026-08-29-zfs-signed-module.md) | whether an out-of-tree module signed by a key this profile controls loads under Secure Boot | it does not; the work is paused on that answer |
 | 2026-08-29 | [Secure Boot](2026-08-29-secure-boot.md) | own-keys Secure Boot, enrolled during a headless install | 24 passed, 0 failed |
 | 2026-08-29 | [Unattended update and desktop parity](2026-08-29-unattended-update-and-desktop-parity.md) | an update with nobody to answer it; the patch series measured against a stock desktop | 37/37; same 942 packages as the reference |

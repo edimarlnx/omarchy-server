@@ -1,0 +1,188 @@
+=== AppArmor acceptance — VM 'srvaa' — 2026-08-29T07:50:32-03:00 ===
+mode under test: enforce1
+
+[PASS] the kernel initialised AppArmor
+      $ ls -d /sys/kernel/security/apparmor 2>&1; cat /sys/module/apparmor/parameters/enabled
+      /sys/kernel/security/apparmor
+      Y
+
+[PASS] lsm= names apparmor, with lockdown ahead of it and bpf last
+      $ grep -o "lsm=[^ ]*" /proc/cmdline
+      lsm=landlock,lockdown,yama,integrity,apparmor,bpf
+
+[PASS] apparmor.service is enabled and ran
+      $ ~/.lab-sudo systemctl is-enabled apparmor.service; ~/.lab-sudo systemctl show -p Result --value apparmor.service
+      enabled
+      success
+
+[PASS] profiles are loaded into the kernel
+      $ ~/.lab-sudo aa-status | head -6
+      apparmor module is loaded.
+      163 profiles are loaded.
+      78 profiles are in enforce mode.
+         /usr/lib/apache2/mpm-prefork/apache2
+         /usr/lib/apache2/mpm-prefork/apache2//DEFAULT_URI
+         /usr/lib/apache2/mpm-prefork/apache2//HANDLING_UNTRUSTED_INPUT
+
+--- coverage ---
+== kernel ==
+      securityfs: /sys/kernel/security/apparmor present
+      enabled:    Y
+      mode:       enforce
+      lsm=landlock,lockdown,yama,integrity,apparmor,bpf
+      
+      == loaded profiles ==
+      apparmor module is loaded.
+      163 profiles are loaded.
+      78 profiles are in enforce mode.
+         /usr/lib/apache2/mpm-prefork/apache2
+         /usr/lib/apache2/mpm-prefork/apache2//DEFAULT_URI
+         /usr/lib/apache2/mpm-prefork/apache2//HANDLING_UNTRUSTED_INPUT
+         /usr/lib/apache2/mpm-prefork/apache2//phpsysinfo
+         apache2
+         apache2//DEFAULT_URI
+         apache2//HANDLING_UNTRUSTED_INPUT
+         apache2//phpsysinfo
+         avahi-daemon
+      
+      == coverage ==
+      2 of 146 profiles under /etc/apparmor.d name a binary this machine has
+        bin.ping
+        usr.bin.sshd
+      
+      == complain-mode overrides shipped by this profile ==
+      usr.bin.sshd
+
+[PASS] the coverage line is present and names at least sshd
+      $ ~/.lab-sudo omarchy-server-apparmor status | sed -n "/== coverage ==/,/^$/p"
+      == coverage ==
+      2 of 146 profiles under /etc/apparmor.d name a binary this machine has
+        bin.ping
+        usr.bin.sshd
+
+[PASS] sshd runs under the shipped profile, not unconfined
+      $ ~/.lab-sudo aa-status --json 2>/dev/null | head -c 400; echo; for p in $(pgrep -x sshd); do echo "$p: $(cat /proc/$p/attr/current 2>/dev/null)"; done
+      {"version": "2", "profiles": {"/usr/lib/apache2/mpm-prefork/apache2": "enforce", "/usr/lib/apache2/mpm-prefork/apache2//DEFAULT_URI": "enforce", "/usr/lib/apache2/mpm-prefork/apache2//HANDLING_UNTRUSTED_INPUT": "enforce", "/usr/lib/apache2/mpm-prefork/apache2//phpsysinfo": "enforce", "apache2": "enforce", "apache2//DEFAULT_URI": "enforce", "apache2//HANDLING_UNTRUSTED_INPUT": "enforce", "apache2//
+      677: /usr/bin/sshd (complain)
+
+[PASS] the profile is the one this profile ships, at the Arch path
+      $ head -60 /etc/apparmor.d/usr.bin.sshd | grep -E "^/usr/bin/sshd \{|usr/lib/ssh/"
+      #      decision and not a default. The out-of-process /usr/lib/ssh/sftp-server
+      /usr/bin/sshd {
+
+[PASS] the internal-sftp blanket read of the whole filesystem is not granted
+      $ grep -nE "^\s*(/\*\*|owner /\*\*|/ ) " /etc/apparmor.d/usr.bin.sshd; echo "granted=$(grep -cE "^\s*/\*\*\s+r," /etc/apparmor.d/usr.bin.sshd)"
+      granted=0
+
+[PASS] there is a local/ include for site rules, owned by nobody
+      $ ls -l /etc/apparmor.d/local/usr.bin.sshd; pacman -Qo /etc/apparmor.d/local/usr.bin.sshd 2>&1 | tail -1
+      -rw-r--r-- 1 root root 81 Aug 29 07:37 /etc/apparmor.d/local/usr.bin.sshd
+      error: No package owns /etc/apparmor.d/local/usr.bin.sshd
+
+--- switching the shipped profiles to enforce ---
+usr.bin.sshd -> enforce
+
+[PASS] sshd is in enforce mode
+      $ ~/.lab-sudo aa-status | grep -A20 "profiles are in enforce mode" | grep sshd
+         /usr/bin/sshd
+         /usr/bin/sshd//passwd
+
+[PASS] a write the profile does not allow is actually refused
+      $ ~/.lab-sudo bash -c "echo test >/root/.apparmor-probe" 2>&1; echo "exists=$(~/.lab-sudo test -f /root/.apparmor-probe && echo yes || echo no)"
+      exists=yes
+
+[PASS] ssh still works after the profiles loaded
+      $ echo "logged in as $(id -un)@$(uname -n)"
+      logged in as omarchy@omarchy-apparmor
+
+[PASS] sudo still works
+      $ ~/.lab-sudo id -un
+      root
+
+[PASS] a snapper snapshot can be taken
+      $ ~/.lab-sudo snapper -c root create -d apparmor-acceptance --print-number && ~/.lab-sudo snapper -c root list | tail -3
+      3
+      1 | single |       | Sat Aug 29 07:49:03 2026 | root |         | apparmor-acceptance |
+      2 | single |       | Sat Aug 29 07:49:19 2026 | root | number  | 4.0.1-3             |
+      3 | single |       | Sat Aug 29 07:50:33 2026 | root |         | apparmor-acceptance |
+
+[PASS] pacman can run a transaction
+      $ ~/.lab-sudo pacman -Sy --noconfirm >/dev/null 2>&1; ~/.lab-sudo pacman -Q pacman-contrib && echo pacman-ok
+      pacman-contrib 1.13.1-1
+      pacman-ok
+
+[PASS] the docker addon installs and runs a container
+      $ ~/.lab-sudo omarchy-server-addon docker >/tmp/addon-docker.log 2>&1; echo "addon-exit=$?"; tail -3 /tmp/addon-docker.log; ~/.lab-sudo docker run --rm hello-world >/tmp/hello.log 2>&1; echo "run-exit=$?"; grep -c "Hello from Docker" /tmp/hello.log
+      addon-exit=0
+      # END UFW AND DOCKER
+      Firewall reloaded
+      Addon 'docker' installed.
+      run-exit=0
+      1
+
+[PASS] the fwall addon installs
+      $ ~/.lab-sudo omarchy-server-addon fwall 2>&1 | tail -3; command -v fwall
+      warning: omarchy-server-settings: local (4.0.1-3) is newer than omarchy-server (4.0.1-2)
+       there is nothing to do
+      Addon 'fwall' installed.
+      /usr/bin/fwall
+
+[PASS] the firewall still answers
+      $ ~/.lab-sudo ufw status verbose | head -8
+      Status: active
+      Logging: on (low)
+      Default: deny (incoming), allow (outgoing), deny (routed)
+      New profiles: skip
+      
+      To                         Action      From
+      --                         ------      ----
+      22/tcp                     LIMIT IN    Anywhere                  
+
+[PASS] the serial console getty is running
+      $ ~/.lab-sudo systemctl is-active serial-getty@ttyS0.service
+      active
+
+[PASS] the selinux addon refuses to install over this one
+      $ ~/.lab-sudo omarchy-server-addon selinux 2>&1 | tail -8
+      selinux: this machine is already set up for apparmor.
+               The kernel runs one major LSM, so the two addons are mutually
+               exclusive. Remove the other one first:
+                   sudo omarchy-server-apparmor disable
+               and reboot before installing this one.
+
+[PASS] omarchy-server-update completes
+      $ ~/.lab-sudo omarchy-server-update >/tmp/update.log 2>&1; echo "update-exit=$?"; tail -8 /tmp/update.log
+      update-exit=0
+      [5F core is up to date[K[1E extra is up to date[K[2E omarchy is up to date[K[1E omarchy-server is up to date[K[2F multilib is up to date[K[3E[1;34m::[0;1m Starting full system upgrade...
+      [0m there is nothing to do
+      [?25h]3008;end=ded8ccedca3d42f997c3ea71ce1c9fac\[1;33mwarning: [0momarchy-server-settings: local (4.0.1-3) is newer than omarchy-server (4.0.1-2)
+      
+      [32m
+      Restarting shell[0m
+      All plugins have been reloaded
+      Omarchy shell config not found: /usr/share/omarchy/shell
+
+--- AppArmor denials accumulated by the workload above ---
+== AppArmor denials this boot ==
+      (none in this boot's kernel log)
+
+[PASS] enforce: nothing was denied under the workload
+      0 DENIED records this boot
+
+--- rebooting ---
+boot id before: 526c1744-12ae-4640-9f0e-711071b9db07
+boot id after:  9a708016-a780-4e21-b08b-ab3104c2cbee
+
+[PASS] the machine came back over ssh after a reboot
+      boot_id 526c1744-12ae-4640-9f0e-711071b9db07 -> 9a708016-a780-4e21-b08b-ab3104c2cbee
+
+[PASS] AppArmor is still active and sshd still confined
+      $ ~/.lab-sudo aa-status | head -4; for p in $(pgrep -x sshd); do cat /proc/$p/attr/current; echo; done | sort -u
+      apparmor module is loaded.
+      163 profiles are loaded.
+      80 profiles are in enforce mode.
+         /usr/bin/sshd
+      
+      /usr/bin/sshd (enforce)
+
+=== 24 passed, 0 failed ===

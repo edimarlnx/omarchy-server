@@ -161,6 +161,50 @@ shim + MOK, where the keys live, which existing hook signs which binary, the
 lab flow with an OVMF firmware in Setup Mode, and what the boundary does and
 does not cover.
 
+## Mandatory access control
+
+Also optional, also off unless asked for, and delivered twice so the choice of
+a default is not made here. Arch's stock kernel builds **both** SELinux and
+AppArmor in and activates neither, because `CONFIG_LSM` is
+`landlock,lockdown,yama,integrity,bpf`; naming one of them in `lsm=` on the
+kernel command line is the whole kernel-side switch. No kernel is rebuilt.
+
+```bash
+sudo omarchy-server-addon apparmor      # one package from Arch, profiles in complain
+sudo omarchy-server-addon selinux       # the reference policy, permissive
+```
+
+Both start in their logging mode — permissive / complain — so the machine is
+measured before it starts refusing anything. `omarchy-server-selinux avc` and
+`omarchy-server-apparmor denials` summarise what would have been refused;
+`enforcing` / `enforce` is the second step. The two are mutually exclusive: the
+kernel runs one major LSM, and each addon refuses to install over the other.
+
+At install time an autoinstall drive carrying a `selinux` or `apparmor` marker
+(`mkcidata.sh --mac selinux`) does it during the install, where the SELinux
+filesystem relabel is cheap.
+
+The cost is not symmetric, and that is the interesting part. AppArmor is one
+package. SELinux is nineteen, eight of which **replace** core packages
+(systemd, coreutils, util-linux, shadow, sudo, openssh, pam, pambase) because
+Arch builds none of them against `libselinux` — and a policy with no userland
+to set contexts is a policy that reports everything as allowed.
+
+Measured on two VMs installed from the same ISO
+(`reports/2026-08-29-mandatory-access-control.md`): AppArmor costs **2 packages
+and 6 MiB**, reached enforce with **zero denials** under the whole workload and
+came back from a reboot still confined — and covers **2 of the 146** profiles
+Arch ships, which in practice means sshd and nothing else. SELinux costs **54
+packages and 552 MiB**, puts init, sshd and the login session in three
+different domains, and locked the operator out the first time it was set to
+enforcing. That was root-caused to home directories created after the
+install-time relabel; the fix is written and not yet re-run.
+
+`docs/mac.md` is the design: the kernel facts, both package sets with the
+reason for every inclusion and every omission, the `--ask=4` package-replacement
+problem, the lockstep obligation the rebuild set creates, and what each route
+actually confines on a headless machine.
+
 ## Measurements
 
 Measurements (package count, size, enabled units, listening sockets, setuid

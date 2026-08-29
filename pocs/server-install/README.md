@@ -71,6 +71,47 @@ disabled.
   --out pocs/lab/out-server-auto
 ```
 
+## Mandatory access control
+
+Two more VMs, installed from the same ISO with a `--mac` marker on the
+autoinstall drive. `srvsel` gets SELinux, `srvaa` gets AppArmor; Secure Boot is
+not required for this run, so both use the plain OVMF firmware.
+
+```bash
+# The ISO has to carry the SELinux packages, which are built once, separately.
+(cd ../omarchy-server-pkgs && ./scripts/build-selinux.sh)
+./iso/build.sh
+
+for mac in selinux apparmor; do
+  ./pocs/lab/mkcidata.sh --profile server --mac "$mac" \
+    --hostname "omarchy-$mac" --out "pocs/lab/out-server-$mac"
+done
+
+LAB_OUT=$PWD/pocs/lab/out-server-selinux ./pocs/lab/vm.sh srvsel create --disk-gb 40
+LAB_OUT=$PWD/pocs/lab/out-server-apparmor ./pocs/lab/vm.sh srvaa create --disk-gb 40
+# ... start each with --iso and --cidata, as above ...
+```
+
+Each acceptance script runs twice: once as installed (permissive / complain),
+which measures the denial count, and once with `ENFORCE=1`, which switches the
+machine and repeats the same workload.
+
+```bash
+LAB_OUT=$PWD/pocs/lab/out-server-selinux  ./pocs/server-install/acceptance-selinux.sh srvsel
+LAB_OUT=$PWD/pocs/lab/out-server-apparmor ./pocs/server-install/acceptance-apparmor.sh srvaa
+
+ENFORCE=1 LAB_OUT=$PWD/pocs/lab/out-server-selinux  ./pocs/server-install/acceptance-selinux.sh srvsel
+ENFORCE=1 LAB_OUT=$PWD/pocs/lab/out-server-apparmor ./pocs/server-install/acceptance-apparmor.sh srvaa
+```
+
+Both scripts end by rebooting the VM, which is the only way to prove that a
+machine which is now refusing things can still be logged into. Run `collect.sh`
+and `surface.sh` **before** them, as with the base acceptance: the workload
+installs the `docker` and `fwall` addons and runs an update.
+
+The design is `docs/mac.md`; the results are
+`reports/2026-08-29-mandatory-access-control.md`.
+
 ## Debugging a failed install
 
 The install dashboard runs on tty1 of the live ISO, and `cloud-init` (inherited

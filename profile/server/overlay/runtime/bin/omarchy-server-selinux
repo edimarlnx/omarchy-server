@@ -1,0 +1,311 @@
+#!/bin/bash
+
+# omarchy:summary=Inspect and switch the SELinux mode of a headless server
+# omarchy:args=[status|permissive|enforcing|relabel|avc|disable]
+# omarchy:examples=omarchy server-selinux status | omarchy server-selinux avc
+# omarchy:requires-sudo=true
+
+# The runtime face of the `selinux` addon. The addon leaves the machine in
+# permissive: the policy is loaded, every decision is evaluated, nothing is
+# refused, and the denials that WOULD have happened are in the audit log. This
+# command is how that log is read (`avc`), how the machine is moved to
+# enforcing once it is quiet (`enforcing`), how it is moved back if enforcing
+# breaks something (`permissive`), and how the whole thing is turned off
+# (`disable`).
+#
+# See docs/mac.md in the omarchy-server repository for the design.
+
+set -uo pipefail
+
+argv=("$@")
+
+require_root() {
+  if ((EUID != 0)); then
+    exec sudo -E "$0" "${argv[@]}"
+  fi
+}
+
+selinux_type() {
+  local config=/etc/selinux/config
+  [[ -r $config ]] || { printf 'refpolicy-arch'; return; }
+  sed -n 's/^SELINUXTYPE=//p' "$config" | tail -n 1
+}
+
+require_userland() {
+  if ! command -v getenforce >/dev/null; then
+    echo "omarchy-server-selinux: the SELinux userland is not installed." >&2
+    echo "                        Run: omarchy-server-addon selinux" >&2
+    exit 1
+  fi
+}
+
+# Whether the kernel actually initialised SELinux this boot. /sys/fs/selinux is
+# only mounted when it did, which makes this a stronger answer than reading
+# /etc/selinux/config: the config says what was asked for, the mount says what
+# happened.
+kernel_has_selinux() {
+  [[ -d /sys/fs/selinux ]]
+}
+
+# procps-ng on Arch is not built against libselinux, so `ps -Z` does not exist.
+# The kernel exports the same thing per process.
+process_context() { # process_context <pid>
+  local file="/proc/$1/attr/current"
+  [[ -r $file ]] && tr -d '\0' <"$file"
+}
+
+cmd_status() {
+  require_userland
+
+  echo "== kernel =="
+  if kernel_has_selinux; then
+    echo "selinuxfs:  mounted at /sys/fs/selinux"
+    echo "mode:       $(getenforce)"
+    echo "policy:     $(sestatus 2>/dev/null | sed -n 's/^Loaded policy name:[[:space:]]*//p')"
+  else
+    echo "selinuxfs:  NOT mounted -- the kernel did not initialise SELinux this boot"
+    echo "            Check that the running command line names it:"
+    echo "                grep -o 'lsm=[^ ]*' /proc/cmdline"
+    echo "            The drop-in that puts it there is"
+    echo "            /etc/limine-entry-tool.d/omarchy-lsm-selinux.conf, and it only"
+    echo "            reaches the kernel through a rebuilt UKI (limine-update)."
+  fi
+
+  echo
+  echo "== configuration =="
+  echo "type:       $(selinux_type)"
+  if [[ -r /etc/selinux/config ]]; then
+    grep -E '^(SELINUX|SELINUXTYPE)=' /etc/selinux/config
+  fi
+  grep -o 'lsm=[^ ]*' /proc/cmdline || echo "lsm= is not on the running command line"
+  # A marker the addon leaves only when its own relabel could not run. Nothing
+  # on this system acts on it -- selinux-refpolicy-arch ships no autorelabel
+  # unit -- so its presence means a relabel is OWED, not scheduled.
+  [[ -f /.autorelabel ]] && echo "/.autorelabel is present: a relabel is owed (omarchy-server-selinux relabel)"
+
+  if kernel_has_selinux; then
+    echo
+    echo "== this session =="
+    echo "shell:      $(process_context $$)"
+    echo "sshd:       $(process_context "$(pgrep -x sshd | head -1)" 2>/dev/null)"
+    echo "init:       $(process_context 1)"
+
+    echo
+    echo "== local policy modules =="
+    semodule -s "$(selinux_type)" -l 2>/dev/null | grep -E '^omarchy' ||
+      echo "(none named omarchy*)"
+  fi
+}
+
+# The denial record. Two sources, because a server may or may not be running
+# auditd: auditd writes /var/log/audit/audit.log and `ausearch` reads it; with
+# no auditd the kernel's audit messages land in the journal instead. The
+# journal path is the one this profile expects, since the base installs no
+# audit daemon.
+cmd_avc() {
+  require_userland
+  local since=${1:-boot}
+
+  echo "== AVC denials since $since =="
+  if command -v ausearch >/dev/null && [[ -r /var/log/audit/audit.log ]]; then
+    ausearch -m AVC,USER_AVC,SELINUX_ERR -ts "$since" -i 2>/dev/null ||
+      echo "(none in the audit log)"
+    return
+  fi
+
+  local lines
+  lines=$(journalctl -k --no-pager -b -g 'avc: *denied' -o cat 2>/dev/null)
+  if [[ -z $lines ]]; then
+    echo "(none in this boot's kernel log)"
+    return
+  fi
+
+  echo "$lines"
+  echo
+  echo "== summary: count, source domain, target context, class, permissions =="
+  # The fields are unordered key=value pairs, so pick them by name rather than
+  # by position. Sorted by count, because the same denial repeated four hundred
+  # times is one thing to fix.
+  awk '
+    {
+      scontext = tcontext = tclass = perms = "?"
+      if (match($0, /\{ [^}]* \}/))  perms    = substr($0, RSTART + 2, RLENGTH - 4)
+      for (i = 1; i <= NF; i++) {
+        split($i, kv, "=")
+        if (kv[1] == "scontext") scontext = kv[2]
+        if (kv[1] == "tcontext") tcontext = kv[2]
+        if (kv[1] == "tclass")   tclass   = kv[2]
+      }
+      key = scontext " -> " tcontext " : " tclass " { " perms " }"
+      count[key]++
+    }
+    END { for (k in count) printf "%6d  %s\n", count[k], k }
+  ' <<<"$lines" | sort -rn
+
+  echo
+  echo "To turn these into a policy module:"
+  echo "    journalctl -k -b -g 'avc: *denied' -o cat | audit2allow -m omarchy_server_local"
+  echo "Read what it produces before installing it. A rule that allows a denial"
+  echo "the machine should not have made is a hole, not a fix."
+}
+
+# The guard that turns a lockout into a refusal.
+#
+# Measured: a machine whose /home/<user> was still unlabeled went enforcing and
+# the operator's session lost access to its own home directory -- and with it
+# to `sudo`, since the wrapper it needed lived there. Nothing could be undone
+# from inside afterwards, and the kernel command line is inside a signed UKI,
+# so `enforcing=0` cannot be added at the Limine menu either.
+#
+# The two conditions below are the ones that failure would have tripped. They
+# are checked before enforcing, and --force is the way past them for somebody
+# who has read them and has console access.
+enforcing_preflight() {
+  local unlabeled avc problems=()
+
+  unlabeled=$(find /home /root /etc /usr /var -xdev -context '*unlabeled_t*' 2>/dev/null)
+  if [[ -n $unlabeled ]]; then
+    problems+=("$(wc -l <<<"$unlabeled") unlabeled paths, the first of them:")
+    while read -r path; do problems+=("    $path"); done < <(head -5 <<<"$unlabeled")
+  fi
+
+  avc=$(journalctl -k --no-pager -b -g 'avc: *denied' -o cat 2>/dev/null | wc -l)
+  if ((avc > 0)); then
+    problems+=("$avc AVC denials already recorded this boot (omarchy-server-selinux avc)")
+  fi
+
+  ((${#problems[@]})) || return 0
+
+  echo "omarchy-server-selinux: refusing to enforce." >&2
+  printf '  - %s\n' "${problems[@]}" >&2
+  echo >&2
+  echo "  Enforcing on a machine in this state locks the operator out: user_t may" >&2
+  echo "  not search unlabeled_t, so a login session cannot reach its own home" >&2
+  echo "  directory, and sudo goes with it." >&2
+  echo >&2
+  echo "  Fix the labels first:" >&2
+  echo "      sudo omarchy-server-selinux relabel" >&2
+  echo "  and make the denial list empty under this machine's own workload." >&2
+  echo >&2
+  echo "  --force skips this check. Only from a console you can still reach." >&2
+  return 1
+}
+
+set_mode() { # set_mode <permissive|enforcing> [--force]
+  require_root
+  require_userland
+
+  local mode=$1 value config
+  case "$mode" in
+    permissive) value=0 ;;
+    enforcing) value=1 ;;
+  esac
+
+  if [[ $mode == enforcing && ${2:-} != --force ]]; then
+    enforcing_preflight || exit 1
+  fi
+
+  if ! kernel_has_selinux; then
+    echo "omarchy-server-selinux: SELinux is not active in this kernel." >&2
+    echo "                        The mode is recorded for the next boot anyway." >&2
+  elif ! setenforce "$value"; then
+    echo "omarchy-server-selinux: setenforce failed." >&2
+    exit 1
+  fi
+
+  # The running mode is not enough: /etc/selinux/config is what the next boot
+  # reads, and a machine that goes back to permissive on reboot has not been
+  # switched.
+  config=$(readlink -f /etc/selinux/config 2>/dev/null)
+  if [[ -w $config ]]; then
+    sed -i "s/^SELINUX=.*/SELINUX=$mode/" "$config"
+  fi
+
+  echo "SELinux is now $mode, and $mode on the next boot."
+  if [[ $mode == enforcing ]]; then
+    echo
+    echo "If this locks something out, the ways back, in order:"
+    echo "  1. from a session that still has root:"
+    echo "         sudo omarchy-server-selinux permissive"
+    echo "  2. boot the previous snapper snapshot from the Limine menu and"
+    echo "     undo it there. The profile keeps five."
+    echo "  3. boot the installer medium, mount the root subvolume and set"
+    echo "     SELINUX=permissive in its /etc/selinux/config."
+    echo
+    echo "NOT the kernel command line. \`enforcing=0\` cannot be added at the"
+    echo "Limine menu on this profile: the cmdline lives inside the UKI, and a"
+    echo "UKI entry ignores the \`cmdline:\` in limine.conf."
+  fi
+}
+
+cmd_relabel() {
+  require_root
+  require_userland
+
+  local type file_contexts
+  type=$(selinux_type)
+  file_contexts="/etc/selinux/$type/contexts/files/file_contexts"
+
+  if [[ ! -f $file_contexts ]]; then
+    echo "omarchy-server-selinux: no file_contexts for policy '$type'." >&2
+    exit 1
+  fi
+
+  echo "Relabelling the filesystem against $type. This takes a few minutes."
+  setfiles -F -e /dev -e /proc -e /sys -e /run -e /tmp "$file_contexts" /
+  rm -f /.autorelabel
+  echo "Done. A reboot is not required, but is the cleanest way to pick up the"
+  echo "new labels in every already-running process."
+}
+
+# Removing the cmdline drop-in and rebuilding the UKI is the whole of turning
+# SELinux off: the packages can stay, and on the next boot the kernel simply
+# does not initialise the module. Uninstalling the replacement packages is a
+# separate, much riskier operation and is deliberately not automated here.
+cmd_disable() {
+  require_root
+
+  rm -f /etc/limine-entry-tool.d/omarchy-lsm-selinux.conf
+  echo "Removed /etc/limine-entry-tool.d/omarchy-lsm-selinux.conf"
+
+  if command -v limine-update >/dev/null; then
+    limine-update
+  else
+    echo "limine-update is not installed; rebuild the boot entry by hand." >&2
+  fi
+
+  echo
+  echo "SELinux will not initialise on the next boot."
+  echo "The packages are still installed. They are a superset of the stock ones"
+  echo "and are harmless with the module off; removing them means putting Arch's"
+  echo "systemd, coreutils, util-linux, shadow, sudo, openssh and pam back with"
+  echo "  sudo pacman -S --ask=4 systemd systemd-libs systemd-sysvcompat \\"
+  echo "      coreutils util-linux shadow sudo openssh pam pambase"
+}
+
+usage() {
+  echo "Usage: omarchy-server-selinux <command>"
+  echo
+  echo "  status              is the policy loaded, in which mode, with what labels"
+  echo "  avc [since]         the denials this boot (or since a timestamp), summarised"
+  echo "  permissive          evaluate and log, refuse nothing (now and at boot)"
+  echo "  enforcing [--force] refuse what the policy does not allow (now and at boot)."
+  echo "                      Refuses if the labels or the denial log say the"
+  echo "                      machine would lock itself out; --force overrides."
+  echo "  relabel             re-apply file contexts across the filesystem"
+  echo "  disable             stop initialising SELinux at boot, keep the packages"
+}
+
+case "${1:-status}" in
+  status) cmd_status ;;
+  avc) shift; cmd_avc "$@" ;;
+  permissive) set_mode permissive ;;
+  enforcing) shift; set_mode enforcing "${1:-}" ;;
+  relabel) cmd_relabel ;;
+  disable) cmd_disable ;;
+  -h | --help | help) usage ;;
+  *)
+    echo "omarchy-server-selinux: unknown command '$1'. Try --help." >&2
+    exit 2
+    ;;
+esac
