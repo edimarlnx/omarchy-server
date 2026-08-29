@@ -344,6 +344,68 @@ Not held:
   policy is a separate piece of work that would build on this one.
 - **`--microsoft` widens `db`** by two CAs (§5).
 
+### What the signature does not cover
+
+The list above is the boundary; this is the one part of it people get wrong in
+both directions, so it is worth stating as a measurement rather than a claim.
+
+**The kernel command line IS covered.** Measured on a lab install, 2026-08-29
+(`reports/2026-08-29-transactional-selinux.md`):
+
+```
+$ objdump -h /boot/EFI/Linux/omarchy_linux.efi | grep cmdline
+  8 .cmdline      000000da  …
+$ objcopy -O binary --only-section=.cmdline /boot/EFI/Linux/omarchy_linux.efi - 
+root=PARTUUID=… rootflags=subvol=@ rw rootfstype=btrfs
+lsm=landlock,lockdown,yama,integrity,selinux,bpf selinux=1 security=selinux …
+$ cat /proc/cmdline          # byte for byte the same string
+```
+
+`mkinitcpio`'s UKI preset reads `/etc/kernel/cmdline` and embeds it as
+`.cmdline`, and `limine-entry-tool` writes it there from
+`KERNEL_CMDLINE[default]` — which is where `secureboot-server.sh` appends
+`lockdown=integrity module.sig_enforce=1` (§4). So those two words are inside
+the signed image, and an attacker with the ESP in their hand cannot drop them.
+Nothing has to be changed to make that true; it already is.
+
+> An earlier note in `docs/transactional.md` said the opposite — that this
+> profile's UKI carries no `.cmdline` and the `lockdown=` words live in
+> `limine.conf`. That was wrong, and the paragraph has been corrected. If you
+> are reading a copy that still says it, believe `objdump`.
+
+What the signature does **not** cover, in descending order of how much it
+matters:
+
+- **`limine.conf` itself.** Repeated from the list above because it is the real
+  gap: it is a plain file on a FAT partition, limine does not verify it, and
+  `hash_mismatch_panic: no` is set. What an attacker can do with it is choose
+  *which signed image* boots and how the menu looks. What they cannot do is make
+  the firmware run something unsigned. Limine can enroll a hash of its own
+  config (`ENABLE_ENROLL_LIMINE_CONFIG=yes`); it is off here because
+  `limine-snapper-sync` rewrites the file whenever a snapshot appears.
+- **The `cmdline:` on a snapshot entry.** `limine-snapper-sync` writes one entry
+  per snapper snapshot, each carrying
+  `cmdline: … rootflags=subvol=/@/.snapshots/N/snapshot …` — a *different* root
+  from the embedded one. systemd-stub honours an externally supplied command
+  line only when Secure Boot is **off**; with Secure Boot on it ignores it and
+  uses `.cmdline`. That is the correct security behaviour and it is also why
+  `omarchy-server-selinux enforcing` tells the operator that `enforcing=0`
+  cannot be added at the Limine menu on this profile. The consequence for
+  snapshot booting under Secure Boot has **not been measured on this profile**
+  and is the open question here: a snapshot entry may well boot `@` instead of
+  the snapshot. Until it is measured, the documented way back from a bad update
+  is `omarchy-server-transaction rollback` and the installer medium, not the
+  snapshot menu.
+- **Anything on the ESP that is not an EFI binary** — the wallpaper, the
+  `limine_history/` copies, `/boot/omarchy-tx/`. They are inputs to the boot,
+  not part of the signature. None of them can make an unsigned kernel run.
+
+The alternative to living with the second point would be to stop embedding the
+cmdline and let limine supply it, which is exactly the trade the profile
+refuses: it would put `lockdown=integrity module.sig_enforce=1` back on an
+unverified FAT partition to make the snapshot menu work. Snapshot entries are
+the thing to give up, not the signed command line.
+
 ---
 
 ## 8. Out-of-tree modules
