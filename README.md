@@ -1,5 +1,12 @@
 # omarchy-server
 
+> **Status: unofficial, under validation.** This is an independent experiment
+> by a community member and is **not** an official Omarchy project, nor
+> endorsed by its maintainers. Everything here is in a testing phase: package
+> lists, patches, images and measurements can change or be dropped at any time.
+> Do not use it on machines you care about. The upstream project lives at
+> [omarchy.org](https://omarchy.org).
+
 Lab for a headless **server profile** of [Omarchy](https://omarchy.org): the
 same Arch base, package pipeline, Limine/UKI boot and btrfs+snapper layout as
 the desktop edition, minus the desktop.
