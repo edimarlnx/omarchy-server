@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -564,6 +565,19 @@ func imagePublish(args []string) error {
 		"See `docs/cloud-image.md` for what is generalized, how to boot it on\n"+
 		"libvirt/Proxmox/OCI, and how Secure Boot and SELinux behave at first boot.\n\n"+
 		"    sha256sum -c %s.sha256\n", filepath.Base(target))
+
+	// A release for the tag may already exist (a second image variant on the
+	// same day): then the assets are added to it instead of failing on create.
+	probe := exec.Command("gh", "release", "view", *tag, "--json", "tagName")
+	probe.Dir = cfg.Root
+	if probe.Run() == nil {
+		return session.Run(Step{
+			Label: "gh release upload",
+			Args: []string{"gh", "release", "upload", *tag,
+				target, target + ".sha256", "--clobber"},
+			Dir: cfg.Root,
+		})
+	}
 
 	return session.Run(Step{
 		Label: "gh release",
