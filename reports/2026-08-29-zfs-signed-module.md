@@ -165,6 +165,73 @@ module distributed separately from the GPL kernel, the Ubuntu precedent) was
 never written down either; it is a reason this may never be official and is part
 of why the work was reprioritised.
 
+## Corroboration from the kernel and DKMS sources
+
+The measurement above was taken first and read afterwards against the sources.
+They agree, and they add two facts worth having before anyone resumes.
+
+**The routing is decided in the kernel, not by the firmware.**
+`security/integrity/platform_certs/keyring_handler.c` has two handlers, and only
+one of them can reach `.machine`:
+
+```c
+__init efi_element_handler_t get_handler_for_db(const efi_guid_t *sig_type)
+{
+	if (efi_guidcmp(*sig_type, efi_cert_x509_guid) == 0)
+		return add_to_platform_keyring;      /* db -> .platform, always */
+	return NULL;
+}
+__init efi_element_handler_t get_handler_for_mok(const efi_guid_t *sig_type)
+{
+	if (efi_guidcmp(*sig_type, efi_cert_x509_guid) == 0) {
+		if (IS_ENABLED(CONFIG_INTEGRITY_MACHINE_KEYRING) && imputed_trust_enabled())
+			return add_to_machine_keyring;   /* MokListRT -> .machine */
+```
+
+`load_uefi.c` parses `db` with the first and shim's `MokListRT` with the second;
+`machine_keyring.c` gates the second on shim having asserted `MokListTrustedRT`.
+`kernel/module/signing.c` verifies modules with `VERIFY_USE_SECONDARY_KEYRING`,
+and `certs/system_keyring.c` links `.machine` into `.secondary_trusted_keys` —
+`.platform` is reachable only through `VERIFY_USE_PLATFORM_KEYRING`, which is
+kexec and IMA. This is mainline design, so real firmware will behave as OVMF did.
+
+**DKMS's `sign_tool` no longer exists.** The route this work was going to
+implement is specified against a variable that was removed in **dkms v3.0.4**
+(2022-06-18, "Rework signing"); Arch ships 3.4.3. DKMS whitelists the framework
+variables it reads —
+
+```
+readonly dkms_framework_signing_variables="sign_file mok_signing_key mok_certificate
+   try_sign_modules"
+```
+
+— so a `/etc/dkms/framework.conf.d/omarchy-server-sign.conf` setting `sign_tool`
+would have been read, ignored and reported nothing. The current interface is
+`sign_file` (a binary taking the kernel `sign-file` CLI: `<hash> <key> <cert>
+<module>`), `mok_signing_key`, `mok_certificate` and `try_sign_modules`; the
+default `sign_file` on Arch already resolves to
+`/usr/lib/modules/$kernelver/build/scripts/sign-file`, and DKMS generates its own
+key pair into `/var/lib/dkms/mok.{key,pub}` when either file is missing. So the
+mechanism to sign a DKMS module works and is nearly zero configuration — it is
+only the trust anchor that has nowhere to go.
+
+**Two more facts for a resumed attempt:**
+
+- **`zfs-2.4.4` (released 2026-08-21) is the first OpenZFS release that declares
+  kernel 7.1 support** (`META`: `Linux-Maximum: 7.2`). `zfs-2.4.3` tops out at
+  7.0 and would fail `configure` against 7.1.11. Tarball:
+  `https://github.com/openzfs/zfs/releases/download/zfs-2.4.4/zfs-2.4.4.tar.gz`,
+  with a detached `.asc`. archzfs pins the same tarball
+  (`sha256 2a3c70d5…`) and pins the kernel exactly, `depends=("linux=${_kernelver}")`
+  — which is the lockstep coupling route (a) would have inherited.
+- **OpenZFS does not sign anything itself**; the kernel's
+  `scripts/Makefile.modinst` does, at `modules_install` time, gated on
+  `CONFIG_MODULE_SIG_ALL=y`. Arch sets that, but its `linux-headers` package
+  ships `scripts/` and **no `certs/`**, and for external modules kbuild appends
+  `|| true` to the signing command — so a stock OpenZFS build on Arch emits
+  *silently unsigned* `zfs.ko.zst`. Worth knowing: the absence of a signature
+  there is not an error anyone will see.
+
 ## Limitations of what was measured
 
 - One kernel version (`7.1.11.arch1-1`) on one machine. The behaviour is
