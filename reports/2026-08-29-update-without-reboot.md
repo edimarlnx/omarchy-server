@@ -182,39 +182,26 @@ and `surface.sh` run before the acceptance workload, which installs the docker
 addon and then updates. 220 packages and 1403 MiB describe the machine as
 installed.
 
-### The kexec half, and where it stands
+### The kexec half, measured on a Secure Boot machine
 
 `--kexec` is not exercised on this machine at all: the base has no
-`kexec-tools` (item 44), which is the addon boundary working as intended. It
-was measured separately on a Secure Boot VM (`srvsb`), where it is hardest —
-lockdown on, the boot image a signed UKI — and the result changed the
-implementation:
+`kexec-tools` (item 44), which is the addon boundary working as intended. It is
+measured in [`2026-08-29-secure-boot-kexec.md`](2026-08-29-secure-boot-kexec.md),
+on the machine where it is hardest — lockdown on, the boot image a signed UKI.
+Three things came out of it that belong here too:
 
-* Handing the **UKI** to `kexec_file_load(2)` is refused. The kernel logs
-  `PEFILE: Unsigned PE binary` and `Lockdown: kexec: kexec of unsigned images
-  is restricted`, even though `sbctl verify` calls the same file signed and the
-  firmware boots it: the signature layout systemd-ukify writes is not the one
-  the kernel's `pefile` parser reads. The stock Arch `vmlinuz` is refused for
-  the honest reason — Arch does not sign it.
-* The kernel **inside** that UKI, extracted from its `.linux` section and
-  re-signed with the machine's own key, is accepted. That is the premise this
-  profile could not use for modules, proved: `.platform` — where a firmware-`db`
-  certificate lands — is consulted by kexec's verification and not by module
-  verification (`docs/secure-boot.md` §8).
-* `systemctl kexec` after that load comes back with a new boot id, still
-  `lockdown=integrity` and still `module.sig_enforce=1`.
-
-`omarchy-server-kexec` therefore unpacks and re-signs rather than handing over
-the UKI, and the Secure Boot suite records all three facts. **The reboot-time
-comparison is not settled.** Three separate harness faults came out of trying to
-measure it, all of them the lab's own firewall: `ufw limit 22` drops the seventh
-connection from one source inside thirty seconds, a reboot kills the ssh master
-so every probe is a new connection, a dropped connect *hangs* rather than
-failing, and its error text was being accepted as a boot id. The probe now has a
-timeout, a UUID check, twenty second spacing and a settle delay before each
-sample — and the numbers taken by hand on this VM (kexec 9 s, firmware 8 s from
-the client) say the honest thing anyway: with OVMF posting in 533 ms and Limine
-waiting 2 s, a virtual machine has almost nothing for kexec to save. The 3.4 s
-of firmware and loader it skips is the whole prize here. On hardware where POST
-alone is a minute, the same measurement is a different conversation, and this
-lab cannot have it.
+* **kexec does not lose the keyring argument module signing lost.** The UKI
+  itself is refused (`PEFILE: Unsigned PE binary`), but the kernel extracted
+  from it and re-signed with the machine's own `db` key is accepted, because
+  kexec's verification consults `.platform` and module verification does not.
+* **It saves nothing in this lab, and that is the honest answer.** Guest
+  downtime was 2 s on both paths; the client-side figures (5 s and 6 s) swapped
+  order between two runs. A VM whose firmware posts in half a second has no
+  firmware for kexec to skip. The case for the addon is hardware with a slow
+  POST, and this environment cannot make it.
+* **It found a brick.** `omarchy-server-kexec` loaded an image with no command
+  line, because this profile's UKI carries no `.cmdline` section, and a loaded
+  image redirects an ordinary `systemctl reboot` into itself — so a machine
+  that had merely been asked about kexec could not reboot. Fixed at pkgrel 8:
+  `/proc/cmdline` is the source, and the command refuses to load rather than
+  leave a trap.

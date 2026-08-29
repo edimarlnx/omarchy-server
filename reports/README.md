@@ -19,6 +19,7 @@ scripts and artifacts live in `pocs/`.
 
 | Date | Report | Subject | Result |
 |---|---|---|---|
+| 2026-08-29 | [kexec under Secure Boot](2026-08-29-secure-boot-kexec.md) | whether a machine that boots a signed UKI under lockdown can jump straight into the next kernel, and what that is worth | 29 passed, 0 failed |
 | 2026-08-29 | [A kernel update under SELinux enforcing](2026-08-29-selinux-kernel-update.md) | a kernel transaction, a UKI rebuild and the disable path on an enforcing machine; and the root cause of the mkinitcpio failure §11.5 could not explain | 103 passed, 1 failed |
 | 2026-08-29 | [Update without a reboot](2026-08-29-update-without-reboot.md) | the server update path classifying its own transaction: what it restarted, what it deferred, and whether a reboot was genuinely required | 44 passed, 0 failed |
 | 2026-08-29 | [serverlab smoke run](2026-08-29-serverlab-smoke.md) | the base acceptance list driven end to end by `serverlab`, from the same ISO the hand-written reports use | 36 passed, 1 failed |

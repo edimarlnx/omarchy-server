@@ -1,0 +1,4 @@
+UNIT FILE             STATE   PRESET
+p11-kit-server.socket enabled enabled
+
+1 unit files listed.
