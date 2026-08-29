@@ -1,0 +1,4 @@
+# Guest integration for a machine running under QEMU/KVM (graceful shutdown,
+# host-side freeze/thaw for snapshots). install/server/addons/vm.sh enables the
+# agent. Useless and unwanted on bare metal.
+qemu-guest-agent

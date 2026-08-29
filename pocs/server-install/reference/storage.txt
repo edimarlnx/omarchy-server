@@ -1,0 +1,39 @@
+Filesystem      Size  Used Avail Use% Mounted on
+dev             3.9G     0  3.9G   0% /dev
+run             3.9G  628K  3.9G   1% /run
+efivarfs        256K   15K  237K   6% /sys/firmware/efi/efivars
+/dev/vda2        38G  1.2G   37G   3% /
+tmpfs           3.9G     0  3.9G   0% /dev/shm
+none            1.0M     0  1.0M   0% /run/credentials/systemd-journald.service
+none            1.0M     0  1.0M   0% /run/credentials/systemd-resolved.service
+none            1.0M     0  1.0M   0% /run/credentials/systemd-networkd.service
+tmpfs           3.9G     0  3.9G   0% /tmp
+/dev/vda2        38G  1.2G   37G   3% /home
+/dev/vda2        38G  1.2G   37G   3% /var/cache/pacman/pkg
+/dev/vda2        38G  1.2G   37G   3% /var/log
+/dev/vda1       2.0G   39M  2.0G   2% /boot
+none            1.0M     0  1.0M   0% /run/credentials/serial-getty@ttyS0.service
+none            1.0M     0  1.0M   0% /run/credentials/getty@tty1.service
+tmpfs           793M   12K  793M   1% /run/user/1000
+
+TARGET                  SOURCE            FSTYPE OPTIONS
+/                       /dev/vda2[/@]     btrfs  rw,relatime,compress=zstd:3,discard=async,space_cache=v2,subvolid=256,subvol=/@
+|-/home                 /dev/vda2[/@home] btrfs  rw,relatime,compress=zstd:3,discard=async,space_cache=v2,subvolid=257,subvol=/@home
+|-/var/cache/pacman/pkg /dev/vda2[/@pkg]  btrfs  rw,relatime,compress=zstd:3,discard=async,space_cache=v2,subvolid=259,subvol=/@pkg
+|-/var/log              /dev/vda2[/@log]  btrfs  rw,relatime,compress=zstd:3,discard=async,space_cache=v2,subvolid=258,subvol=/@log
+`-/boot                 /dev/vda1         vfat   rw,relatime,fmask=0077,dmask=0077,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro
+
+ID 256 gen 16 top level 5 path @
+ID 257 gen 15 top level 5 path @home
+ID 258 gen 15 top level 5 path @log
+ID 259 gen 13 top level 5 path @pkg
+ID 260 gen 12 top level 256 path var/lib/portables
+ID 261 gen 12 top level 256 path var/lib/machines
+ID 262 gen 13 top level 256 path .snapshots
+ID 263 gen 13 top level 5 path @factory
+
+# | Type   | Pre # | Date | User | Cleanup | Description | Userdata
+--+--------+-------+------+------+---------+-------------+---------
+0 | single |       |      | root |         | current     |
+
+root

@@ -1,0 +1,72 @@
+# Omarchy server core package list pacstrapped by the ISO (profile: server).
+# Server counterpart of install/omarchy-base.packages. The ISO builder also
+# reads this file when constructing the offline mirror.
+#
+# The rule for this file: a package earns its place by being needed to boot,
+# update, snapshot, reach or firewall a headless machine. Everything else is
+# an addon (profile/server/addons/*.packages, installed on demand with
+# `omarchy-server-addon <name>`), so the running system carries no code it was
+# not asked for.
+#
+# Not listed here, because the ISO installs them earlier:
+#   - profile/server/archinstall.packages: base linux linux-firmware
+#     amd-ucode intel-ucode efibootmgr limine nano omarchy-keyring openssh
+#     snapper
+#   - early bootstrap: limine efibootmgr omarchy-keyring
+#     omarchy-server-settings
+#   - runtime: omarchy-server (which pulls omarchy-server-keyring, gum and
+#     pacman-contrib through its dependencies)
+
+btrfs-progs
+# Required by limine-mkinitcpio-hook: it is the hook that regenerates the UKI,
+# and nothing else in this list pulls mkinitcpio in.
+mkinitcpio
+limine-mkinitcpio-hook
+limine-snapper-sync
+# Rebuild out-of-tree modules and keep the running kernel's modules readable
+# after a kernel upgrade, so an update does not break module loading until the
+# next reboot.
+kernel-modules-hook
+# The server's console. Not implied by anything else: archinstall installs it
+# only for the desktop profile's dependency closure, and enable-services-server.sh
+# fails hard on `systemctl enable sshd.service` without it.
+openssh
+nano
+sudo
+ufw
+# paccache, used by omarchy-update-pkg-prune and by
+# install/server/prune-pkg-cache-server.sh.
+pacman-contrib
+# The one deliberate exception to the rule above, decided by the owner: the
+# Omarchy prompt is part of the edition's identity, and default/bash/init turns
+# it on whenever the binary is present. A single static binary, no daemon, no
+# listening socket, no privileged path.
+starship
+tzupdate
+zram-generator
+
+# Deliberately NOT in the core, with the addon that brings each one back:
+#   docker docker-compose docker-buildx ufw-docker lazydocker   → docker
+#   tailscale                                                   → tailscale
+#   base-devel yay git mise-bin fakeroot                        → dev
+#   btop bat eza fd fzf ripgrep tmux zoxide tldr fastfetch
+#     dua-cli lazygit                                           → cli-tools
+#   omarchy-nvim                                                → editor
+#   rsync socat whois unzip inotify-tools                       → net-tools
+#   qemu-guest-agent                                            → vm
+#
+# Dropped outright, with no addon:
+#   networkmanager  replaced by systemd-networkd + systemd-resolved, both of
+#                   which are already in systemd (install/server/network-server.sh)
+#   plocate         nothing in the server runtime path calls `locate`
+#   expac perl      only desktop commands use them
+#   less man-db     no runtime path needs a pager or man pages; ssh in and
+#                   read the source, or install them by hand
+#   inetutils       systemd already provides hostnamectl; `hostname` is not
+#                   used by anything the server runs
+#   bash-completion dosfstools exfatprogs
+#                   convenience on an interactive desktop, dead weight here
+#
+# linux-firmware stays in archinstall.packages for now. It is the single
+# largest item in the install (see pocs/server-install/README.md) and a VM or a
+# known-hardware fleet does not need it; dropping it is one line in that file.

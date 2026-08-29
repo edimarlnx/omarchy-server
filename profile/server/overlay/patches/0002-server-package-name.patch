@@ -1,0 +1,41 @@
+# omarchy-server only *provides* omarchy, and `pacman -Q` does not resolve
+# provides. Teach the three commands that look the
+# package up by name about omarchy-server / omarchy-server-settings.
+--- a/bin/omarchy-version	2026-08-28 19:05:44.789203248 -0300
++++ b/bin/omarchy-version	2026-08-28 19:05:57.840616791 -0300
+@@ -17,8 +17,10 @@
+   exit 0
+ fi
+ 
+-# The edge channel installs omarchy-dev instead of omarchy, so check both.
+-for package in omarchy-dev omarchy; do
++# The edge channel installs omarchy-dev instead of omarchy, and the server
++# profile installs omarchy-server, which only *provides* omarchy — and
++# `pacman -Q` does not resolve provides. Check all three.
++for package in omarchy-dev omarchy omarchy-server; do
+   version=$(pacman -Q "$package" 2>/dev/null | awk '{ print $2 }')
+   [[ -n $version ]] && break
+ done
+--- a/bin/omarchy-update-available	2026-08-28 19:06:14.832221099 -0300
++++ b/bin/omarchy-update-available	2026-08-28 19:06:15.115129008 -0300
+@@ -25,6 +25,8 @@
+   package=omarchy-dev
+ elif pacman -Qq omarchy >/dev/null 2>&1; then
+   package=omarchy
++elif pacman -Qq omarchy-server >/dev/null 2>&1; then
++  package=omarchy-server
+ fi
+ 
+ if [[ -n $package ]]; then
+--- a/bin/omarchy-channel-current	2026-08-28 19:06:14.835004647 -0300
++++ b/bin/omarchy-channel-current	2026-08-28 19:06:15.115207951 -0300
+@@ -18,7 +18,8 @@
+ # (which reports the mirror as its first token).
+ if pacman -Q omarchy-dev omarchy-settings-dev >/dev/null 2>&1; then
+   echo edge
+-elif pacman -Q omarchy omarchy-settings >/dev/null 2>&1; then
++elif pacman -Q omarchy omarchy-settings >/dev/null 2>&1 ||
++  pacman -Q omarchy-server omarchy-server-settings >/dev/null 2>&1; then
+   channel=$(omarchy-version-channel 2>/dev/null | awk '{ print $1 }')
+   case "$channel" in
+     stable) echo stable ;;

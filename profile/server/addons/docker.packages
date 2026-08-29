@@ -1,0 +1,9 @@
+# Container runtime. Not part of the base: the point of the server profile is
+# that a machine which does not run containers carries no container runtime.
+# install/server/addons/docker.sh enables docker.socket and installs the
+# ufw-docker rules and the docker DNS/logging drop-ins.
+docker
+docker-compose
+docker-buildx
+ufw-docker
+lazydocker

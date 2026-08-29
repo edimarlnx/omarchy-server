@@ -1,0 +1,24 @@
+diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py b/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py
+index 9b6ebf5..7bbc6e2 100644
+--- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py
++++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py
+@@ -34,6 +34,7 @@ def build_phases(ctx: InstallContext):
+         arch_install_system,
+         configure_hibernation,
+         run_system_finalizer,
++        install_addons,
+         stage_provisioning_state,
+         finalize_limine_boot,
+         run_chroot_finalizer,
+@@ -51,6 +52,11 @@ def build_phases(ctx: InstallContext):
+         ("Installing Arch + Omarchy",  arch_install_system),
+         ("Configuring hibernation",    configure_hibernation),
+         ("Configuring system",         run_system_finalizer),
++        # Optional package sets named by the autoinstall drive's `addons` file.
++        # A no-op on the desktop profile and on any install that asked for
++        # none. Before finalize_limine_boot so an addon that triggers an
++        # initramfs rebuild is still followed by the final UKI build.
++        ("Installing addons",          install_addons),
+         # Before finalize_limine_boot: the deferred-provisioning cryptkey drop-in and keyfile
+         # must be in place for the final UKI build.
+         ("Staging provisioning",          stage_provisioning_state),

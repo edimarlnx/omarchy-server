@@ -1,0 +1,17 @@
+diff --git a/configs/airootfs/usr/local/bin/omarchy-cidata-load b/configs/airootfs/usr/local/bin/omarchy-cidata-load
+index 6578849..227f960 100755
+--- a/configs/airootfs/usr/local/bin/omarchy-cidata-load
++++ b/configs/airootfs/usr/local/bin/omarchy-cidata-load
+@@ -43,7 +43,11 @@ mount -o ro "$device" "$mnt" || exit 1
+ # otherwise force a fresh drive back into deferred provisioning or hand it an old
+ # LUKS passphrase. The interactive wizard writes these same names, but a
+ # cidata load always precedes it, so nothing of the user's is discarded here.
+-optional_inputs=(user_credentials.json defer-provisioning user_full_name.txt user_email_address.txt user_encrypt_installation.txt authorized_keys tailscale_authkey)
++# `profile` selects the Omarchy edition to install (desktop, server, ...) and
++# overrides the profile baked into the ISO, so one ISO can serve either.
++# `addons` names the optional package sets to apply after the system setup, one
++# per line; the server ISO bundles them all in its offline mirror.
++optional_inputs=(user_credentials.json defer-provisioning user_full_name.txt user_email_address.txt user_encrypt_installation.txt authorized_keys tailscale_authkey profile addons)
+ for file in user_configuration.json "${optional_inputs[@]}"; do
+   rm -f "$dest/$file"
+ done

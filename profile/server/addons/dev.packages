@@ -1,0 +1,7 @@
+# Build toolchain. base-devel alone is ~220 MiB of compiler, and a compiler on
+# a production server is a tool for whoever gets in, so it is opt-in.
+# Also what DKMS needs, and what `omarchy-pkg-aur-install` needs to build.
+base-devel
+git
+yay
+mise-bin

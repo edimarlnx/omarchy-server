@@ -1,0 +1,51 @@
+# Neutralize the graphical assumptions of omarchy-provision-owner (first boot
+# of a deferred-provisioning install) when the profile is 'server': the
+# framebuffer greeter that blocks on a keypress, the SDDM handoff, and the
+# interactive retry that would exec a shell on tty1. Audit: docs/iso-server.md.
+--- a/bin/omarchy-provision-owner	2026-08-28 19:28:47.998298577 -0300
++++ b/bin/omarchy-provision-owner	2026-08-28 19:28:48.009382695 -0300
+@@ -33,6 +33,16 @@
+ 
+ export PATH="$OMARCHY_PATH/bin:$PATH"
+ 
++# Profile of the installed system, from the environment (the server unit sets
++# it) or from /etc/omarchy-profile. A server has no framebuffer to draw on and
++# nobody at the console to answer a prompt, so the greeter, the display manager
++# handoff and the interactive retry are all skipped below.
++OMARCHY_PROFILE="${OMARCHY_PROFILE:-}"
++if [[ -z $OMARCHY_PROFILE && -r /etc/omarchy-profile ]]; then
++  OMARCHY_PROFILE=$(tr -d '[:space:]' </etc/omarchy-profile)
++fi
++export OMARCHY_PROFILE
++
+ # The shared setup form — the same questions, prompts, and validation the ISO
+ # configurator's user step asks. The ISO vendors this very file out of the
+ # runtime package it bundles, so an install and the first boot that finishes it
+@@ -756,6 +766,10 @@
+ }
+ 
+ configure_login() {
++  # No display manager on a server: the login path is sshd plus the getty,
++  # both already enabled by install/server/enable-services-server.sh.
++  [[ $OMARCHY_PROFILE == "server" ]] && return 0
++
+   mkdir -p /var/lib/sddm
+   printf '[Last]\nSession=omarchy.desktop\nUser=%s\n' "$username" >/var/lib/sddm/state.conf
+   chown -R sddm:sddm /var/lib/sddm 2>/dev/null || true
+@@ -1104,6 +1118,16 @@
+ fi
+ 
+ main() {
++  if [[ $OMARCHY_PROFILE == "server" ]]; then
++    # No greeter (it blocks on `read </dev/tty` waiting for Return), no VT
++    # palette, and no interactive retry: on a headless machine a failure has to
++    # surface as a failed unit in the journal, not as a shell nobody can see.
++    # Note the server profile still has no non-interactive source for the setup
++    # form's answers; deferred provisioning on a server is a follow-up item.
++    run_setup
++    return $?
++  fi
++
+   # Font sizing waits for the console to settle, so it lives inside
+   # greeter_screen (which owns that settle) rather than running here on a VT
+   # that may still be in a transitional mode this early in first boot.

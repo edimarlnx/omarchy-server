@@ -1,0 +1,3 @@
+# The Omarchy Neovim distribution. The base ships `nano`; this is for people
+# who edit on the server.
+omarchy-nvim

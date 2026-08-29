@@ -1,0 +1,192 @@
+diff --git a/builder/build-iso.sh b/builder/build-iso.sh
+index db8daa2..c7ad72b 100755
+--- a/builder/build-iso.sh
++++ b/builder/build-iso.sh
+@@ -23,6 +23,62 @@ esac
+ : "${OMARCHY_NVIM_PACKAGE:=omarchy-nvim}"
+ export OMARCHY_RUNTIME_PACKAGE OMARCHY_SETTINGS_PACKAGE OMARCHY_NVIM_PACKAGE
+ 
++# ─────────────────────────────────────────────────────────────────────────────
++# Profile: which edition of Omarchy this ISO installs. "desktop" is the stock
++# build and changes nothing. A named profile lives in the local pkgs checkout
++# at /omarchy-pkgs/profile/<name>/ and supplies its own archinstall package
++# list and base package list, plus the Omarchy package names to build and
++# install. OMARCHY_EXTRA_PACKAGES names further packages built from that
++# checkout (a profile's own keyring, say) which must land in the offline
++# mirror without ever being looked up on the network mirror.
++#
++# A profile target may be empty (the server profile ships no nvim package):
++# empty names are dropped everywhere instead of being special-cased.
++# ─────────────────────────────────────────────────────────────────────────────
++OMARCHY_PROFILE="${OMARCHY_PROFILE:-desktop}"
++OMARCHY_EXTRA_PACKAGES="${OMARCHY_EXTRA_PACKAGES:-}"
++profile_dir=""
++archinstall_packages_file=/builder/archinstall.packages
++
++if [[ $OMARCHY_PROFILE != "desktop" ]]; then
++  profile_dir="/omarchy-pkgs/profile/$OMARCHY_PROFILE"
++  if [[ ! -d $profile_dir ]]; then
++    echo "ERROR: profile '$OMARCHY_PROFILE' selected but $profile_dir is not mounted." >&2
++    echo "       Named profiles require --local-source with a pkgs checkout that" >&2
++    echo "       carries profile/$OMARCHY_PROFILE/." >&2
++    exit 1
++  fi
++  [[ -f $profile_dir/archinstall.packages ]] && archinstall_packages_file="$profile_dir/archinstall.packages"
++fi
++
++case "$OMARCHY_PROFILE" in
++  desktop) ;;
++  server)
++    OMARCHY_RUNTIME_PACKAGE=omarchy-server
++    OMARCHY_SETTINGS_PACKAGE=omarchy-server-settings
++    # No editor package: `nano` comes from the profile's archinstall.packages.
++    OMARCHY_NVIM_PACKAGE=""
++    # Signs the future [omarchy-server] repository; a hard dependency of the
++    # runtime package, so the offline mirror has to carry it.
++    OMARCHY_EXTRA_PACKAGES="omarchy-server-keyring"
++    ;;
++  *)
++    echo "ERROR: unknown profile: $OMARCHY_PROFILE" >&2
++    exit 1
++    ;;
++esac
++export OMARCHY_RUNTIME_PACKAGE OMARCHY_SETTINGS_PACKAGE OMARCHY_NVIM_PACKAGE
++export OMARCHY_PROFILE OMARCHY_EXTRA_PACKAGES
++
++# Every Omarchy package built from the local checkouts, with empty names
++# dropped. Used for the local build, for excluding them from the online
++# download, and for adding their artifacts back to the mirror keep-set.
++local_package_names=()
++for name in $OMARCHY_RUNTIME_PACKAGE $OMARCHY_SETTINGS_PACKAGE \
++  $OMARCHY_NVIM_PACKAGE $OMARCHY_EXTRA_PACKAGES; do
++  local_package_names+=("$name")
++done
++
+ # Packages installed into the Arch container used to build the ISO.
+ pacman-key --init
+ pacman --noconfirm -Sy archlinux-keyring
+@@ -72,6 +128,10 @@ OMARCHY_RUNTIME_PACKAGE=$OMARCHY_RUNTIME_PACKAGE
+ OMARCHY_SETTINGS_PACKAGE=$OMARCHY_SETTINGS_PACKAGE
+ OMARCHY_NVIM_PACKAGE=$OMARCHY_NVIM_PACKAGE
+ EOF
++# The profile the orchestrator reads to decide which phases apply and which
++# OMARCHY_PROFILE the target setup runs under. A `profile` file on the cidata
++# drive overrides it (see omarchy-cidata-load).
++echo "$OMARCHY_PROFILE" > "$build_cache_dir/airootfs/usr/share/omarchy-iso/profile"
+ 
+ if [[ ${OMARCHY_INSTALL_DEBUG:-} == "1" ]]; then
+   touch "$build_cache_dir/airootfs/usr/share/omarchy-iso/install-debug"
+@@ -138,7 +198,39 @@ sed -i -E '/^(linux|broadcom-wl)$/d' "$build_cache_dir/packages.x86_64"
+ # install. With --local-source, the omarchy* packages we just built are
+ # already in the mirror and we filter them out below. Without it, pacman -Syw
+ # pulls the published omarchy* from the network mirror like any other package.
+-if [[ -d /omarchy-source ]]; then
++if [[ -n $profile_dir ]]; then
++  # A named profile owns its package lists outright. The base list is what the
++  # orchestrator reads back as omarchy-base.packages at install time; the
++  # "other" list (packages bundled but not installed) is optional and defaults
++  # to empty, which is what keeps a server ISO from carrying a desktop's worth
++  # of optional packages.
++  base_pkg_lists=("$profile_dir/omarchy-$OMARCHY_PROFILE.packages")
++  # The "other" list is what lands in the offline mirror WITHOUT being
++  # installed. For a profile that is exactly its addons: `omarchy-server-addon
++  # docker` has to work on a machine that has never seen the network, so the
++  # packages ride along in the ISO while the install stays lean.
++  other_packages=/tmp/omarchy-other.packages
++  {
++    printf '# Bundled in the offline mirror, not installed. Sources:\n'
++    if [[ -f $profile_dir/omarchy-other.packages ]]; then
++      printf '#   %s\n' "omarchy-other.packages"
++      grep -hv '^#\|^$' "$profile_dir/omarchy-other.packages"
++    fi
++    shopt -s nullglob
++    for addon_list in "$profile_dir"/addons/*.packages; do
++      addon_name=${addon_list##*/}
++      printf '#   addon %s\n' "${addon_name%.packages}"
++      grep -hv '^#\|^$' "$addon_list"
++    done
++    shopt -u nullglob
++  } >"$other_packages"
++  base_pkg_lists+=("$other_packages")
++  if [[ ! -f ${base_pkg_lists[0]} ]]; then
++    echo "ERROR: profile '$OMARCHY_PROFILE' ships no ${base_pkg_lists[0]}" >&2
++    exit 1
++  fi
++  setup_form=/omarchy-source/install/provisioning/setup-form.sh
++elif [[ -d /omarchy-source ]]; then
+   base_pkg_lists=(/omarchy-source/install/omarchy-base.packages /omarchy-source/install/omarchy-other.packages)
+   setup_form=/omarchy-source/install/provisioning/setup-form.sh
+ else
+@@ -193,10 +285,10 @@ mapfile -t all_packages < <(
+   {
+     cat "$build_cache_dir/packages.x86_64"
+     grep -hv '^#\|^$' "${base_pkg_lists[@]}"
+-    grep -hv '^#\|^$' /builder/archinstall.packages
++    grep -hv '^#\|^$' "$archinstall_packages_file"
+     # Always include the selected Omarchy packages so the target install can
+     # find the runtime and companion packages in the offline mirror.
+-    printf '%s\n' "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" "$OMARCHY_NVIM_PACKAGE"
++    printf '%s\n' "${local_package_names[@]}"
+   } | sort -u
+ )
+ 
+@@ -204,12 +296,12 @@ mapfile -t all_packages < <(
+ # the mirror; strip them from the pacman -Syw list so it doesn't try to fetch
+ # the published versions on top.
+ if [[ -n ${LOCAL_OMARCHY_BUILD:-} ]]; then
++  exclude_args=()
++  for local_package_name in "${local_package_names[@]}"; do
++    exclude_args+=(-e "$local_package_name")
++  done
+   mapfile -t all_packages < <(
+-    printf '%s\n' "${all_packages[@]}" |
+-      grep -Fxv \
+-        -e "$OMARCHY_RUNTIME_PACKAGE" \
+-        -e "$OMARCHY_SETTINGS_PACKAGE" \
+-        -e "$OMARCHY_NVIM_PACKAGE" || true
++    printf '%s\n' "${all_packages[@]}" | grep -Fxv "${exclude_args[@]}" || true
+   )
+ fi
+ 
+@@ -245,8 +337,7 @@ mapfile -t required_package_files <<< "$resolved_package_files"
+ # checkouts. Add those exact artifacts back to the keep-set after verifying
+ # that the local build left exactly one file for each selected package name.
+ if [[ -n ${LOCAL_OMARCHY_BUILD:-} ]]; then
+-  for local_package_name in \
+-    "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" "$OMARCHY_NVIM_PACKAGE"; do
++  for local_package_name in "${local_package_names[@]}"; do
+     local_package_file=""
+     for candidate in "$offline_mirror_dir/$local_package_name-"*.pkg.tar.*; do
+       [[ -f $candidate && $candidate != *.sig ]] || continue
+@@ -299,13 +390,12 @@ resolve_expected_packages() {
+ 
+   mapfile -t targets < <(
+     {
+-      grep -hv '^#\|^$' /builder/archinstall.packages
++      grep -hv '^#\|^$' "$archinstall_packages_file"
+       # Read the shipped copy, which is what _runtime_package_list reads at
+       # install time, not the build-time source it came from.
+       grep -hv '^#\|^$' \
+         "$build_cache_dir/airootfs/usr/share/omarchy-iso/omarchy-base.packages"
+-      printf '%s\n' "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" \
+-        "$OMARCHY_NVIM_PACKAGE"
++      printf '%s\n' "${local_package_names[@]}"
+     } | sort -u
+   )
+ 
+@@ -333,9 +423,13 @@ if ! expected_packages="$(resolve_expected_packages)"; then
+   echo "       same way at install time." >&2
+   exit 1
+ fi
+-if (( expected_packages < 600 || expected_packages > 2000 )); then
++# A server profile resolves to a few hundred packages, an order of magnitude
++# below a desktop install; the sanity range has to follow the profile.
++minimum_expected_packages=600
++[[ $OMARCHY_PROFILE != "desktop" ]] && minimum_expected_packages=150
++if (( expected_packages < minimum_expected_packages || expected_packages > 2000 )); then
+   echo "WARNING: resolved target package count $expected_packages is outside the" >&2
+-  echo "         expected 600-2000 range; shipping no denominator so the install" >&2
++  echo "         expected $minimum_expected_packages-2000 range; shipping no denominator so the install" >&2
+   echo "         dashboard falls back to its time-based curve." >&2
+ else
+   printf '%s\n' "$expected_packages" \

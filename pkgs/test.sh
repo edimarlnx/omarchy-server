@@ -1,0 +1,188 @@
+#!/bin/bash
+
+# Install the three packages from the local signed repo into a fresh
+# archlinux:latest container and assert the acceptance criteria of the packaging step
+#: the server profile must install without pulling a single desktop
+# dependency, and the commands the ISO and omarchy-update rely on must work.
+#
+#   ./pkgs/test.sh
+#
+# Run ./pkgs/build.sh first. Anything that needs a running init (systemctl,
+# ufw, mkinitcpio) is checked by parsing or --help only; the real thing is the
+# the VM install.
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+pkgs_dir="$repo_root/pkgs"
+image=${OMARCHY_BUILD_IMAGE:-archlinux:latest}
+
+[[ -f $pkgs_dir/repo/omarchy-server.db.tar.gz ]] || {
+  echo "Error: pkgs/repo is empty. Run ./pkgs/build.sh first." >&2
+  exit 1
+}
+
+docker run --rm \
+  -v "$pkgs_dir/repo:/repo:ro" \
+  "$image" bash -euo pipefail -c '
+    fail=0
+    check() {
+      local label="$1"; shift
+      if "$@" >/tmp/check.out 2>&1; then
+        echo "  PASS  $label"
+      else
+        echo "  FAIL  $label"
+        sed "s/^/        /" /tmp/check.out
+        fail=1
+      fi
+    }
+
+    # [omarchy] provides limine-mkinitcpio-hook, limine-snapper-sync, ufw-docker,
+    # tzupdate and yay, which are not in the Arch repositories. The ISO mirrors
+    # it offline; here it is fetched over the network.
+    cat >>/etc/pacman.conf <<EOF
+
+[omarchy]
+SigLevel = Optional TrustAll
+Server = https://pkgs.omarchy.org/stable/\$arch
+
+[omarchy-server]
+SigLevel = Required DatabaseOptional
+Server = file:///repo
+EOF
+
+    echo "== pacman keyring =="
+    pacman-key --init
+    pacman-key --populate archlinux
+
+    # Trust anchor bootstrap. The keyring package is signed by the very key it
+    # delivers, so it cannot verify itself — the same chicken-and-egg
+    # archlinux-keyring has. Break it by importing the key out of the package
+    # file and locally signing it, then install the package normally with full
+    # signature checking. (On an ISO install the equivalent step is the
+    # offline mirror, which pacman reads as SigLevel = Optional TrustAll.)
+    bsdtar -xOf /repo/omarchy-server-keyring-*.pkg.tar.zst \
+      usr/share/pacman/keyrings/omarchy-server.gpg >/tmp/omarchy-server.gpg
+    bsdtar -xOf /repo/omarchy-server-keyring-*.pkg.tar.zst \
+      usr/share/pacman/keyrings/omarchy-server-trusted >/tmp/omarchy-server-trusted
+    repo_key=$(cut -d: -f1 /tmp/omarchy-server-trusted)
+    pacman-key --add /tmp/omarchy-server.gpg
+    pacman-key --lsign-key "$repo_key"
+
+    pacman -U --noconfirm /repo/omarchy-server-keyring-*.pkg.tar.zst
+    pacman-key --populate omarchy-server
+
+    echo
+    echo "== installing omarchy-server from [omarchy-server] =="
+    pacman -Sy --noconfirm omarchy-server
+
+    echo
+    echo "== assertions =="
+    check "no desktop packages installed" bash -c \
+      "! pacman -Qq | grep -qE \"^(hyprland|sddm|pipewire|quickshell|plymouth|wireplumber|uwsm|gnome-keyring|xdg-desktop-portal-hyprland)\""
+    check "omarchy-version prints the package version" bash -c \
+      "[[ \$(omarchy-version) == 4.0.1-1 ]]"
+    check "omarchy-pkg-present bash" omarchy-pkg-present bash
+    check "omarchy-pkg-present of a missing package fails" bash -c \
+      "! omarchy-pkg-present definitely-not-installed"
+    check "login shell exports OMARCHY_PATH" bash -c \
+      "[[ \$(bash -lc \"echo \\\$OMARCHY_PATH\") == /usr/share/omarchy ]]"
+    check "omarchy-apply-system --help" omarchy-apply-system --help
+    check "install/server/all.sh parses" bash -n /usr/share/omarchy/install/server/all.sh
+    check "every install/server script parses" bash -c \
+      "for f in /usr/share/omarchy/install/server/*.sh /usr/share/omarchy/install/server/addons/*.sh; do bash -n \"\$f\" || exit 1; done"
+    check "apply-system routes the server profile" bash -c \
+      "grep -q \"OMARCHY_INSTALL/server/all.sh\" /usr/bin/omarchy-apply-system"
+    check "/etc/omarchy-profile says server" bash -c \
+      "[[ \$(cat /etc/omarchy-profile) == server ]]"
+    check "provides/conflicts recorded" bash -c \
+      "pacman -Qi omarchy-server | grep -q \"Provides *: omarchy\" && pacman -Qi omarchy-server | grep -q \"Conflicts With *: omarchy\""
+    check "limine cmdline has the serial console" bash -c \
+      "grep -q \"console=ttyS0,115200 console=tty0\" /etc/limine-entry-tool.d/omarchy-defaults.conf"
+    # grep -v "^#" everywhere below: the server files explain in comments what
+    # they dropped, so a naive grep would match the explanation.
+    check "limine cmdline has no quiet splash" bash -c \
+      "! grep -v \"^#\" /etc/limine-entry-tool.d/omarchy-defaults.conf | grep -q \"quiet splash\""
+    check "limine timeout is 0" bash -c \
+      "grep -qx \"timeout: 0\" /usr/share/omarchy/default/limine/limine.conf"
+    check "mkinitcpio hooks have no plymouth" bash -c \
+      "! grep -v \"^#\" /etc/mkinitcpio.conf.d/omarchy_hooks.conf | grep -q plymouth"
+    check "zram-size is ram / 2" bash -c \
+      "grep -qx \"zram-size = ram / 2\" /usr/lib/systemd/zram-generator.conf.d/90-omarchy.conf"
+    check "nsswitch has no mdns" bash -c \
+      "! grep -v \"^#\" /etc/nsswitch.conf | grep -q mdns"
+    check "os-release is the server one" bash -c \
+      "grep -qx \"ID=omarchy-server\" /etc/os-release"
+    check "agent skills shipped" test -d /usr/share/omarchy/default/agents/skills
+    check "themes and shell are NOT shipped" bash -c \
+      "! test -e /usr/share/omarchy/themes && ! test -e /usr/share/omarchy/shell"
+    check "usr/bin entries are symlinks" bash -c \
+      "test -L /usr/bin/omarchy-version && test -L /usr/bin/omarchy-update"
+    check "migration stubs seeded in /etc/skel" bash -c \
+      "(( \$(ls /etc/skel/.local/state/omarchy/migrations | wc -l) > 50 ))"
+    check "update guard hook installed" test -f /usr/share/libalpm/hooks/00-omarchy-update-guard.hook
+    check "hyprland reload hooks NOT installed" bash -c \
+      "! ls /usr/share/libalpm/hooks/ | grep -q hyprland"
+    check "omarchy-channel-current knows omarchy-server" bash -c \
+      "grep -q omarchy-server-settings /usr/bin/omarchy-channel-current"
+
+    echo
+    echo "== lean base =="
+    # The runtime depends are what a pacman install of omarchy-server drags in
+    # unconditionally, so this is where the base stops being lean if a desktop
+    # dependency creeps back.
+    check "runtime does not depend on git/jq/perl/fakeroot" bash -c \
+      "! pacman -Qi omarchy-server | sed -n \"/^Depends On/,/^Optional Deps/p\" | grep -qE \"(^| )(git|jq|perl|fakeroot)( |$)\""
+    check "docker is not installed" bash -c "! pacman -Qq docker >/dev/null 2>&1"
+    check "tailscale is not installed" bash -c "! pacman -Qq tailscale >/dev/null 2>&1"
+    check "networkmanager is not installed" bash -c \
+      "! pacman -Qq networkmanager >/dev/null 2>&1"
+    check "no compiler in the closure" bash -c \
+      "! pacman -Qq gcc >/dev/null 2>&1"
+    # The docker drop-ins must NOT be in /etc: 20-docker-dns.conf makes
+    # systemd-resolved open a listener on the docker bridge address.
+    check "docker drop-ins are defaults, not /etc" bash -c \
+      "test -f /usr/share/omarchy/default/docker/20-docker-dns.conf && ! test -e /etc/systemd/resolved.conf.d/20-docker-dns.conf && ! test -e /etc/docker/daemon.json"
+    check "sshd hardening turns passwords off" bash -c \
+      "grep -q \"PasswordAuthentication no\" /usr/share/omarchy/install/server/sshd-hardening-server.sh && grep -q \"PermitRootLogin no\" /usr/share/omarchy/install/server/sshd-hardening-server.sh"
+    check "firewall rate-limits ssh" bash -c \
+      "grep -v \"^#\" /usr/share/omarchy/install/server/firewall-server.sh | grep -q \"ufw limit 22/tcp\""
+    check "firewall no longer installs docker rules" bash -c \
+      "! grep -v \"^#\" /usr/share/omarchy/install/server/firewall-server.sh | grep -q ufw-docker"
+    check "services enable networkd and resolved, not NetworkManager" bash -c \
+      "grep -q \"systemctl enable systemd-networkd.service\" /usr/share/omarchy/install/server/enable-services-server.sh && ! grep -q \"systemctl enable NetworkManager.service\" /usr/share/omarchy/install/server/enable-services-server.sh"
+    check "services no longer enable docker.socket" bash -c \
+      "! grep -v \"^#\" /usr/share/omarchy/install/server/enable-services-server.sh | grep -q docker.socket"
+
+    echo
+    echo "== addons =="
+    check "omarchy-server-addon is linked into /usr/bin" bash -c \
+      "test -L /usr/bin/omarchy-server-addon"
+    check "omarchy-server-addon --list names every addon" bash -c \
+      "for a in cli-tools dev docker editor net-tools tailscale vm; do omarchy-server-addon --list | grep -qx \"\$a\" || exit 1; done"
+    check "omarchy-server-addon --help does not touch the system" \
+      omarchy-server-addon --help
+    check "an unknown addon fails" bash -c \
+      "! omarchy-server-addon definitely-not-an-addon"
+    check "docker addon lists the docker packages" bash -c \
+      "grep -qx docker /usr/share/omarchy/install/server/addons/docker.packages && grep -qx ufw-docker /usr/share/omarchy/install/server/addons/docker.packages"
+    check "docker addon setup leaf ships with it" \
+      test -f /usr/share/omarchy/install/server/addons/docker.sh
+
+    echo
+    echo "== measurements =="
+    printf "packages installed: %s\n" "$(pacman -Qq | wc -l)"
+    pacman -S --noconfirm --needed expac >/dev/null 2>&1
+    printf "total installed size: %s MiB\n" \
+      "$(expac -Q "%m" $(pacman -Qq) | awk "{ s += \$1 } END { printf \"%.0f\", s / 1048576 }")"
+    echo
+    printf "%-28s %10s\n" package "installed"
+    expac -Q "%-28n %10m" omarchy-server omarchy-server-settings omarchy-server-keyring
+
+    echo
+    if (( fail )); then
+      echo "RESULT: FAILED"
+      exit 1
+    fi
+    echo "RESULT: OK"
+  '

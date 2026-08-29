@@ -1,0 +1,71 @@
+# Route omarchy-provision-user's per-user setup through the server tree when
+# the active profile is 'server' (OMARCHY_PROFILE env or /etc/omarchy-profile).
+# Without it the ISO's "Finalizing user" phase dies on the first missing
+# xdg-user-dirs-update.
+--- a/bin/omarchy-provision-user	2026-08-28 19:28:47.996866189 -0300
++++ b/bin/omarchy-provision-user	2026-08-28 19:28:48.009207304 -0300
+@@ -66,6 +66,15 @@
+ export OMARCHY_SETUP_CONTEXT="${OMARCHY_SETUP_CONTEXT:-runtime}"
+ export PATH="$OMARCHY_PATH/bin:$PATH"
+ 
++# The profile decides how much of the per-user setup applies. It comes from the
++# environment (the ISO exports OMARCHY_PROFILE into the target chroot) or from
++# /etc/omarchy-profile. Anything other than "server" keeps the desktop path.
++profile="${OMARCHY_PROFILE:-}"
++if [[ -z $profile && -r /etc/omarchy-profile ]]; then
++  profile=$(tr -d '[:space:]' </etc/omarchy-profile)
++fi
++export OMARCHY_PROFILE="$profile"
++
+ if (( first_install )) && [[ $OMARCHY_SETUP_CONTEXT == "runtime" ]]; then
+   # The ISO chroot doesn't set a context; omarchy-provision-owner runs first-install
+   # finalization too but with OMARCHY_SETUP_CONTEXT=provision-owner already set.
+@@ -95,22 +104,32 @@
+   ln -sfn "$skill" ~/.gemini/config/skills/"$name"
+ done
+ 
+-mkdir -p ~/Downloads ~/Pictures ~/Videos ~/.config/gtk-3.0
+-xdg-user-dirs-update --set TEMPLATES "$HOME"
+-xdg-user-dirs-update --set PUBLICSHARE "$HOME"
+-xdg-user-dirs-update --set DESKTOP "$HOME"
+-rmdir ~/Templates ~/Public ~/Desktop 2>/dev/null || true
+-touch ~/.config/gtk-3.0/bookmarks
+-for dir in Downloads Projects Pictures Videos; do
+-  bookmark="file://$HOME/$dir $dir"
+-  grep -qxF "$bookmark" ~/.config/gtk-3.0/bookmarks || echo "$bookmark" >>~/.config/gtk-3.0/bookmarks
+-done
+-
+-source "$OMARCHY_INSTALL/user/all.sh"
+-
+-omarchy-refresh-applications
+-env -u BROWSER xdg-settings set default-web-browser chromium.desktop
+-xdg-mime default HEY.desktop x-scheme-handler/mailto
++if [[ $OMARCHY_PROFILE == "server" ]]; then
++  # A headless profile installs neither xdg-user-dirs nor a file manager, a
++  # browser or a desktop database: every command below would be missing, and
++  # with `set -e` the first of them would abort user finalization and take the
++  # ISO's "Finalizing user" phase down with it. install/server/user-all.sh
++  # carries the one step that still applies (git identity), and the migration
++  # marking further down is what keeps a fresh user from replaying history.
++  source "$OMARCHY_INSTALL/server/user-all.sh"
++else
++  mkdir -p ~/Downloads ~/Pictures ~/Videos ~/.config/gtk-3.0
++  xdg-user-dirs-update --set TEMPLATES "$HOME"
++  xdg-user-dirs-update --set PUBLICSHARE "$HOME"
++  xdg-user-dirs-update --set DESKTOP "$HOME"
++  rmdir ~/Templates ~/Public ~/Desktop 2>/dev/null || true
++  touch ~/.config/gtk-3.0/bookmarks
++  for dir in Downloads Projects Pictures Videos; do
++    bookmark="file://$HOME/$dir $dir"
++    grep -qxF "$bookmark" ~/.config/gtk-3.0/bookmarks || echo "$bookmark" >>~/.config/gtk-3.0/bookmarks
++  done
++
++  source "$OMARCHY_INSTALL/user/all.sh"
++
++  omarchy-refresh-applications
++  env -u BROWSER xdg-settings set default-web-browser chromium.desktop
++  xdg-mime default HEY.desktop x-scheme-handler/mailto
++fi
+ 
+ if (( first_install )); then
+   mkdir -p "$state_dir/migrations"

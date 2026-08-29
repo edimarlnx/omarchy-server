@@ -1,0 +1,62 @@
+# Omarchy server profile: units to enable / mask.
+# What a machine runs is the surface it offers, so this list is exhaustive:
+# install/server/enable-services-server.sh enables exactly these and masks the
+# rest. Anything an addon needs is enabled by that addon's setup leaf.
+
+[default-target]
+multi-user.target
+
+[enable-system]
+sshd.service
+# Networking from systemd itself; NetworkManager is not installed.
+systemd-networkd.service
+systemd-resolved.service
+systemd-timesyncd.service
+ufw.service
+systemd-oomd.service
+snapper-cleanup.timer
+limine-snapper-sync.service
+linux-modules-cleanup.service
+# Serial console for headless debugging.
+serial-getty@ttyS0.service
+
+[mask-system]
+# Never block boot on DHCP.
+systemd-networkd-wait-online.service
+NetworkManager-wait-online.service
+# None of these is installed. Masking is what keeps a dependency from quietly
+# reintroducing one.
+plymouth-start.service
+plymouth-quit.service
+plymouth-quit-wait.service
+sddm.service
+cups.service
+cups.socket
+cups-browsed.service
+avahi-daemon.service
+avahi-daemon.socket
+bluetooth.service
+power-profiles-daemon.service
+
+[disable-system]
+# Enabled by snapper's own packaging: hourly timeline snapshots on a server
+# fill the disk to record nothing changing.
+snapper-timeline.timer
+
+[enable-user]
+# None. Every user unit of the desktop profile needs a graphical or audio
+# session.
+
+[addons]
+# Enabled only when the matching addon is installed
+# (install/server/addons/<name>.sh):
+#   docker     docker.socket
+#   tailscale  tailscaled.service
+#   vm         qemu-guest-agent.service
+
+[provisioning]
+# Installed (not enabled) by the deferred-provisioning / factory-reset paths.
+# The server variant of omarchy-provision-owner.service drops
+# `Before=display-manager.service` and `ExecStartPre=plymouth quit`.
+omarchy-provision-owner.service
+omarchy-system-factory-reset-finish.service

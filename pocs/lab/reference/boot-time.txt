@@ -1,0 +1,27 @@
+Startup finished in 574ms (firmware) + 6.376s (loader) + 976ms (kernel) + 4.221s (userspace) = 12.150s 
+graphical.target reached after 4.143s in userspace.
+1.165s dev-vda2.device
+1.013s systemd-tmpfiles-setup-dev-early.service
+ 987ms systemd-userdbd.service
+ 951ms ldconfig.service
+ 190ms ufw.service
+  90ms user@962.service
+  79ms NetworkManager.service
+  75ms systemd-remount-fs.service
+  71ms user@1000.service
+  64ms sshdgenkeys.service
+  64ms power-profiles-daemon.service
+  51ms systemd-udev-trigger.service
+  47ms dev-zram0.swap
+  44ms polkit.service
+  38ms plymouth-start.service
+  35ms systemd-logind.service
+  33ms systemd-fsck@dev-disk-by\x2duuid-10DC\x2d8141.service
+  31ms plymouth-quit-wait.service
+  30ms avahi-daemon.service
+  30ms systemd-resolved.service
+  29ms plymouth-quit.service
+  29ms systemd-tmpfiles-setup.service
+  28ms systemd-journald.service
+  25ms systemd-udevd.service
+  25ms systemd-hostnamed.service

@@ -1,0 +1,40 @@
+diff --git a/builder/build-omarchy-packages.sh b/builder/build-omarchy-packages.sh
+index 5f7173f..acbcd0d 100755
+--- a/builder/build-omarchy-packages.sh
++++ b/builder/build-omarchy-packages.sh
+@@ -32,15 +32,27 @@ chown builder:builder "$work_dir"
+ 
+ pacman -Sy --noconfirm
+ 
+-: "${OMARCHY_RUNTIME_PACKAGE:=omarchy-dev}"
+-: "${OMARCHY_SETTINGS_PACKAGE:=omarchy-settings-dev}"
+-: "${OMARCHY_NVIM_PACKAGE:=omarchy-nvim}"
++# A PKGBUILD may consume the mounted checkout through a git+file:// source, and
++# git refuses to read a repository owned by another user. The mount is
++# read-only and the container is thrown away with the build.
++git config --system --add safe.directory /omarchy-source
++git config --system --add safe.directory /omarchy-pkgs
+ 
+-packages=(
+-  "$OMARCHY_SETTINGS_PACKAGE"
+-  "$OMARCHY_RUNTIME_PACKAGE"
+-  "$OMARCHY_NVIM_PACKAGE"
+-)
++# Unset-only defaults (`=`, not `:=`): build-iso.sh exports all four, and a
++# profile may deliberately export an EMPTY name to say "this profile ships no
++# such package". `:=` would quietly resurrect the default for it.
++: "${OMARCHY_RUNTIME_PACKAGE=omarchy-dev}"
++: "${OMARCHY_SETTINGS_PACKAGE=omarchy-settings-dev}"
++: "${OMARCHY_NVIM_PACKAGE=omarchy-nvim}"
++: "${OMARCHY_EXTRA_PACKAGES=}"
++
++# Empty targets are dropped rather than special-cased: a profile may ship no
++# nvim package at all, and may add packages of its own (a keyring, say).
++packages=()
++for package_name in "$OMARCHY_SETTINGS_PACKAGE" "$OMARCHY_RUNTIME_PACKAGE" \
++  "$OMARCHY_NVIM_PACKAGE" $OMARCHY_EXTRA_PACKAGES; do
++  [[ -n $package_name ]] && packages+=("$package_name")
++done
+ 
+ # Local-source packages must replace every cached build of the same package,
+ # even when the checkout's generated pkgver sorts below a published build.

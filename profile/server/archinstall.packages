@@ -1,0 +1,32 @@
+# Server variant of omarchy-iso/builder/archinstall.packages: the package set
+# pacstrap installs into the target before the Omarchy runtime, and the seed of
+# the ISO's offline mirror.
+#
+# Differences from the desktop list:
+#   - dropped: pipewire, alsa-firmware, sof-firmware (a server has no audio
+#     stack).
+#   - dropped: base-devel. A server carries no compiler and no build toolchain;
+#     the ISO's early bootstrap no longer asks for it either (see the
+#     orchestrator patch). `omarchy-server-addon dev` brings it back for the
+#     machines that need to build something.
+#   - dropped: tailscale. Optional software does not belong in the base; it is
+#     bundled in the offline mirror through the `tailscale` addon instead.
+#   - added: nano (`base` ships no editor and omarchy-nvim is not part of the
+#     server profile).
+#
+# Note this file only seeds the offline mirror: archinstall decides on its own
+# what pacstrap installs, so the packages that must really land in the target
+# are in omarchy-server.packages, which the orchestrator reads back.
+#
+# Both microcode packages stay: the mirror must be able to serve either CPU.
+amd-ucode
+base
+efibootmgr
+intel-ucode
+limine
+linux
+linux-firmware
+nano
+omarchy-keyring
+openssh
+snapper

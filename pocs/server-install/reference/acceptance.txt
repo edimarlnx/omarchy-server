@@ -1,0 +1,218 @@
+=== Server install acceptance — VM 'srv' — 2026-08-28T23:05:05-03:00 ===
+
+[PASS] default target is multi-user.target
+      $ systemctl get-default
+      multi-user.target
+
+[PASS] no sddm/hyprland/pipewire/plymouth installed
+      $ for p in sddm hyprland pipewire plymouth wireplumber uwsm quickshell xdg-desktop-portal-hyprland gnome-keyring; do pacman -Qq "$p" >/dev/null 2>&1 && echo "PRESENT: $p"; done; echo "graphical=$(pacman -Qq | grep -cE "^(sddm|hyprland|pipewire|plymouth|wireplumber|uwsm|quickshell)$")"
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      graphical=0
+
+[PASS] docker is absent from the base
+      $ for p in docker docker-compose docker-buildx ufw-docker lazydocker networkmanager base-devel gcc git tailscale; do pacman -Qq "$p" >/dev/null 2>&1 && echo "PRESENT: $p"; done; echo "extras=$(pacman -Qq | grep -cE "^(docker|networkmanager|gcc|tailscale)$")"
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      extras=0
+
+[PASS] ssh with the cidata key works
+      $ echo "logged in as $(id -un)@$(uname -n) from $SSH_CONNECTION"
+      logged in as omarchy@omarchy-srv from 10.0.2.2 49830 10.0.2.15 22
+
+[PASS] password authentication is refused
+      $ ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=10 "$(id -un)@localhost" true 2>&1 | tail -2
+      Warning: Permanently added 'localhost' (ED25519) to the list of known hosts.
+      omarchy@localhost: Permission denied (publickey).
+
+[PASS] root cannot log in over ssh
+      $ ~/.lab-sudo sshd -T 2>/dev/null | grep -iE "^(permitrootlogin|passwordauthentication|kbdinteractiveauthentication|permitemptypasswords) "
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitEmptyPasswords no
+
+[PASS] networkd brought the link up by DHCP
+      $ networkctl status --no-pager 2>&1 | sed -n "1,25p"; ip -4 -o addr show scope global | awk "{print \$2, \$4}"
+      ● Interfaces: 1, 2
+             State: routable
+      Online state: online
+           Address: 10.0.2.15 on enp0s3
+                    fec0::5054:ff:fe12:3456 on enp0s3
+                    fe80::5054:ff:fe12:3456 on enp0s3
+           Gateway: 10.0.2.2 on enp0s3
+                    fe80::2 on enp0s3
+               DNS: 10.0.2.3
+                    fec0::3
+      
+      Aug 28 23:04:49 omarchy-srv systemd[1]: Starting Network Management...
+      Aug 28 23:04:49 omarchy-srv systemd-networkd[423]: lo: Link UP
+      Aug 28 23:04:49 omarchy-srv systemd-networkd[423]: lo: Gained carrier
+      Aug 28 23:04:49 omarchy-srv systemd[1]: Started Network Management.
+      Aug 28 23:04:49 omarchy-srv systemd-networkd[423]: enp0s3: Configuring with /etc/systemd/network/20-wired.network.
+      Aug 28 23:04:49 omarchy-srv systemd-networkd[423]: enp0s3: Link UP
+      Aug 28 23:04:49 omarchy-srv systemd-networkd[423]: enp0s3: Gained carrier
+      Aug 28 23:04:49 omarchy-srv systemd-networkd[423]: enp0s3: DHCPv4 address 10.0.2.15/24, gateway 10.0.2.2 acquired from 10.0.2.2
+      Aug 28 23:04:51 omarchy-srv systemd-networkd[423]: enp0s3: Gained IPv6LL
+      enp0s3 10.0.2.15/24
+
+[PASS] resolved answers through the stub resolver
+      $ readlink -f /etc/resolv.conf; resolvectl status --no-pager | sed -n "1,12p"; getent hosts archlinux.org | head -1 && echo dns-ok
+      /run/systemd/resolve/stub-resolv.conf
+      Global
+                 Protocols: -LLMNR -mDNS -DNSOverTLS DNSSEC=no/unsupported
+          resolv.conf mode: stub
+        Current DNS Server: 9.9.9.9#dns.quad9.net
+      Fallback DNS Servers: 9.9.9.9#dns.quad9.net 2620:fe::9#dns.quad9.net
+                            1.1.1.1#cloudflare-dns.com
+                            2606:4700:4700::1111#cloudflare-dns.com 8.8.8.8#dns.google
+                            2001:4860:4860::8888#dns.google
+      
+      Link 2 (enp0s3)
+          Current Scopes: DNS
+               Protocols: +DefaultRoute -LLMNR -mDNS -DNSOverTLS DNSSEC=no/unsupported
+      2604:cac0:a104:d::3 archlinux.org
+      dns-ok
+
+[PASS] sudo works with the lab password
+      $ ~/.lab-sudo id -un
+      root
+
+[PASS] ufw is active and rate-limits 22
+      $ ~/.lab-sudo ufw status verbose
+      Status: active
+      Logging: on (low)
+      Default: deny (incoming), allow (outgoing), disabled (routed)
+      New profiles: skip
+      
+      To                         Action      From
+      --                         ------      ----
+      22/tcp                     LIMIT IN    Anywhere                  
+      22/tcp (v6)                LIMIT IN    Anywhere (v6)              # omarchy-sshd
+
+[PASS] nothing listens except ssh
+      $ ~/.lab-sudo ss -ltnpH | awk "{print \$4}" | grep -v "^127\." | sort -u | tee /dev/stderr | grep -qvE ":22$" && echo unexpected-listener || echo only-ssh
+      only-ssh
+      0.0.0.0:22
+      [::]:22
+
+[PASS] factory snapshot exists and snapper is configured
+      $ ~/.lab-sudo snapper list; ~/.lab-sudo btrfs subvolume list / | grep -i factory; ~/.lab-sudo ls /etc/snapper/configs/
+      # | Type   | Pre # | Date | User | Cleanup | Description | Userdata
+      --+--------+-------+------+------+---------+-------------+---------
+      0 | single |       |      | root |         | current     |
+      ID 263 gen 13 top level 5 path @factory
+      root
+
+[PASS] /boot/limine.conf lists snapshot entries once a snapshot exists
+      $ ~/.lab-sudo snapper -c root create -d acceptance >/dev/null 2>&1; ~/.lab-sudo systemctl start limine-snapper-sync.service >/dev/null 2>&1; sleep 3; ~/.lab-sudo snapper -c root list | tail -3; ~/.lab-sudo grep -iE "snapshot" /boot/limine.conf | head -6
+      --+--------+-------+--------------------------+------+---------+-------------+---------
+      0 | single |       |                          | root |         | current     |
+      1 | single |       | Fri Aug 28 23:05:06 2026 | root |         | acceptance  |
+           //Snapshots
+           comment: 1 snapshots
+           cmdline: root=PARTUUID=d4f64dc2-463f-4056-8ae5-843a1151cc1a zswap.enabled=0 rootflags=subvol=/@/.snapshots/1/snapshot rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
+
+[PASS] pacman -Qq | wc -l in 150-260
+      $ n=$(pacman -Qq | wc -l); echo "packages=$n"; [ "$n" -ge 150 ] && [ "$n" -le 260 ] && echo in-range || echo out-of-range
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      packages=220
+      in-range
+
+[PASS] installed size and disk used < 3 GB
+      $ LC_ALL=C pacman -Qi | awk "/^Installed Size/ { v=\$4; u=\$5; if (u==\"B\") v/=1048576; if (u==\"KiB\") v/=1024; if (u==\"GiB\") v*=1024; s+=v } END { printf \"installed=%.0f MiB\n\", s }"; used=$(df --output=used -BM / | tail -1 | tr -dc 0-9); echo "used=${used}MiB"; [ "$used" -lt 3072 ] && echo under-3g || echo over-3g
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      installed=1402 MiB
+      used=1171MiB
+      under-3g
+
+[PASS] boot to ssh under 20 s
+      $ systemd-analyze; t=$(systemd-analyze | sed -n "s/.*= \([0-9.]*\)s.*/\1/p"); awk -v t="$t" "BEGIN{print (t+0<20)?\"under-20s\":\"over-20s\"}"
+      Startup finished in 584ms (firmware) + 2.027s (loader) + 944ms (kernel) + 3.081s (userspace) = 6.638s 
+      multi-user.target reached after 3.077s in userspace.
+      under-20s
+
+[PASS] /proc/cmdline has console=ttyS0 and no quiet/splash/resume
+      $ cat /proc/cmdline; grep -q "console=ttyS0" /proc/cmdline && ! grep -qE "quiet|splash|resume=" /proc/cmdline && echo cmdline-ok || echo cmdline-bad
+      root=PARTUUID=d4f64dc2-463f-4056-8ae5-843a1151cc1a zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
+      cmdline-ok
+
+[PASS] zram active
+      $ zramctl; swapon --show
+      NAME       ALGORITHM DISKSIZE DATA COMPR TOTAL STREAMS MOUNTPOINT
+      /dev/zram0 zstd          3.9G   4K   64B   20K         [SWAP]
+      NAME       TYPE      SIZE USED PRIO
+      /dev/zram0 partition 3.9G   0B  100
+
+[PASS] /etc/omarchy-profile is server
+      $ cat /etc/omarchy-profile
+      server
+
+[PASS] omarchy-version is 4.0.1-1
+      $ omarchy-version 2>/dev/null
+      4.0.1-1
+
+[PASS] omarchy-server-addon docker installs and runs a container
+      $ ~/.lab-sudo omarchy-server-addon docker 2>&1 | tail -5; ~/.lab-sudo systemctl start docker.socket; ~/.lab-sudo docker run --rm hello-world 2>&1 | sed -n "/Hello from Docker/,+3p"
+      Please restart UFW service manually by using the following command:
+          sudo systemctl restart ufw
+      Created symlink '/etc/systemd/system/sockets.target.wants/docker.socket' → '/usr/lib/systemd/system/docker.socket'.
+      Firewall reloaded
+      Addon 'docker' installed.
+      Hello from Docker!
+      This message shows that your installation appears to be working correctly.
+      
+      To generate this message, Docker took the following steps:
+
+[PASS] the docker addon opens only the container DNS stub
+      $ ~/.lab-sudo ss -ltnpH | awk "{print \$4}" | grep -vE "^127\.|^172\.17\.0\.1:53$" | sort -u | tee /dev/stderr | grep -qvE ":22$" && echo unexpected-listener || echo expected-only; ~/.lab-sudo ufw status | grep -c allow-docker-dns
+      0.0.0.0:22
+      [::]:22
+      expected-only
+      2
+
+[PASS] omarchy-update runs to completion
+      $ timeout 2400 omarchy-update -y < <(while cat ~/.lab-pw; do sleep 2; done) 2>&1 | tail -40 | ~/.lab-redact; echo "rc=${PIPESTATUS[0]}"
+      <lab-password>
+      [32m
+      Prune package cache[0m
+      [sudo] password for omarchy: 
+      ]3008;start=d4ccda7645db4af38f7f44013e1ddb6e;user=omarchy;hostname=omarchy-srv;machineid=3a653f46bc0d4eafb3022a7ac92c0713;bootid=28ea08ff8dad4f3c9b1a1ad8983fabe5;pid=2226;pidfdid=8638;comm=sudo;targetuser=root;type=session\[1m[32m==>[0m[1m no candidate packages found for pruning[0m
+      ]3008;end=d4ccda7645db4af38f7f44013e1ddb6e\
+      [32mCreate system snapshot[0m
+      ]3008;start=8026207736fd424a83dbabc231a90a15;user=omarchy;hostname=omarchy-srv;machineid=3a653f46bc0d4eafb3022a7ac92c0713;bootid=28ea08ff8dad4f3c9b1a1ad8983fabe5;pid=2259;pidfdid=8652;comm=sudo;targetuser=root;type=session\]3008;end=8026207736fd424a83dbabc231a90a15\]3008;start=570656174ada481caaf33f7d93da049e;user=omarchy;hostname=omarchy-srv;machineid=3a653f46bc0d4eafb3022a7ac92c0713;bootid=28ea08ff8dad4f3c9b1a1ad8983fabe5;pid=2274;pidfdid=4671;comm=sudo;targetuser=root;type=session\]3008;end=570656174ada481caaf33f7d93da049e\Snapshots can be selected during boot.
+      [32m
+      Update Arch signing keys[0m
+      <lab-password>
+      Keys are correct
+      [32m
+      Update system packages[0m
+      ]3008;start=9a4165e2d6314b5abddbd5345d401ee3;user=omarchy;hostname=omarchy-srv;machineid=3a653f46bc0d4eafb3022a7ac92c0713;bootid=28ea08ff8dad4f3c9b1a1ad8983fabe5;pid=2542;pidfdid=695;comm=sudo;targetuser=root;type=session\[?25l[1;34m::[0;1m Synchronizing package databases...
+      [0m core
+       extra
+       multilib
+       omarchy
+      [1F omarchy is up to date[K[1F multilib is up to date[K[1F extra is up to date[K[1F core is up to date[K[4E[1;34m::[0;1m Starting full system upgrade...
+      [0m there is nothing to do
+      [?25h]3008;end=9a4165e2d6314b5abddbd5345d401ee3\[32m
+      Update AUR packages[0m
+      /usr/bin/omarchy-update-aur-pkgs: line 8: yay: command not found
+      
+      
+      [32m
+      Restarting shell[0m
+      All plugins have been reloaded
+      Omarchy shell config not found: /usr/share/omarchy/shell
+      rc=0
+
+=== 23 passed, 0 failed ===

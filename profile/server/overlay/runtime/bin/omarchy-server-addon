@@ -1,0 +1,125 @@
+#!/bin/bash
+
+# omarchy:summary=Install an optional package set on top of the lean server base
+# omarchy:args=<name> | --list
+# omarchy:examples=omarchy server-addon docker | omarchy server-addon --list
+# omarchy:requires-sudo=true
+
+# The server base carries only what a headless machine needs to boot, update,
+# snapshot, be reached and be firewalled. Everything else lives in an addon:
+# a package list at install/server/addons/<name>.packages and an optional
+# setup leaf at install/server/addons/<name>.sh, sourced after the install.
+#
+# The ISO bundles every addon's packages in its offline mirror without
+# installing them, so `omarchy-server-addon docker` works on a machine that has
+# never seen the network, and an `addons` file on the autoinstall drive applies
+# them during the install itself.
+
+set -euo pipefail
+
+OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
+OMARCHY_INSTALL="${OMARCHY_INSTALL:-$OMARCHY_PATH/install}"
+addons_dir="$OMARCHY_INSTALL/server/addons"
+
+# The ISO applies addons inside the target chroot, where the only repository
+# that exists is the bundled offline mirror. It points this at the offline
+# pacman.conf; on an installed machine the variable is unset and pacman uses
+# the system configuration.
+pacman_args=()
+[[ -n ${OMARCHY_ADDON_PACMAN_CONF:-} ]] && pacman_args+=(--config "$OMARCHY_ADDON_PACMAN_CONF")
+
+available_addons() {
+  local file
+  for file in "$addons_dir"/*.packages; do
+    [[ -f $file ]] || continue
+    local name="${file##*/}"
+    printf '%s\n' "${name%.packages}"
+  done
+}
+
+usage() {
+  echo "Usage: omarchy-server-addon <name>"
+  echo "       omarchy-server-addon --list"
+  echo
+  echo "Available addons:"
+  local name
+  while read -r name; do
+    printf '  %-10s %s\n' "$name" "$(addon_summary "$name")"
+  done < <(available_addons)
+}
+
+# The first non-empty comment line of the package list doubles as the addon's
+# description, so there is one place to write it down.
+addon_summary() {
+  sed -n 's/^# \(.*\)/\1/p' "$addons_dir/$1.packages" 2>/dev/null | head -n 1
+}
+
+case "${1:-}" in
+  --list | -l)
+    available_addons
+    exit 0
+    ;;
+  -h | --help | "")
+    usage
+    exit 0
+    ;;
+  -*)
+    echo "omarchy-server-addon: unknown option '$1'. Try --help." >&2
+    exit 2
+    ;;
+esac
+
+addon="$1"
+shift
+if (($#)); then
+  echo "omarchy-server-addon: one addon at a time. Try --help." >&2
+  exit 2
+fi
+
+packages_file="$addons_dir/$addon.packages"
+if [[ ! -f $packages_file ]]; then
+  echo "omarchy-server-addon: no such addon: $addon" >&2
+  echo "Available: $(available_addons | tr '\n' ' ')" >&2
+  exit 1
+fi
+
+# Re-exec under sudo rather than sprinkling sudo through the install, so the
+# addon setup leaf runs as root the same way install/server/*.sh does during
+# the ISO install.
+if ((EUID != 0)); then
+  exec sudo -E "$0" "$addon"
+fi
+
+mapfile -t packages < <(grep -v '^#\|^$' "$packages_file")
+if ((${#packages[@]} == 0)); then
+  echo "omarchy-server-addon: $addon lists no packages." >&2
+  exit 1
+fi
+
+echo "Installing addon '$addon': ${packages[*]}"
+if ((${#pacman_args[@]})); then
+  # The offline mirror is a fixed snapshot taken with the very packages that
+  # were installed from it, so refreshing its database is a local file copy and
+  # there is nothing to upgrade against.
+  pacman "${pacman_args[@]}" -Sy --noconfirm
+  pacman "${pacman_args[@]}" -S --needed --noconfirm "${packages[@]}"
+else
+  # `-Syu`, not `-Sy` followed by `-S`: pulling a package built against newer
+  # libraries into a system that has not been upgraded is the partial-upgrade
+  # breakage Arch warns about, and an installed machine has no reason to keep
+  # its databases stale. On a fresh install the sync databases are empty (the
+  # install ran off the ISO's offline mirror), so a refresh is required, not
+  # optional.
+  pacman -Syu --needed --noconfirm "${packages[@]}"
+fi
+
+setup="$addons_dir/$addon.sh"
+if [[ -f $setup ]]; then
+  echo "Running addon setup: ${setup##*/}"
+  # Sourced, with no shebang and no exit, the same convention every leaf under
+  # install/ follows (agents/skills/install-scripts.md).
+  # shellcheck disable=SC1090
+  source "$setup"
+fi
+
+echo "Addon '$addon' installed."

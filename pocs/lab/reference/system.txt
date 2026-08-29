@@ -1,0 +1,56 @@
+7.1.9-arch1-2
+NAME="Omarchy"
+PRETTY_NAME="Omarchy"
+ID=omarchy
+4.0.1-1
+applications
+bin
+config
+default
+etc-overrides
+icon.png
+icon.txt
+install
+logo.svg
+logo.txt
+migrations
+shell
+themes
+version
+.
+..
+.bash_logout
+.bash_profile
+.bashrc
+.config
+.local
+               total        used        free      shared  buff/cache   available
+Mem:            7926         955        6298          25        1178        6971
+4
+graphical.target
+provisioning
+
+NAME       ALGORITHM DISKSIZE DATA COMPR TOTAL STREAMS MOUNTPOINT
+/dev/zram0 zstd          7.7G   4K   64B   20K         [SWAP]
+
+[options]
+Color
+ILoveCandy
+VerbosePkgLists
+HoldPkg = pacman glibc
+Architecture = auto
+CheckSpace
+ParallelDownloads = 5
+DownloadUser = alpm
+SigLevel = Required DatabaseOptional
+LocalFileSigLevel = Optional
+[core]
+Include = /etc/pacman.d/mirrorlist
+[extra]
+Include = /etc/pacman.d/mirrorlist
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+[omarchy]
+SigLevel = Optional TrustAll
+Server = https://pkgs.omarchy.org/stable/$arch
+

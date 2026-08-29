@@ -1,0 +1,23 @@
+UNIT FILE                               STATE   PRESET
+getty@.service                          enabled enabled
+limine-snapper-sync.service             enabled disabled
+linux-modules-cleanup.service           enabled disabled
+sshd.service                            enabled disabled
+systemd-network-generator.service       enabled enabled
+systemd-networkd.service                enabled enabled
+systemd-oomd.service                    enabled disabled
+systemd-resolved.service                enabled enabled
+systemd-timesyncd.service               enabled enabled
+ufw.service                             enabled disabled
+systemd-networkd-resolve-hook.socket    enabled disabled
+systemd-networkd-varlink-metrics.socket enabled disabled
+systemd-networkd-varlink.socket         enabled disabled
+systemd-networkd.socket                 enabled disabled
+systemd-oomd.socket                     enabled disabled
+systemd-resolved-monitor.socket         enabled disabled
+systemd-resolved-varlink.socket         enabled disabled
+systemd-userdbd.socket                  enabled enabled
+remote-fs.target                        enabled enabled
+snapper-cleanup.timer                   enabled disabled
+
+20 unit files listed.

@@ -1,0 +1,3 @@
+# Private mesh network. install/server/addons/tailscale.sh enables the daemon;
+# joining a tailnet still needs `tailscale up` or an auth key.
+tailscale

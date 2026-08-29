@@ -1,0 +1,14 @@
+archinstall
+audit
+btmp
+journal
+lastlog
+old
+omarchy-install-timing.json
+omarchy-install.log
+pacman.log
+private
+snapper.log
+wtmp
+--- errors this boot ---
+Aug 28 23:04:48 omarchy-srv kernel: virt/tdx: TDX not supported by the host platform

@@ -1,0 +1,31 @@
+# Server variant of install/provisioning/omarchy-provision-owner.service, used
+# by deferred-provisioning installs of the server profile. The ISO's
+# stage_provisioning_state phase prefers install/<profile>/ over
+# install/provisioning/ when copying the unit into the target.
+# 
+# Differences from upstream, all of them consequences of having no graphical
+# session (audit in docs/iso-server.md):
+#   - no `Before=display-manager.service`: no display manager exists.
+#   - no `ExecStartPre=-/usr/bin/plymouth quit`: plymouth is not installed.
+#   - no `Conflicts=getty@tty1.service` and no TTY* settings: on a headless
+#     machine the console may be ttyS0 or nothing at all, and taking tty1
+#     away from the getty would remove the only local console while the unit
+#     waits for input nobody can give. Output goes to the journal, and the
+#     server branch of omarchy-provision-owner asks no questions.
+[Unit]
+Description=Omarchy first boot setup (server profile)
+ConditionPathExists=/var/lib/omarchy/provisioning/pending
+ConditionPathExists=!/var/lib/omarchy/provisioning/wipe-pending
+After=systemd-user-sessions.service omarchy-system-factory-reset-finish.service
+Before=getty@tty1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=OMARCHY_PROFILE=server
+ExecStart=/usr/bin/omarchy-provision-owner
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

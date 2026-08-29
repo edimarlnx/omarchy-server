@@ -1,0 +1,97 @@
+=== Attack surface — VM 'srv-before' — 2026-08-28T22:51:20-03:00 ===
+
+=== packages ===
+installed:  320
+explicit:   57
+dependency: 263
+installed size (MiB): 2344
+linux-firmware (MiB): 408
+
+--- ten biggest packages ---
+     220.9 MiB  gcc
+     147.8 MiB  linux
+     132.5 MiB  linux-firmware-intel
+     117.0 MiB  docker
+     103.5 MiB  linux-firmware-nvidia
+      86.8 MiB  containerd
+      73.6 MiB  python
+      70.3 MiB  perl
+      62.5 MiB  docker-buildx
+      54.5 MiB  guile
+
+=== enabled units ===
+count: 17
+  getty@.service
+  limine-snapper-sync.service
+  linux-modules-cleanup.service
+  NetworkManager-dispatcher.service
+  NetworkManager.service
+  sshd.service
+  systemd-oomd.service
+  systemd-resolved.service
+  systemd-timesyncd.service
+  ufw.service
+  docker.socket
+  systemd-oomd.socket
+  systemd-resolved-monitor.socket
+  systemd-resolved-varlink.socket
+  systemd-userdbd.socket
+  remote-fs.target
+  snapper-cleanup.timer
+
+=== masked units ===
+count: 5
+  NetworkManager-wait-online.service
+  plymouth-quit-wait.service
+  plymouth-quit.service
+  plymouth-start.service
+  systemd-networkd-wait-online.service
+
+=== listening sockets ===
+Netid State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+udp   UNCONN 0      0         172.17.0.1:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=20))
+udp   UNCONN 0      0         127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=18))
+udp   UNCONN 0      0      127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=16))
+tcp   LISTEN 0      4096      172.17.0.1:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=21))
+tcp   LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=17))
+tcp   LISTEN 0      4096      127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=19))
+tcp   LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=550,fd=6))
+tcp   LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=550,fd=7))
+listening tcp+udp: 8
+
+=== setuid / setgid binaries ===
+count: 19
+  -rwsr-xr-x root:root  /usr/bin/chage
+  -rwsr-xr-x root:root  /usr/bin/chfn
+  -rwsr-xr-x root:root  /usr/bin/chsh
+  -rwsr-xr-x root:root  /usr/bin/gpasswd
+  -rwsr-xr-x root:root  /usr/bin/ksu
+  -rwsr-xr-x root:root  /usr/bin/mount
+  -rwsr-xr-x root:root  /usr/bin/newgrp
+  -rwsr-xr-x root:root  /usr/bin/passwd
+  -rwsr-xr-x root:root  /usr/bin/pkexec
+  -rwxr-sr-x root:locate  /usr/bin/plocate
+  -rwsr-xr-x root:root  /usr/bin/su
+  -rwsr-xr-x root:root  /usr/bin/sudo
+  -rwsr-xr-x root:root  /usr/bin/umount
+  -rwsr-sr-x root:root  /usr/bin/unix_chkpwd
+  -rwxr-sr-x root:tty  /usr/bin/wall
+  -rwxr-sr-x root:tty  /usr/bin/write
+  ---s--x--- root:dbus  /usr/lib/dbus-daemon-launch-helper
+  -rws--x--x root:root  /usr/lib/ssh/ssh-keysign
+  -rwxr-sr-x root:utmp  /usr/lib/utempter/utempter
+
+=== services running as root ===
+  dbus-broker.service
+  getty@tty1.service
+  limine-snapper-sync.service
+  NetworkManager-dispatcher.service
+  NetworkManager.service
+  serial-getty@ttyS0.service
+  sshd.service
+  systemd-hostnamed.service
+  systemd-journald.service
+  systemd-logind.service
+  systemd-udevd.service
+  systemd-userdbd.service
+count: 12

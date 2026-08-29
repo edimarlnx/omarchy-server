@@ -1,0 +1,19 @@
+# Same shape as omarchy-keyring's and archlinux-keyring's install scriptlet:
+# populate on install and on every upgrade, and degrade to instructions when
+# the keyring has not been initialised yet (which is the case inside the ISO's
+# target chroot before pacman-key --init runs).
+
+post_upgrade() {
+	if usr/bin/pacman-key -l >/dev/null 2>&1; then
+		usr/bin/pacman-key --populate omarchy-server
+	else
+		echo " >>> Run \`pacman-key --init\` to set up your pacman keyring."
+		echo " >>> Then run \`pacman-key --populate omarchy-server\` to install the Omarchy Server keyring."
+	fi
+}
+
+post_install() {
+	if [ -x usr/bin/pacman-key ]; then
+		post_upgrade
+	fi
+}

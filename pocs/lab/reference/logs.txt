@@ -1,0 +1,56 @@
+/var/log/omarchy-install-timing.json
+/var/log/omarchy-install.log
+archinstall
+audit
+boot.log
+btmp
+cups
+journal
+lastlog
+old
+omarchy-install-timing.json
+omarchy-install.log
+pacman.log
+private
+snapper.log
+wtmp
+Aug 28 18:45:44 omarchy-ref sddm-helper-start-wayland[645]: "MESA-EGL: warning: failed to get driver name for fd -1\n"
+Aug 28 18:45:44 omarchy-ref sddm-helper-start-wayland[645]: "MESA-EGL: warning: MESA-LOADER: failed to retrieve device information\nMESA-EGL: warning: failed to get driver name for fd -1\n"
+Aug 28 18:45:44 omarchy-ref sddm-helper-start-wayland[645]: "MESA: error: ZINK: vkCreateInstance failed (VK_ERROR_INCOMPATIBLE_DRIVER)\n"
+Aug 28 18:45:44 omarchy-ref sddm-helper-start-wayland[645]: "MESA-EGL: warning: egl: failed to create dri2 screen\n"
+Aug 28 18:46:10 omarchy-ref pipewire-pulse[732]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:10 omarchy-ref pipewire-pulse[732]: mod.rt: RTKit does not give us MaxRealtimePriority, using 1
+Aug 28 18:46:10 omarchy-ref pipewire-pulse[732]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:10 omarchy-ref pipewire-pulse[732]: mod.rt: RTKit does not give us MinNiceLevel, using 0
+Aug 28 18:46:10 omarchy-ref pipewire-pulse[732]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:10 omarchy-ref wireplumber[731]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:10 omarchy-ref pipewire-pulse[732]: mod.rt: RTKit does not give us RTTimeUSecMax, using -1
+Aug 28 18:46:10 omarchy-ref wireplumber[731]: mod.rt: RTKit does not give us MaxRealtimePriority, using 1
+Aug 28 18:46:10 omarchy-ref wireplumber[731]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:10 omarchy-ref wireplumber[731]: mod.rt: RTKit does not give us MinNiceLevel, using 0
+Aug 28 18:46:10 omarchy-ref wireplumber[731]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:10 omarchy-ref wireplumber[731]: mod.rt: RTKit does not give us RTTimeUSecMax, using -1
+Aug 28 18:46:10 omarchy-ref pipewire[730]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:10 omarchy-ref pipewire[730]: mod.rt: RTKit does not give us MaxRealtimePriority, using 1
+Aug 28 18:46:10 omarchy-ref pipewire[730]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:10 omarchy-ref pipewire[730]: mod.rt: RTKit does not give us MinNiceLevel, using 0
+Aug 28 18:46:10 omarchy-ref pipewire[730]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:10 omarchy-ref pipewire[730]: mod.rt: RTKit does not give us RTTimeUSecMax, using -1
+Aug 28 18:46:37 omarchy-ref pipewire[772]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:37 omarchy-ref pipewire[772]: mod.rt: RTKit does not give us MaxRealtimePriority, using 1
+Aug 28 18:46:37 omarchy-ref pipewire[772]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:37 omarchy-ref pipewire[772]: mod.rt: RTKit does not give us MinNiceLevel, using 0
+Aug 28 18:46:37 omarchy-ref pipewire[772]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:37 omarchy-ref pipewire[772]: mod.rt: RTKit does not give us RTTimeUSecMax, using -1
+Aug 28 18:46:37 omarchy-ref wireplumber[773]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:37 omarchy-ref wireplumber[773]: mod.rt: RTKit does not give us MaxRealtimePriority, using 1
+Aug 28 18:46:37 omarchy-ref pipewire-pulse[775]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:37 omarchy-ref pipewire-pulse[775]: mod.rt: RTKit does not give us MaxRealtimePriority, using 1
+Aug 28 18:46:37 omarchy-ref pipewire-pulse[775]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:37 omarchy-ref pipewire-pulse[775]: mod.rt: RTKit does not give us MinNiceLevel, using 0
+Aug 28 18:46:37 omarchy-ref wireplumber[773]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:37 omarchy-ref pipewire-pulse[775]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:37 omarchy-ref pipewire-pulse[775]: mod.rt: RTKit does not give us RTTimeUSecMax, using -1
+Aug 28 18:46:37 omarchy-ref wireplumber[773]: mod.rt: RTKit does not give us MinNiceLevel, using 0
+Aug 28 18:46:37 omarchy-ref wireplumber[773]: mod.rt: RTKit error: org.freedesktop.DBus.Error.ServiceUnknown
+Aug 28 18:46:37 omarchy-ref wireplumber[773]: mod.rt: RTKit does not give us RTTimeUSecMax, using -1

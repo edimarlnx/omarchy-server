@@ -1,0 +1,318 @@
+diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
+index 6d48624..87fa246 100644
+--- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
++++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
+@@ -117,6 +117,38 @@ def _omarchy_nvim_package() -> str:
+     return _package_targets()["nvim"]
+ 
+ 
++# ─────────────────────────────────────────────────────────────────────────────
++# Install profile. Written into the ISO by builder/build-iso.sh; an autoinstall
++# drive can override it with a `profile` file (omarchy-cidata-load copies it to
++# /root). "desktop" is the stock edition and changes nothing here.
++#
++# The profile decides which phases apply (a headless machine has no hibernation
++# and no display manager) and is exported into the target chroot as
++# OMARCHY_PROFILE, which omarchy-apply-system and omarchy-provision-user read
++# to pick their setup tree.
++# ─────────────────────────────────────────────────────────────────────────────
++
++DEFAULT_PROFILE = "desktop"
++
++
++def _install_profile() -> str:
++    if value := os.environ.get("OMARCHY_PROFILE"):
++        return value.strip() or DEFAULT_PROFILE
++
++    for path in (Path("/root/profile"), Path("/usr/share/omarchy-iso/profile")):
++        try:
++            if value := path.read_text().strip():
++                return value
++        except OSError:
++            continue
++
++    return DEFAULT_PROFILE
++
++
++def _is_server_profile() -> bool:
++    return _install_profile() == "server"
++
++
+ # Packages installed BEFORE useradd. The selected omarchy-settings package and
+ # omarchy-nvim populate /etc/skel so the user's home gets seeded correctly, and
+ # omarchy-settings also ships the limine/snapper configs. Target-side setup
+@@ -142,17 +174,35 @@ EARLY_LUAROCKS_PACKAGES = [
+ 
+ 
+ def _early_bootstrap_packages() -> list[str]:
+-    return [*EARLY_BOOTSTRAP_BASE_PACKAGES, _omarchy_settings_package()]
++    packages = list(EARLY_BOOTSTRAP_BASE_PACKAGES)
++    if _is_server_profile():
++        # A lean server carries no build toolchain: base-devel is ~220 MiB of
++        # compiler and a compiler is a tool for whoever gets in. Neither the
++        # settings package nor anything the target setup runs needs either of
++        # these; `omarchy-server-addon dev` brings both back when a machine has
++        # to build something.
++        packages = [p for p in packages if p not in ("base-devel", "git")]
++    return [*packages, _omarchy_settings_package()]
+ 
+ 
+ def _early_user_seed_packages() -> list[str]:
+-    return [_omarchy_nvim_package()]
++    # A profile may ship no editor package at all (the server profile does not).
++    if nvim := _omarchy_nvim_package():
++        return [nvim]
++    return []
++
++
++def _early_luarocks_packages() -> list[str]:
++    # LuaRocks exists here only to precede omarchy-nvim's lua51-lpeg. With no
++    # nvim package there is nothing to precede, and neither package is in the
++    # offline mirror, so asking for them would fail pacstrap outright.
++    return list(EARLY_LUAROCKS_PACKAGES) if _omarchy_nvim_package() else []
+ 
+ 
+ def _early_packages() -> list[str]:
+     return [
+         *_early_bootstrap_packages(),
+-        *EARLY_LUAROCKS_PACKAGES,
++        *_early_luarocks_packages(),
+         *_early_user_seed_packages(),
+     ]
+ 
+@@ -632,11 +682,13 @@ def _install_early_packages(installer) -> None:
+     info(f"› installing early Omarchy packages: {', '.join(bootstrap_packages)}")
+     installer.add_additional_packages(bootstrap_packages)
+ 
+-    info(f"› installing LuaRocks prerequisites: {', '.join(EARLY_LUAROCKS_PACKAGES)}")
+-    installer.add_additional_packages(EARLY_LUAROCKS_PACKAGES)
++    if luarocks_packages := _early_luarocks_packages():
++        info(f"› installing LuaRocks prerequisites: {', '.join(luarocks_packages)}")
++        installer.add_additional_packages(luarocks_packages)
+ 
+-    info(f"› installing user seed packages: {', '.join(user_seed_packages)}")
+-    installer.add_additional_packages(user_seed_packages)
++    if user_seed_packages:
++        info(f"› installing user seed packages: {', '.join(user_seed_packages)}")
++        installer.add_additional_packages(user_seed_packages)
+ 
+ 
+ def _mount_offline_package_cache(ctx: InstallContext) -> None:
+@@ -729,12 +781,16 @@ def _runtime_package_list(ctx: InstallContext) -> list[str]:
+     base_pkgs_file = Path("/usr/share/omarchy-iso/omarchy-base.packages")
+     pkgs = [_omarchy_runtime_package()]
+     already_installed = set(_early_packages()) | {
+-        _omarchy_runtime_package(),
+-        _omarchy_settings_package(),
+-        _omarchy_nvim_package(),
+-        "omarchy",
+-        "omarchy-settings",
+-        "omarchy-nvim",
++        name
++        for name in (
++            _omarchy_runtime_package(),
++            _omarchy_settings_package(),
++            _omarchy_nvim_package(),
++            "omarchy",
++            "omarchy-settings",
++            "omarchy-nvim",
++        )
++        if name
+     }
+     for raw in base_pkgs_file.read_text().splitlines():
+         s = raw.strip()
+@@ -936,6 +992,12 @@ def configure_hibernation(ctx: InstallContext) -> None:
+     Limine UKI build still happens later in finalize_limine_boot after this
+     writes the resume hook and kernel cmdline drop-in.
+     """
++    if _is_server_profile():
++        # No swapfile, so no resume= and nothing to hibernate to: the server
++        # profile runs on zram alone.
++        info("› server profile: skipping hibernation")
++        return
++
+     setup = ctx.target / "usr" / "bin" / "omarchy-hibernation-setup"
+     if not setup.exists():
+         _debug_log(ctx, "skipping hibernation: /usr/bin/omarchy-hibernation-setup is not installed")
+@@ -1097,6 +1159,10 @@ def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str
+         f"OMARCHY_RUNTIME_PACKAGE={_omarchy_runtime_package()}",
+         f"OMARCHY_SETTINGS_PACKAGE={_omarchy_settings_package()}",
+         f"OMARCHY_NVIM_PACKAGE={_omarchy_nvim_package()}",
++        f"OMARCHY_PROFILE={_install_profile()}",
++        # Empty unless install_addons is running; omarchy-server-addon treats
++        # an empty value as "use the system configuration".
++        f"OMARCHY_ADDON_PACMAN_CONF={os.environ.get('OMARCHY_ADDON_PACMAN_CONF', '')}",
+         "OMARCHY_INSTALL_LOG_FILE=/var/log/omarchy-install.log",
+         "OMARCHY_LOG_TO_STDOUT=1",
+     ]
+@@ -1129,7 +1195,22 @@ def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str
+                 pass
+ 
+ 
++def _write_profile_marker(ctx: InstallContext) -> None:
++    """Persist the profile in the target before any setup command runs.
++
++    omarchy-apply-system reads OMARCHY_PROFILE from the environment, which the
++    chroot env carries, but every later run on the installed machine
++    (omarchy-update, a manual re-apply) has only this file to go on.
++    """
++    profile = _install_profile()
++    marker = ctx.target / "etc" / "omarchy-profile"
++    marker.parent.mkdir(parents=True, exist_ok=True)
++    marker.write_text(profile + "\n")
++
++
+ def run_system_finalizer(ctx: InstallContext) -> None:
++    _write_profile_marker(ctx)
++
+     if ctx.defer_provisioning:
+         cmd = ["/usr/bin/omarchy-apply-system", "--defer-provisioning", "--first-install"]
+     else:
+@@ -1162,6 +1243,82 @@ PROVISION_KEYFILE = "etc/omarchy/provisioning.key"
+ NODE_PACKAGES_DIR = Path("/opt/packages")
+ 
+ 
++# ─────────────────────────────────────────────────────────────────────────────
++# install_addons: apply the optional package sets named by the autoinstall
++# drive's `addons` file (one name per line). Server profile only — it is the
++# profile whose base is deliberately too small to be useful for everything, so
++# it is the profile that needs a supported way to add things back.
++#
++# Runs right after omarchy-apply-system, and therefore before
++# finalize_limine_boot, so an addon whose packages trigger an initramfs rebuild
++# is still followed by the final UKI build, and before create_factory_snapshot,
++# so the addons are part of what a factory reset restores.
++# ─────────────────────────────────────────────────────────────────────────────
++
++ADDON_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
++
++
++def _requested_addons() -> list[str]:
++    """Read /root/addons, which omarchy-cidata-load copies off the drive.
++
++    Names are validated rather than trusted: they become an argument to a
++    command run as root in the target, and the file comes from a removable
++    drive.
++    """
++    try:
++        lines = Path("/root/addons").read_text().splitlines()
++    except OSError:
++        return []
++
++    names = []
++    for line in lines:
++        name = line.strip()
++        if not name or name.startswith("#"):
++            continue
++        if not ADDON_NAME_RE.match(name):
++            raise RuntimeError(f"invalid addon name on the autoinstall drive: {name!r}")
++        names.append(name)
++    return names
++
++
++def install_addons(ctx: InstallContext) -> None:
++    if not _is_server_profile():
++        return
++
++    addons = _requested_addons()
++    if not addons:
++        return
++
++    _prepare_target_setup(ctx)
++
++    # omarchy-apply-system's last step restores the channel's online
++    # pacman.conf, but the addon packages live in the ISO's offline mirror.
++    # Hand pacman the live environment's offline configuration for the length
++    # of this phase and take it away again afterwards, so the installed system
++    # is left pointing at the online mirrors as it was.
++    offline_conf = ctx.target / "etc" / "pacman.conf.omarchy-offline"
++    shutil.copy("/etc/pacman.conf", str(offline_conf))
++    os.environ["OMARCHY_ADDON_PACMAN_CONF"] = "/etc/pacman.conf.omarchy-offline"
++
++    try:
++        for addon in addons:
++            info(f"› installing addon: {addon}")
++            _run_target_setup_command(ctx, ["/usr/bin/omarchy-server-addon", addon])
++    finally:
++        os.environ.pop("OMARCHY_ADDON_PACMAN_CONF", None)
++        offline_conf.unlink(missing_ok=True)
++
++    # The addon packages landed in the target's package cache, which is on the
++    # snapshotted subvolume: prune again so the factory snapshot is taken on a
++    # clean disk, exactly as install/server/prune-pkg-cache-server.sh does at
++    # the end of the system setup that ran before this.
++    subprocess.run(
++        ["arch-chroot", str(ctx.target), "bash", "-c",
++         "paccache -rk1 || true; paccache -ruk0 || true"],
++        check=False,
++    )
++
++
+ def stage_provisioning_state(ctx: InstallContext) -> None:
+     # World-readable: first-boot finalization reads the Node tarball as the
+     # new user. The only secret inside (luks-key) is itself 0600 root.
+@@ -1174,7 +1331,14 @@ def stage_provisioning_state(ctx: InstallContext) -> None:
+     if not ctx.defer_provisioning:
+         return
+ 
+-    service_src = ctx.target / "usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
++    # A profile may ship its own unit: the stock one conflicts with
++    # getty@tty1 and orders itself before the display manager, neither of
++    # which is right on a headless machine.
++    service_src = ctx.target / (
++        f"usr/share/omarchy/install/{_install_profile()}/omarchy-provision-owner.service"
++    )
++    if not service_src.exists():
++        service_src = ctx.target / "usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
+     setup_bin = ctx.target / "usr/bin/omarchy-provision-owner"
+     if not service_src.exists() or not setup_bin.exists():
+         raise RuntimeError(
+@@ -1401,6 +1565,12 @@ def _read_omarchy_mirror() -> str:
+ # ─────────────────────────────────────────────────────────────────────────────
+ 
+ def configure_login(ctx: InstallContext) -> None:
++    if _is_server_profile():
++        # No display manager is installed; the login path is sshd plus the
++        # serial/VT getty enabled by install/server/enable-services-server.sh.
++        info("› server profile: skipping display manager setup")
++        return
++
+     sddm_dir = ctx.target / "etc" / "sddm.conf.d"
+     sddm_dir.mkdir(parents=True, exist_ok=True)
+     (sddm_dir / "99-omarchy-login.conf").write_text(
+@@ -1499,13 +1669,31 @@ def configure_ssh_access(ctx: InstallContext) -> None:
+     # what ufw.service loads on first boot. So the exit status is the wrong
+     # thing to check here; the rule landing in the file is the thing that
+     # matters.
+-    info("› allowing SSH through ufw")
+-    subprocess.run(["arch-chroot", str(ctx.target), "ufw", "allow", "ssh"], check=False)
++    # `limit` on the server profile, matching what
++    # install/server/firewall-server.sh already wrote: ufw keeps one rule per
++    # (port, protocol, direction), so a plain `allow` here would replace the
++    # rate-limited rule with a permissive one. `limit` drops a source that
++    # opens six connections in thirty seconds, which is what a brute-force run
++    # looks like.
++    #
++    # The rule a `limit` generates is a jump to ufw-user-limit-accept rather
++    # than a direct ACCEPT, so the assertion below checks that port 22 was
++    # recorded at all instead of matching the accept form.
++    if _is_server_profile():
++        info("› rate-limiting SSH through ufw")
++        subprocess.run(
++            ["arch-chroot", str(ctx.target), "ufw", "limit", "22/tcp"], check=False
++        )
++        expected = "--dport 22 "
++    else:
++        info("› allowing SSH through ufw")
++        subprocess.run(["arch-chroot", str(ctx.target), "ufw", "allow", "ssh"], check=False)
++        expected = "--dport 22 -j ACCEPT"
+ 
+     rules = ctx.target / "etc" / "ufw" / "user.rules"
+     text = rules.read_text() if rules.exists() else ""
+-    if "--dport 22 -j ACCEPT" not in text:
+-        raise RuntimeError(f"ufw did not record an allow rule for port 22 in {rules}")
++    if expected not in text:
++        raise RuntimeError(f"ufw did not record a rule for port 22 in {rules}")
+ 
+ 
+ def _authorized_keys(path: Path) -> list[str]:
