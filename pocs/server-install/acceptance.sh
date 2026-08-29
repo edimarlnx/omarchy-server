@@ -345,15 +345,28 @@ check "a firmware upgrade sets the reboot-required marker" \
 # The rule that keeps a kernel reinstall from costing a reboot: the question is
 # not whether a kernel package was in the transaction but whether the running
 # kernel is still one of the installed ones. This is the real thing -- pacman
-# rebuilds the initramfs, re-signs the UKI and updates limine -- and it still
-# must not ask for a reboot.
-check "reinstalling the running kernel rebuilds the boot chain without a reboot" \
+# rebuilds the initramfs, re-signs the UKI and updates limine.
+#
+# Which of the two cases this machine gets depends on whether Arch moved since
+# the update above, which is not something a test may assume. So the check
+# asserts the CLASSIFIER AGREED WITH REALITY rather than a fixed verdict: a
+# same-version reinstall must not set the marker, and a kernel that actually
+# moved must. Either outcome is a pass; a disagreement between them is not, and
+# the evidence line says which case ran.
+check "a kernel transaction sets the reboot marker only when the kernel moved" \
   'offset=$(~/.lab-sudo stat -c %s /var/log/pacman.log);
    ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required;
+   before=$(pacman -Q linux | awk "{print \$2}");
    timeout 900 ~/.lab-sudo pacman -S --noconfirm linux 2>&1 | tail -12 | ~/.lab-redact; echo "pacman-rc=${PIPESTATUS[0]}";
+   after=$(pacman -Q linux | awk "{print \$2}");
    ~/.lab-sudo env HOME=/root omarchy-server-update-restart --since-offset "$offset" --no-restart 2>&1 | grep -E "^(kernel package|reboot required)";
-   ~/.lab-sudo test -f /root/.local/state/omarchy/reboot-required && echo "marker=set" || echo "marker=absent"' \
-  '^marker=absent$'
+   ~/.lab-sudo test -f /root/.local/state/omarchy/reboot-required && marker=set || marker=absent;
+   echo "linux $before -> $after marker=$marker";
+   if [ "$before" = "$after" ] && [ "$marker" = absent ]; then echo "verdict=reinstall-no-reboot";
+   elif [ "$before" != "$after" ] && [ "$marker" = set ]; then echo "verdict=upgrade-reboot-required";
+   else echo "verdict=disagreement"; fi;
+   ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required' \
+  '^verdict=(reinstall-no-reboot|upgrade-reboot-required)$'
 
 # The addon is not in the base, and the update path notices its absence rather
 # than failing on it: with no kexec-tools, a required reboot is left as the
