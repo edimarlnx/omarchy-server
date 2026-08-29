@@ -272,12 +272,12 @@ after months of use is a directory of that machine's past kernel images.
   run. What is measured is that the path is skipped cleanly when the marker is
   absent. The `--secboot` image, and whether a machine booted from it comes up
   enforcing against keys it made for itself, is the obvious next run.
-- **SELinux was not exercised either.** `--mac selinux` images should come up
-  enforcing after a first-boot relabel, and the relabel unit is the one already
-  measured in `reports/2026-08-29-mandatory-access-control.md`. That it works
-  from an image — where *every* home directory is created after the labelling,
-  which is precisely the case that locked an operator out in that report — is
-  asserted by design here and not by a run.
+- ~~**SELinux was not exercised either.**~~ It is now:
+  `reports/2026-08-29-cloud-image-selinux.md` builds a `--mac selinux` image,
+  boots it from a NoCloud seed and takes it to enforcing over ssh — 68 passed, 0
+  failed, zero denials on either boot. It also found eleven policy gaps on the
+  image path, including a `growpart` refused by a boolean refpolicy ships off and
+  a mkinitcpio that could not rebuild the UKI from inside a service.
 - **One growth case, not the interesting one.** The image is a 40 GiB layout
   grown onto a 40 GiB disk: `growpart` had a 2 GiB ESP and a backup GPT header
   to work around and the root came out at 38 GiB, which is the resize working.

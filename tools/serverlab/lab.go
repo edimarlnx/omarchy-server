@@ -102,11 +102,11 @@ func (l *Lab) env() []string {
 // they change it -- the transactional list alone reboots the VM three times and
 // leaves package state behind. They run only when asked for by name.
 //
-// `cloud` is here for a different reason: it is the acceptance list of a
-// machine booted from a cloud image, which no INSTALL marker can imply. It is
-// run by `serverlab image test`, and it is listed here so `serverlab report`
-// picks its evidence up like any other suite.
-var optionalSuites = []string{"transactional", "cloud"}
+// `cloud` and `cloud-selinux` are here for a different reason: they are the
+// acceptance lists of a machine booted from a cloud image, which no INSTALL
+// marker can imply. They are run by `serverlab image test`, and they are listed
+// here so `serverlab report` picks their evidence up like any other suite.
+var optionalSuites = []string{"transactional", "cloud", "cloud-selinux"}
 
 // Suites returns the acceptance suites this machine was installed for. Every
 // machine gets the base list; a Secure Boot or MAC marker adds its own.

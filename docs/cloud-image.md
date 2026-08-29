@@ -348,23 +348,98 @@ hypervisors whose firmware variable store you control (libvirt with a fresh
 `OVMF_VARS`, Proxmox with `pre-enrolled-keys=0`). The image for a cloud is the
 one without it.
 
-### SELinux
+### SELinux images
 
-Cheaper, and already solved. `omarchy-server-generalize` touches
-`/.autorelabel`, and `omarchy-server-selinux-relabel.service` — which the
-`selinux` addon already enables — acts on it at the first boot.
+Measured end to end in `reports/2026-08-29-cloud-image-selinux.md`: a
+`--mac selinux` image, booted from a NoCloud seed, **68 passed / 0 failed with
+zero AVC denials on either boot**, and enforcing reached over ssh through the
+guard.
 
-That is not belt and braces. `reports/2026-08-29-mandatory-access-control.md`
-records an operator locked out of a machine set to enforcing, root-caused to
-**home directories created after the install-time relabel**. On an image that is
-not an edge case, it is the normal case: every home directory on every machine
-from this image is created by cloud-init, on the first boot, after the image was
-labelled. The relabel is what covers them.
+**The image ships `SELINUX=permissive`.** Not because enforcing does not work —
+a second image with that one line changed came up enforcing from its first
+instruction, cloud-init and all, with zero denials — but because an image is
+copied onto platforms this lab has not seen, and a machine that fails to
+provision because of a policy gap is usually a machine with no console to fix it
+from. Permissive turns that case into a denial list. The switch is one command
+and a **two-way door**, measured on the machine the image produced:
 
-A `--mac selinux` image therefore comes up enforcing with the admin role, with
-its first boot spending a few minutes relabelling. `serverlab image test`
-against such an image runs the `cloud` list; run the `selinux` list against the
-same VM (`serverlab lab test <name> --suite selinux`) to measure the MAC side.
+```bash
+sudo omarchy-server-selinux avc          # what would have been refused, after a day of the real workload
+sudo omarchy-server-selinux enforcing    # passes its own preflight on the FIRST boot; no --force
+sudo omarchy-server-selinux permissive   # and back again, from the same ssh session
+```
+
+An operator who wants enforcing baked in edits the artifact — the report's
+"An image that ships enforcing" section has the `guestfish` recipe and the
+measurement behind it.
+
+#### What the first boot does, and what it costs
+
+| | Unit | What it does | Cost |
+|---|---|---|---|
+| 1 | cloud-init | hostname, the account the metadata names, its home and keys, growpart + `btrfs filesystem resize` | ~1 s |
+| 2 | `omarchy-server-firstboot` | ssh host keys, entropy seed, `limine-update` (mkinitcpio + UKI) | 3.6 s |
+| 3 | `omarchy-server-selinux-relabel` | `restorecon -R -F /` on the `/.autorelabel` generalization left | 0.9 s |
+| 4 | `systemd-user-sessions`, `sshd` | logins are possible from here | — |
+
+The relabel is ordered **after cloud-init** and before any login. That matters
+because of the failure it prevents: `reports/2026-08-29-mandatory-access-control.md`
+records an operator locked out of an enforcing machine, root-caused to a home
+directory created after the install-time relabel. On an image that is the normal
+case — *every* account is created by cloud-init, on the first boot, after the
+artifact was labelled. Without the ordering the two units were unordered against
+each other and the outcome was a race that happened to come out right.
+
+`init` is already `init_t` on boot 1, unlike a fresh install (which needs a
+reboot first, because PID 1 only transitions if `/usr/lib/systemd/systemd`
+already carried `init_exec_t`). The build machine relabelled `/usr` before the
+artifact was taken, so the image starts with a complete label set — which is why
+`enforcing` passes its preflight on the very first boot.
+
+#### The denials this cost, and what closed them
+
+Eleven, none of which an installed machine ever produces. Four are worth naming
+here because of how they fail rather than how they are fixed:
+
+* **`growpart` is behind a boolean.** refpolicy gates cloud-init's read of the
+  block device behind `cloudinit_growpart`, which ships **off**. Enforcing with
+  it off: `cloud-init status` still says `done`, only `--long` carries
+  `('growpart', PermissionError(13, …))`, and the machine sits on the image's
+  40 GiB inside whatever volume it was launched onto. `selinux-server.sh` now
+  writes `booleans.local` with it on, the same way it writes `seusers.local` and
+  `file_contexts.local`, and the acceptance asserts it.
+* **mkinitcpio inside a service.** `depmod` cannot reach the build root when
+  mkinitcpio runs from a unit (`initrc_tmp_t`), so `firstboot`'s `limine-update`
+  reported "errors were encountered during the build" and wrote no UKI. That is
+  the §11.5 failure of the mandatory-access-control report on its other path —
+  and the same path a **daily update timer** takes to install a kernel.
+* **Queries that answer less instead of failing.** `systemctl --failed` printed
+  an empty table, `sudo btrfs subvolume list /` over a non-interactive ssh
+  printed nothing and exited 0, `ss -ltnup` listed no sockets, and
+  `cloud-init status` reported `error` on a perfectly provisioned machine. Each
+  reads as good news.
+* **cloud-init's locale module is off.** `cc_locale` regenerates a locale this
+  install already set, and letting it would have cost cloud-init a general read
+  of `/usr`, write access to `/usr/lib/locale` and `systemd-localed` the right to
+  execute from `/usr/bin`. `locale: false` in the profile's `cloud.cfg` is the
+  cheaper answer, and the trade is the same one the network block makes.
+
+`qemu-guest-agent` has no domain of its own in refpolicy and runs as `initrc_t`.
+It works — ping, `guest-get-osinfo` and a freeze/thaw driven from the host all
+answer with zero denials under enforcing, which is the path a hypervisor's
+volume backup takes — but it is not confined, and writing it a domain is
+unfinished work.
+
+#### Running the suite
+
+```bash
+serverlab image test <name> --image <qcow2> --disk-gb 40            # as shipped: permissive
+serverlab image test <name> --image <qcow2> --disk-gb 40 --enforce  # and taken to enforcing
+```
+
+`--mac` is read off the image's file name, so a SELinux image is never tested as
+though it had no MAC. The list is `pocs/server-install/acceptance-cloud-selinux.sh`;
+it needs no lab password, because the image ships no account with one.
 
 ---
 
@@ -455,10 +530,16 @@ down. `launch-demo.sh` requires an existing **public** subnet OCID.
   no object uploaded, no image imported, no capability schema created, no
   instance launched. The UEFI_64 claim in §7 is reasoning from OCI's documented
   behaviour and from this image having no BIOS boot path, not an observation.
-* **Neither `--secboot` nor `--mac selinux` has been built as an image.** The
-  first-boot paths for both are written and their skip-when-absent behaviour is
-  measured; the images themselves are the next runs.
+* **`--secboot` has not been built as an image.** The first-boot path is written
+  and its skip-when-absent behaviour is measured; the image itself is the next
+  run. `--mac selinux` no longer belongs in this list — see §6 and
+  `reports/2026-08-29-cloud-image-selinux.md`.
+* **Secure Boot and SELinux together.** Still no machine has had both, image or
+  install.
 
-`reports/2026-08-29-cloud-image.md` is the measured record: 65 passed, 1 failed
-(the failure is a base-list check about the installer's default hostname, which
-an image is *supposed* to override), plus the four defects the run found.
+`reports/2026-08-29-cloud-image.md` is the measured record of the base image: 65
+passed, 1 failed (the failure is a base-list check about the installer's default
+hostname, which an image is *supposed* to override), plus the four defects the
+run found. `reports/2026-08-29-cloud-image-selinux.md` is the SELinux one: 68
+passed, 0 failed, zero denials on either boot, and eleven policy gaps closed
+before it got there.

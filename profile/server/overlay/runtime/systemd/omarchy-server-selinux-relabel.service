@@ -47,6 +47,26 @@ After=local-fs.target
 # ConditionPathExists still skips it when the keys are already there.
 Wants=sshdgenkeys.service
 After=sshdgenkeys.service
+# And after cloud-init, on an image. This is the same argument as the home
+# directory above, one step further along: on an INSTALL the orchestrator
+# creates /home/<user> in a phase after the offline relabel, and on a machine
+# from a shared image EVERY account, home directory and authorized_keys file is
+# created by cloud-init, on this boot. cloud-init.service is itself ordered
+# Before=systemd-user-sessions.service, so without this line the two are
+# unordered and which one runs first is a race.
+#
+# Measured, the race came out right on its own -- cloud-init created the user
+# 3 s before the relabel started, because omarchy-server-firstboot rebuilds the
+# initramfs in between -- and useradd labels a home directory correctly anyway.
+# Neither of those is a guarantee: the first depends on how long mkinitcpio
+# takes, the second on cloud-init using useradd rather than writing the tree
+# itself. The ordering costs nothing (both units are in the same part of the
+# boot already) and turns an accident into a property.
+#
+# No Wants=: on a machine without the `cloud` addon cloud-init.service does not
+# exist, and ordering against a unit that is not in the transaction is simply
+# ignored.
+After=cloud-init.service
 Before=systemd-user-sessions.service sshd.service getty.target
 
 [Service]

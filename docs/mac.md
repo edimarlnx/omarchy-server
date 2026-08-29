@@ -484,7 +484,7 @@ the addon at install time and available afterwards on any machine:
 | `seusers` | `%wheel:staff_u` in the store's `seusers.local`, merged by `semodule -B`. `__default__` stays `user_u`. |
 | login | `staff_u:staff_r:staff_t` — `staff_t` is in refpolicy's `unpriv_userdomain`, so sshd may transition into it with `ssh_sysadm_login` **off**. |
 | sudo | `Defaults:%wheel role=sysadm_r, type=sysadm_t` in `/etc/sudoers.d/omarchy-selinux-role`, so `sudo id -Z` answers `staff_u:sysadm_r:sysadm_t`. |
-| booleans | **none changed.** `ssh_sysadm_login` and `allow_ptrace` stay off. |
+| booleans | **one changed, and only for the cloud path.** `cloudinit_growpart=1`, written into the store's `booleans.local` beside `seusers.local`, because refpolicy ships it off and cloud-init cannot then read the disk it is about to grow (`reports/2026-08-29-cloud-image-selinux.md`). `ssh_sysadm_login` and `allow_ptrace` stay off. |
 
 Nothing in the policy had to be changed for the role transition itself:
 refpolicy's own users file already says `user staff_u roles { staff_r sysadm_r }`,

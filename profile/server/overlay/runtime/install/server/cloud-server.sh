@@ -42,6 +42,10 @@
 #                 cloud-guest-utils. Between them a 40 GiB image fills whatever
 #                 boot volume it was launched onto.
 #
+#   locale        not written either, and the SELinux section of
+#                 reports/2026-08-29-cloud-image-selinux.md says what it cost
+#                 to find out. See the `locale: false` line below.
+#
 #   host keys     not here. The image is generalized without ssh host keys and
 #                 omarchy-server-firstboot.service regenerates them before sshd
 #                 starts, so no two machines from one image share an identity.
@@ -80,6 +84,16 @@ growpart:
 # install/server/cloud-server.sh for why cloud-init does not also write it.
 network:
   config: disabled
+
+# And it owns the locale, for the same reason and one more. `cc_locale` runs
+# once per instance and, on Arch, rewrites /etc/locale.gen, deletes the locale
+# archive and rebuilds it with localedef -- work this install already did, to
+# the same value. Under SELinux that work costs three real widenings (a general
+# read of /usr for cloud-init, write access to /usr/lib/locale, and the right
+# for systemd-localed to execute programs out of /usr/bin); `false` is what
+# cc_locale documents as "skip me". A platform handing out a locale through its
+# metadata is not honoured -- the same trade as the network block above.
+locale: false
 
 system_info:
   distro: arch

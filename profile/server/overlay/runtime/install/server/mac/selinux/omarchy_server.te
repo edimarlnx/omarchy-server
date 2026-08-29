@@ -14,14 +14,19 @@
 # 16 records the one place where the rule was written wider than the
 # measurement, and says so.
 #
-# Three shapes, and nothing else:
+# Four shapes, and nothing else:
 #
 #   * the gap between refpolicy 20250923 and systemd 261 / OpenSSH 10.5 —
 #     credentials on tmpfs, PSI, userdb, varlink, BPF (rules 1-15);
 #   * the standard streams a privileged command inherits from the session that
 #     ran it, which is what makes a non-interactive `ssh host sudo …` run
 #     correctly and print nothing (rule 16, and the domains that share it);
-#   * two capabilities that are asked for, refused, and not missed (17, 21).
+#   * capabilities and requests that are asked for, refused, and not missed —
+#     answered with `dontaudit` rather than a grant (17, 21, 25, 31, 38);
+#   * the paths only a CLOUD IMAGE takes, where cloud-init creates every
+#     account, home directory and ssh key on the first boot and the machine
+#     grows into a disk it was not built on (rules 26-39,
+#     reports/2026-08-29-cloud-image-selinux.md).
 #
 # None of them is a rule that lets a confined domain reach something it has no
 # business in.
@@ -95,19 +100,49 @@ require {
 	type kmod_t;
 	type httpd_lock_t;
 	type initrc_lock_t;
-	class dir { search read open getattr write add_name remove_name create relabelfrom relabelto };
+	# The image path: cloud-init, the machine it provisions, and the domains a
+	# first boot from a shared image walks that an install never does
+	# (rules 26-39).
+	attribute systemdunit;
+	type staff_t;
+	type cloud_init_t;
+	type cloud_init_runtime_t;
+	type cloud_init_state_t;
+	type sysctl_vm_t;
+	type sysctl_vm_overcommit_t;
+	type user_home_dir_t;
+	type ssh_home_t;
+	type initrc_tmp_t;
+	type init_runtime_t;
+	type fsadm_t;
+	type node_t;
+	type udev_runtime_t;
+	type mount_t;
+	type useradd_t;
+	type xdg_config_t;
+	type xdg_data_t;
+	type git_xdg_config_t;
+	type systemd_unit_t;
+	type virtio_device_t;
+	type kernel_t;
+	type sshd_key_t;
+	class dir { search read open getattr write add_name remove_name create relabelfrom relabelto setattr };
 	class bpf { prog_load prog_run map_create map_read map_write };
 	class capability2 bpf;
 	class capability { net_admin dac_read_search sys_admin audit_write };
 	class filesystem { quotaget quotamod associate getattr };
 	class netlink_audit_socket { create read write nlmsg_relay };
-	class file { getattr read write open ioctl create unlink rename map append lock relabelfrom relabelto execute entrypoint };
+	class netlink_tcpdiag_socket { create bind read write getattr setopt nlmsg_read };
+	class file { getattr read write open ioctl create unlink rename map append lock relabelfrom relabelto execute entrypoint link };
 	class lnk_file { read getattr };
 	class fifo_file { append getattr ioctl lock read write };
 	class sock_file { write create getattr unlink };
-	class system status;
-	class process { transition siginh rlimitinh noatsecure };
+	class system { status module_request };
+	class service status;
+	class tcp_socket node_bind;
+	class process { transition siginh rlimitinh noatsecure getsched };
 	class unix_stream_socket { connectto create listen setopt bind read write ioctl };
+	class chr_file getattr;
 	class fd use;
 }
 
@@ -870,3 +905,388 @@ allow kmod_t user_tmp_t:lnk_file { getattr read };
 # /run/lock with no transition of its own. Both were measured.
 ########################################################################
 dontaudit kmod_t { httpd_lock_t initrc_lock_t }:file write;
+
+########################################################################
+# 26. cloud-init, which an installed machine never runs.
+#
+#   comm="python3" name="local.sock" tclass=sock_file { create }
+#     scontext=system_u:system_r:cloud_init_t
+#     tcontext=system_u:object_r:cloud_init_runtime_t
+#   comm="python3" path="/run/cloud-init/share/final.sock" { getattr }
+#   comm="python3" tclass=process { getsched } (itself)
+#   comm="python3" path="/proc/sys/vm/overcommit_memory" { read open }
+#     tcontext=system_u:object_r:sysctl_vm_overcommit_t
+#   comm="systemd-detect-" path="pid:[…]" tclass=file { getattr }
+#     tcontext=system_u:object_r:nsfs_t
+#
+# refpolicy has a cloud-init module and it is a good one -- cloud_init_t exists,
+# the growpart path works with no rule from here, and every home directory,
+# authorized_keys file and hostname this image's first boot writes is already
+# allowed. What it does not have is cloud-init 25's own runtime directory: the
+# agent now opens unix sockets under /run/cloud-init/share (`local.sock`,
+# `final.sock`) to hand its stage results to `cloud-init status`, and the type
+# transition puts them in cloud_init_runtime_t while the policy's rules for
+# that type stop at plain files.
+#
+# The other three are the same shape as rules 2, 3 and 14 -- a modern userland
+# asking the kernel about itself. `getsched` on its own process is cloud-init's
+# multiprocessing pool; /proc/sys/vm/overcommit_memory is what python's
+# resource-tracker reads before forking; nsfs is systemd-detect-virt looking at
+# PID 1's namespace to answer "am I in a container".
+#
+# All five are inside cloud_init_t's own boundary: its runtime directory, its
+# own process, and two read-only files about the kernel. Nothing here lets the
+# agent reach further into the machine than the policy already lets it.
+########################################################################
+allow cloud_init_t cloud_init_runtime_t:sock_file { create getattr write unlink };
+allow cloud_init_t self:process getsched;
+allow cloud_init_t sysctl_vm_t:dir search;
+allow cloud_init_t sysctl_vm_overcommit_t:file { getattr read open };
+allow cloud_init_t nsfs_t:file getattr;
+
+########################################################################
+# 27. `cloud-init status`, run by the operator rather than by the boot.
+#
+#   comm="python3" path="/var/lib/cloud/data/status.json" tclass=file { read open }
+#     scontext=staff_u:staff_r:staff_t tcontext=system_u:object_r:cloud_init_state_t
+#   comm="python3" name="status.json" tclass=lnk_file { read }
+#     tcontext=system_u:object_r:cloud_init_runtime_t
+#   comm="python3" name="cloud.cfg" tclass=file { read open }
+#   comm="python3" saddr=::1 tclass=tcp_socket { node_bind }
+#
+# On a cloud machine `cloud-init status --wait` is the first thing anyone types,
+# and on this profile the operator's session is staff_t. refpolicy's cloud-init
+# module grants the agent's own domain and the administrative role; a confined
+# login session has no rule for either the state directory or the runtime one,
+# so the command reports `error` on a machine whose provisioning was perfect.
+#
+# READ-ONLY, and to staff_t alone rather than to the unpriv_userdomain
+# attribute. status.json is a status file whose DAC mode is already 0644 --
+# withholding it from the administrator's own login domain protects nothing --
+# but user_t, the domain an ordinary account gets on this profile, has no
+# business in the provisioning record and keeps none.
+#
+# The node_bind is DONTAUDITED rather than allowed, and the reason is the
+# discipline of rules 17 and 21: cloud-init's status client asks for a loopback
+# TCP bind while probing which address families it has, and measured with the
+# permission refused it prints the same status. A rule letting a confined user
+# domain bind sockets to the generic node type, to silence a probe that already
+# copes with the answer, would be a real grant for a non-event.
+########################################################################
+allow staff_t cloud_init_state_t:dir { search getattr open read };
+allow staff_t cloud_init_state_t:file { getattr read open };
+allow staff_t cloud_init_state_t:lnk_file { getattr read };
+allow staff_t cloud_init_runtime_t:dir { search getattr open read };
+allow staff_t cloud_init_runtime_t:file { getattr read open };
+allow staff_t cloud_init_runtime_t:lnk_file { getattr read };
+dontaudit { staff_t sysadm_t } node_t:tcp_socket node_bind;
+
+########################################################################
+# 28. `systemctl status` and `systemctl --failed`, from that same session.
+#
+#   cmdline="systemctl --failed --no-pager" function="list_units_filtered"
+#     tclass=service { status } scontext=staff_u:staff_r:staff_t
+#     tcontext=system_u:object_r:{ syslogd_unit_t systemd_networkd_unit_t
+#                                  auditd_unit_t power_unit_t … init_runtime_t }
+#
+# systemd checks `service { status }` per unit and, when it is refused, LEAVES
+# THE UNIT OUT of the listing. There is no error: `systemctl --failed` on a
+# machine with a failed unit prints an empty table, and the operator -- and this
+# repository's own acceptance list, which asks exactly that question -- reads it
+# as a healthy machine. A check that cannot fail is worse than no check.
+#
+# Against the `systemdunit` attribute, not the seven unit types the first run
+# produced. That is the §10.2 lesson for the third time: the set is "every unit
+# on the machine", and enumerating it means a new denial for every package that
+# ships a unit. init_runtime_t is named beside it because a generator's output
+# under /run/systemd/generator (the zram swap unit, here) is not in that
+# attribute and is still a unit somebody asks about.
+#
+# staff_t only, again. `status` is read-only -- it does not start, stop or
+# enable anything, and every one of those verbs stays where refpolicy put it.
+########################################################################
+allow staff_t systemdunit:service status;
+allow staff_t init_runtime_t:service status;
+
+########################################################################
+# 29. systemd-tmpfiles provisioning /root/.ssh from a credential.
+#
+#   comm="systemd-tmpfile" name="root" tclass=dir { write }
+#     tcontext=root:object_r:user_home_dir_t
+#   comm="systemd-tmpfile" name=".ssh" tclass=dir { add_name create }
+#     tcontext=root:object_r:ssh_home_t
+#
+# systemd 261 ships /usr/lib/tmpfiles.d/provision.conf, which creates
+# /root/.ssh and writes /root/.ssh/authorized_keys from the
+# `ssh.authorized_keys.root` system credential. That is a first-boot path by
+# construction -- the directory exists ever after -- so an installed machine
+# saw it once, long before anyone measured, and a machine from an image runs it
+# on the boot this suite watches.
+#
+# It is also a path worth keeping working rather than silencing: a platform
+# that hands the machine a root key through a credential (systemd's own
+# smbios/qemu fw_cfg route, which is how several hypervisors do it) has no
+# other way in. systemd_tmpfiles_t is the domain refpolicy trusts to create
+# exactly this kind of thing everywhere else on the filesystem; the two types
+# here are only unusual because this profile's /root is user_home_dir_t.
+########################################################################
+allow systemd_tmpfiles_t user_home_dir_t:dir { search getattr write add_name };
+allow systemd_tmpfiles_t ssh_home_t:dir { create getattr setattr search };
+
+########################################################################
+# 30. depmod again, on the build root of an initramfs rebuilt by a SERVICE.
+#
+#   comm="depmod" name="mkinitcpio.nP7j5H" tclass=dir { search }
+#     scontext=system_u:system_r:kmod_t
+#     tcontext=system_u:object_r:initrc_tmp_t
+#
+# Rule 24 closed this for the administrative path (`sudo pacman -S linux`,
+# where the build root is user_tmp_t) and its comment says the update timer is
+# safe because pacman under systemd is initrc_t and "refpolicy's kmod_t works
+# there". Measured on the first boot of a cloud image, that is not true: the
+# build root is initrc_tmp_t and kmod_t cannot search it either. The same
+# three-line failure follows -- depmod exits non-zero, mkinitcpio reports
+# "errors were encountered during the build", limine-entry-tool skips the UKI.
+#
+# The image is what found it because omarchy-server-firstboot.service runs
+# `limine-update` on the first boot to re-tag the boot entry with this
+# machine's machine-id (docs/cloud-image.md §5.1), and a service's temporary
+# directory is initrc_tmp_t. But the domain is the same one the daily update
+# timer runs a kernel upgrade in, so this is not an image-only fix: it is rule
+# 24's other half, and without it a machine that takes a kernel update from its
+# own timer cannot rebuild its own boot image either.
+#
+# The permission set is rule 24's, including `write` on the directory, and that
+# half was measured separately: with only the read side granted, depmod enters
+# the tree and is then refused when it writes modules.dep and its four
+# companions back into it -- ten denials on one rebuild, the same non-zero exit,
+# the same skipped UKI. depmod's whole job is to write those files.
+#
+# Same limit on the widening as rule 24: kmod_t is entered only by exec'ing
+# depmod/modprobe/modinfo from a domain that already had them, and initrc_tmp_t
+# here is a directory that same system service created moments earlier.
+########################################################################
+allow kmod_t initrc_tmp_t:dir { search getattr read open write add_name remove_name };
+allow kmod_t initrc_tmp_t:file { getattr read open map create write rename unlink };
+allow kmod_t initrc_tmp_t:lnk_file { getattr read };
+
+########################################################################
+# 31. Two more inherited descriptors, from the same first boot.
+#
+#   comm="loadkeys" path="/run/lock/boot-partition.lock" tclass=file { write }
+#     scontext=system_u:system_r:loadkeys_t tcontext=…:initrc_lock_t
+#   comm="btrfs" path="pipe:[…]" tclass=fifo_file { write getattr }
+#     scontext=staff_u:sysadm_r:fsadm_t tcontext=staff_u:staff_r:staff_t
+#
+# The first is rule 25 with a different child: limine's `mutex_lock()` holds
+# /run/lock/boot-partition.lock open across the whole rebuild, and every process
+# it starts inherits the descriptor -- loadkeys, from the initramfs hook that
+# adds the keymap, as well as modinfo. Nothing touches fd 200, so dontaudit,
+# for the same reason rule 25 gives.
+#
+# The second is rule 16, whose subject list this adds to rather than repeats.
+# `sudo btrfs subvolume list /` over a non-interactive ssh is how this
+# repository's own acceptance asks whether @factory is present; btrfs
+# type-transitions into fsadm_t, its stdout is the login session's pipe, and
+# with the write refused the command exits 0 and prints nothing. A check that
+# reads "no @factory" on a machine that has one is exactly the failure rule 16
+# exists to prevent, and fsadm_t is reached the same way every other domain in
+# that list is: by an administrator running one command through sudo.
+########################################################################
+dontaudit loadkeys_t initrc_lock_t:file write;
+allow fsadm_t { user_tmp_t user_home_t }:file { append getattr ioctl lock open read write };
+allow fsadm_t { sshd_t unpriv_userdomain }:fifo_file { append getattr ioctl lock read write };
+
+########################################################################
+# 32. mount, reading udev's record of the device it is about to mount.
+#
+#   comm="mount" name="b11:0" tclass=file { read }
+#     scontext=system_u:system_r:mount_t
+#     tcontext=system_u:object_r:udev_runtime_t
+#
+# Five times on every boot of a machine with a NoCloud seed: cloud-init mounts
+# /dev/sr0 to read its metadata, and libblkid asks /run/udev/data/b11:0 what
+# that device already is instead of probing it again. udev writes those files
+# for exactly this purpose -- they are the device database, they hold no
+# content of the device, and every other filesystem tool on the machine reads
+# them.
+#
+# It is allowed rather than dontaudited, which is the opposite of the choice
+# rules 25 and 31 make about inherited descriptors, and the difference is worth
+# stating: with the read refused libblkid falls back to probing, so nothing
+# breaks today -- but the fallback is what runs, and a probe of a device
+# somebody else's metadata drive points at is more work with less authority
+# behind it than the record udev already made.
+########################################################################
+allow mount_t udev_runtime_t:dir search;
+allow mount_t udev_runtime_t:file { getattr read open };
+
+########################################################################
+# 33. cloud-init rotating the ssh host keys of a RE-PROVISIONED machine.
+#
+#   comm="python3" name="ssh_host_rsa_key" tclass=file { unlink }
+#     scontext=system_u:system_r:cloud_init_t
+#     tcontext=system_u:object_r:sshd_key_t
+#
+# Not on the first boot of an image -- there, omarchy-server-firstboot has
+# already made the keys by the time cc_ssh looks, and cc_ssh leaves them alone;
+# measured, no denial. This is the other case: a machine whose metadata gives
+# it a NEW instance-id on a disk that already has host keys. That is a clone
+# taken from a running machine rather than from a generalized image, and it is
+# the one shape of copy this profile's own first-boot path does not cover,
+# because there was no generalization to delete the keys.
+#
+# cc_ssh's job there is precisely to delete them and generate a fresh set
+# (`ssh_deletekeys`, on by default), and a refusal is the bad kind of quiet:
+# cloud-init logs a recoverable error, the boot finishes, and the clone answers
+# ssh with its parent's host key -- the exact failure the whole generalization
+# list exists to prevent, arriving through the one door it does not watch.
+#
+# Found by running `cloud-init clean` and rebooting, which is how a
+# re-provision is simulated, and kept because the scenario is real even though
+# the pipeline's own path does not take it. Read and unlink only: the keys
+# themselves are written by ssh-keygen, which refpolicy already transitions
+# into ssh_keygen_t.
+########################################################################
+allow cloud_init_t sshd_key_t:file { getattr read unlink };
+
+########################################################################
+# 34. THE RULE THAT IS NOT HERE: cloud-init's locale module.
+#
+#   comm="localedef" name="UTF-8.gz" tclass=file { read map ioctl }
+#     scontext=system_u:system_r:cloud_init_t tcontext=…:usr_t
+#   comm="rm" name="locale" tclass=dir { write } tcontext=…:locale_t
+#   comm="localedef" name="locale-archive.Sy75sF" { link setattr }
+#   comm="systemd-localed" name="locale-gen" tclass=file { execute }
+#     scontext=system_u:system_r:systemd_locale_t tcontext=…:bin_t
+#
+# `cc_locale` rewrites /etc/locale.gen and runs `locale-gen`, which on Arch
+# deletes the locale archive and rebuilds it with localedef; then `localectl
+# set-locale`, and systemd-localed on Arch shells out to locale-gen in turn.
+# Granting all of that costs cloud_init_t a general read of /usr, write access
+# to /usr/lib/locale, and systemd_locale_t the right to EXECUTE binaries out of
+# /usr/bin. Three real widenings, for work this profile has already done: the
+# locale is set at install time and the module was measured setting it to the
+# value it already had.
+#
+# So the fix is one line of configuration instead, in
+# install/server/cloud-server.sh: `locale: false`, which cc_locale documents as
+# "skip me". It is the same trade the same file already makes for networking --
+# the profile owns it, cloud-init does not write it, and the cost is that a
+# platform handing out a locale through its metadata is not honoured.
+#
+# Written down as a rule that is deliberately absent, in the same spirit as the
+# lastlog note in this file's header: the next person to see these denials
+# should find the decision, not repeat the measurement.
+########################################################################
+
+########################################################################
+# 35. useradd copying /etc/skel into a home directory cloud-init asked for.
+#
+#   comm="useradd" name=".config" tclass=dir { read }
+#     scontext=system_u:system_r:useradd_t
+#     tcontext=user_u:object_r:xdg_config_t
+#   comm="useradd" name="git" tclass=dir { read } tcontext=…:git_xdg_config_t
+#   comm="useradd" capability=2 { dac_read_search }
+#
+# This profile's /etc/skel is not empty: it carries .config/btop,
+# .config/git and .local, which the settings package installs. libselinux
+# labels those by their home-directory pattern rather than by /etc, so the
+# skeleton is xdg_config_t and friends -- and refpolicy's useradd_t has rules
+# for the home directory it CREATES, not for reading a skeleton labelled as
+# somebody's configuration.
+#
+# On an installed machine the orchestrator creates the account, in a phase
+# where the machine is not yet enforcing anything. On an image, cloud-init
+# creates every account on the first boot, so this is the boot that finds it:
+# with the reads refused, the account is created and its home comes out missing
+# the parts of the skeleton the policy would not let useradd read -- silently,
+# because useradd does not fail on a skeleton entry it cannot copy.
+#
+# The capability goes with it: useradd is root and still asks for
+# CAP_DAC_READ_SEARCH to walk a tree whose modes it does not own. It is granted
+# rather than dontaudited because the same walk is the copy, and half a
+# skeleton is the failure this rule exists to prevent.
+########################################################################
+allow useradd_t { xdg_config_t xdg_data_t git_xdg_config_t }:dir { search read open getattr };
+allow useradd_t { xdg_config_t xdg_data_t git_xdg_config_t }:file { getattr read open };
+allow useradd_t self:capability dac_read_search;
+
+########################################################################
+# 36. `systemctl is-enabled` from the operator's session.
+#
+#   comm="systemctl" path="/usr/lib/systemd/system-preset/90-systemd.preset"
+#     tclass=file { read open ioctl } scontext=staff_u:staff_r:staff_t
+#     tcontext=system_u:object_r:systemd_unit_t
+#
+# Rule 28's other half. `systemctl is-enabled <unit>` reads the preset files to
+# answer for a unit with no explicit symlink, and the preset directory is
+# systemd_unit_t like the unit files themselves. Read-only, on files that
+# describe which units a distribution enables by default; every one of them is
+# world-readable on disk.
+########################################################################
+allow staff_t systemd_unit_t:file { getattr read open ioctl };
+allow staff_t systemd_unit_t:dir { search getattr open read };
+
+########################################################################
+# 37. The per-user manager, and the guest agent's channel device.
+#
+#   comm="systemd" path="/dev/vport2p1" tclass=chr_file { getattr }
+#     scontext=staff_u:staff_r:staff_systemd_t
+#     tcontext=system_u:object_r:virtio_device_t
+#
+# Only on a machine that has a virtio-serial channel, which is every machine
+# this image is meant for: the channel is how qemu-guest-agent answers a
+# hypervisor's "stop instance" and its volume freeze/thaw. The per-user systemd
+# manager enumerates /dev when it sets up the session's device units and stats
+# what it finds. getattr on a character device it will never open.
+########################################################################
+allow systemd_user_session_type virtio_device_t:chr_file getattr;
+
+########################################################################
+# 38. `ss` asking the kernel to load the socket-diagnostics module.
+#
+#   comm="ss" kmod="net-pf-16-proto-4-type-2" tclass=system { module_request }
+#     scontext=staff_u:sysadm_r:sysadm_t tcontext=system_u:system_r:kernel_t
+#
+# `ss -ltnup` uses the sock_diag netlink family, and on a machine where nothing
+# has used it yet the kernel offers to autoload it. Refusing the request does
+# not break the command -- ss falls back to /proc/net, which is where it read
+# everything before sock_diag existed, and the acceptance list that runs it gets
+# the same answer either way. Measured on this run: the listening-socket check
+# passed with the denial standing.
+#
+# So it is dontaudited, for the same reason as rules 17, 21 and 25: allowing a
+# user domain to make the kernel load modules is a real grant, and it would be
+# made to silence a request the caller already copes with. It is written down
+# because of what it did before it was silenced -- it is a `system` class denial
+# from the administrative role, which `omarchy-server-selinux enforcing`
+# classifies as a login-path lockout risk, so the guard refused to enforce over
+# a fallback nobody would have noticed.
+########################################################################
+dontaudit { staff_t sysadm_t user_t } kernel_t:system module_request;
+
+########################################################################
+# 39. `ss`, once the module rule 38 silenced has been loaded anyway.
+#
+#   comm="ss" tclass=netlink_tcpdiag_socket
+#     { create bind read write getattr setopt nlmsg_read }
+#     scontext=staff_u:staff_r:staff_t
+#
+# The sequel to rule 38, and the reason that rule is a dontaudit rather than a
+# grant: on a machine where the sock_diag module IS loaded -- by an
+# administrator's `sudo ss` a minute earlier, or by anything else that asks --
+# `ss` takes the netlink path instead of the /proc fallback, and a confined user
+# domain has no rules for that socket class. refpolicy grants it to sysadm_t and
+# stops there.
+#
+# What it costs to refuse is a listening-socket list that is silently EMPTY:
+# this repository's own acceptance asks "nothing listens except ssh" with
+# `ss -ltnup` from the login session, and an empty answer reads as a pass. The
+# same shape as rule 28 -- a query that returns nothing rather than an error --
+# and the same conclusion.
+#
+# Read-only diagnostics on the machine's own sockets, to the administrator's
+# login domain. user_t, the domain an ordinary account gets, is not in it.
+########################################################################
+allow staff_t self:netlink_tcpdiag_socket { create bind read write getattr setopt nlmsg_read };

@@ -154,6 +154,18 @@ case "$cmd" in
       -display none -vnc 127.0.0.1:"$VNC"
       -monitor unix:"$mon",server,nowait
       -serial file:"$vm/serial.log"
+      # The guest agent's channel. The `cloud` addon enables
+      # qemu-guest-agent.service, and without this device the unit's
+      # ConditionPathExists on /dev/virtio-ports/org.qemu.guest_agent.0 is unmet
+      # and it never starts -- so a lab VM measured "the guest agent is not
+      # running" and said nothing about whether it WORKS, which is the question
+      # an image raises (a hypervisor's stop-instance and its volume
+      # freeze/thaw both go through it). Every cloud that runs this image
+      # presents the same channel; presenting it here is what makes the lab the
+      # same machine.
+      -chardev socket,path="$vm/qga.sock",server=on,wait=off,id=qga0
+      -device virtio-serial
+      -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0
       -rtc base=utc
       -daemonize -pidfile "$pidfile"
     )

@@ -278,6 +278,8 @@ func imageTest(args []string) error {
 	image := fs.String("image", "", "image to boot (default: the newest in pocs/image/out)")
 	diskGB := fs.Int("disk-gb", 40, "disk to launch the image onto; growpart has to fill it")
 	hostname := fs.String("hostname", "omarchy-cloud-test", "hostname the NoCloud seed asks for")
+	mac := fs.String("mac", "", "MAC suite to run as well (default: read off the image's name)")
+	enforce := fs.Bool("enforce", false, "--mac selinux: switch the machine to enforcing during the run")
 	waitSecs := fs.Int("wait", 600, "seconds to wait for ssh to answer")
 	noPublish := fs.Bool("no-publish", false, "keep the evidence private to the lab")
 	recreate := fs.Bool("recreate", false, "delete an existing test VM disk first")
@@ -299,10 +301,23 @@ func imageTest(args []string) error {
 		return err
 	}
 
+	// What is IN the image decides which suites can be run against it, and the
+	// name is where the build wrote that down (imageName above). Reading it off
+	// the file rather than asking the operator to repeat it is what stops a
+	// SELinux image from being tested as though it had no MAC at all — which
+	// would pass, quietly, because every check it skipped is a check nobody ran.
+	if *mac == "" {
+		*mac = imageMAC(target)
+	}
+	if *mac != "" && *mac != "selinux" {
+		return fmt.Errorf("--mac selinux is the only image suite there is, not %q", *mac)
+	}
+
 	lab := &Lab{
 		Name:     *name,
 		Profile:  cfg.Profile,
 		Hostname: *hostname,
+		MAC:      *mac,
 		DiskGB:   *diskGB,
 		MemoryMB: cfg.MemoryMB,
 		CPUs:     cfg.CPUs,
@@ -319,7 +334,7 @@ func imageTest(args []string) error {
 	}
 	defer session.Close()
 
-	err = runImageTest(session, lab, *waitSecs, *recreate, !*noPublish)
+	err = runImageTest(session, lab, *waitSecs, *recreate, *enforce, !*noPublish)
 	session.Summary()
 	if err != nil {
 		return err
@@ -329,7 +344,16 @@ func imageTest(args []string) error {
 	return nil
 }
 
-func runImageTest(s *Session, lab *Lab, waitSecs int, recreate, publish bool) error {
+// imageMAC reads the mandatory access control out of an image's file name,
+// which is where imageName put it.
+func imageMAC(path string) string {
+	if strings.Contains(filepath.Base(path), "-selinux-") {
+		return "selinux"
+	}
+	return ""
+}
+
+func runImageTest(s *Session, lab *Lab, waitSecs int, recreate, enforce, publish bool) error {
 	cfg := s.Config
 	disk := filepath.Join(lab.Out, "vm", lab.Name, "disk.qcow2")
 
@@ -415,6 +439,29 @@ func runImageTest(s *Session, lab *Lab, waitSecs int, recreate, publish bool) er
 		Env:   env,
 	}); err != nil {
 		return err
+	}
+
+	// The MAC suite, when the image has one. After `surface`, because its
+	// workload runs an update and a pacman transaction and the surface numbers
+	// are supposed to describe the image rather than what this run did to it.
+	//
+	// ENFORCE=1 is the second half of the measurement and not the default: an
+	// image ships permissive (docs/cloud-image.md §6), and the run that decides
+	// whether that is the right default is the one that switches afterwards.
+	if lab.MAC == "selinux" {
+		env := append(env, "WANT_DISK_GB="+strconv.Itoa(lab.DiskGB))
+		file := "acceptance-cloud-selinux.txt"
+		if enforce {
+			env = append(env, "ENFORCE=1")
+			file = "acceptance-cloud-selinux-enforce.txt"
+		}
+		if err := runCaptured(s, Step{
+			Label: "acceptance-cloud-selinux",
+			Args:  []string{cfg.Script("pocs", "server-install", "acceptance-cloud-selinux.sh"), lab.Name},
+			Env:   env,
+		}, filepath.Join(evidence, file)); err != nil {
+			return err
+		}
 	}
 
 	// A reboot is not a formality on an image: cloud-init must NOT redo its

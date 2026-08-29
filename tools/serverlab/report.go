@@ -517,6 +517,11 @@ func suiteHeading(suite string, enforced bool) string {
 		return "Acceptance — transactional updates"
 	case "cloud":
 		return "Acceptance — the cloud image, booted from a NoCloud seed"
+	case "cloud-selinux":
+		if enforced {
+			return "Acceptance — the cloud image under SELinux, enforcing"
+		}
+		return "Acceptance — the cloud image under SELinux, as shipped"
 	default:
 		return "Acceptance — " + suite
 	}

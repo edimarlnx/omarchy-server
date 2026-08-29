@@ -1,0 +1,36 @@
+=== reboot survival — VM 'cloudselenf' — 2026-08-29T18:24:18-03:00 ===
+
+before:
+2026-08-29 18:24:11
+7.1.11-arch1-1
+4.0.1-11
+
+rebooting...
+rebooted: boot time moved from 2026-08-29 18:24:11 to 2026-08-29 18:24:20
+ssh answered 0s after the reboot request
+
+after:
+2026-08-29 18:24:20
+7.1.11-arch1-1
+profile: server
+version: 4.0.1-11
+default target: multi-user.target
+cmdline: root=PARTUUID=bf3912ab-cc6e-415f-a90a-5f781082c19d zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  lsm=landlock,lockdown,yama,integrity,selinux,bpf selinux=1 security=selinux console=ttyS0,115200 console=tty0
+Startup finished in 788ms (firmware) + 2.759s (loader) + 797ms (kernel) + 3.175s (userspace) = 7.521s 
+multi-user.target reached after 3.131s in userspace.
+--- failed units ---
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+
+0 loaded units listed.
+--- firewall ---
+Status: active
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     LIMIT       Anywhere                  
+22/tcp (v6)                LIMIT       Anywhere (v6)              # omarchy-sshd
+--- listening ---
+*:22
+0.0.0.0:22
+127.0.0.53:53
+127.0.0.54:53

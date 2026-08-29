@@ -238,6 +238,41 @@ omarchy_selinux_add_fcontexts() {
 #
 # `semodule -B` rebuilds the store and regenerates it. Cheap, and it also
 # expands the local module installed just above.
+# The policy's own tunables, written the same way seusers.local and
+# file_contexts.local are: straight into the store's booleans.local, which is
+# the file `semanage boolean` writes, in the same format, at the same path, and
+# which `semodule -B` merges. No selinux-python, and it works in the install
+# chroot where `setsebool -P` cannot (it needs a mounted selinuxfs).
+#
+# One boolean, and it is not cosmetic. `cloudinit_growpart` is refpolicy's
+# switch for letting cloud-init read the block device it is about to grow, and
+# it ships OFF. With it off and the machine enforcing, cc_growpart is refused
+# `read` on /dev/vda2, cloud-init reports
+#
+#     errors: - ('growpart', PermissionError(13, 'Permission denied'))
+#
+# and cloud-init-main.service fails -- which on a cloud image means a machine
+# that came up on the 40 GiB of its image inside a 200 GiB boot volume, with
+# the failure visible only to somebody who runs `cloud-init status --long`.
+# Measured on the first enforcing boot of the image this file builds.
+#
+# Turning it on is what refpolicy expects of a machine that actually runs
+# cloud-init: it is a boolean rather than a rule precisely because "does this
+# machine let cloud-init resize its disk" is a per-machine question, and on an
+# image whose whole purpose is being launched onto a bigger volume the answer
+# is yes. On a machine with no cloud-init the boolean gates rules for a domain
+# that never runs.
+omarchy_selinux_write_booleans() {
+  local target=/var/lib/selinux/$OMARCHY_SELINUX_TYPE/active/booleans.local
+
+  [[ -d $(dirname "$target") ]] || return 0
+  {
+    echo "# Written by install/server/selinux-server.sh."
+    echo "cloudinit_growpart=1"
+  } >"$target"
+  echo "selinux: booleans.local -> cloudinit_growpart=1"
+}
+
 omarchy_selinux_rebuild_store() {
   local homedirs="$OMARCHY_SELINUX_STORE/contexts/files/file_contexts.homedirs"
 
@@ -439,7 +474,9 @@ omarchy_selinux_setup() {
   omarchy_selinux_add_fcontexts
   omarchy_selinux_build_local_module || true
   omarchy_selinux_apply_admin_role || true
-  # Before the relabel, not after: the relabel reads what this rebuilds.
+  omarchy_selinux_write_booleans
+  # Before the relabel, not after: the relabel reads what this rebuilds, and
+  # the rebuild is what merges booleans.local and seusers.local into the store.
   omarchy_selinux_rebuild_store || true
   omarchy_selinux_relabel
   omarchy_selinux_verify_labels || true
