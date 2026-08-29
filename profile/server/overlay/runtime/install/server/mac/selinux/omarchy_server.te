@@ -92,13 +92,16 @@ require {
 	type systemd_user_runtime_dir_t;
 	type systemd_userdbd_t;
 	type systemd_userdbd_runtime_t;
+	type kmod_t;
+	type httpd_lock_t;
+	type initrc_lock_t;
 	class dir { search read open getattr write add_name remove_name create relabelfrom relabelto };
 	class bpf { prog_load prog_run map_create map_read map_write };
 	class capability2 bpf;
 	class capability { net_admin dac_read_search sys_admin audit_write };
 	class filesystem { quotaget quotamod associate getattr };
 	class netlink_audit_socket { create read write nlmsg_relay };
-	class file { getattr read write open ioctl create unlink map append lock relabelfrom relabelto execute entrypoint };
+	class file { getattr read write open ioctl create unlink rename map append lock relabelfrom relabelto execute entrypoint };
 	class lnk_file { read getattr };
 	class fifo_file { append getattr ioctl lock read write };
 	class sock_file { write create getattr unlink };
@@ -793,3 +796,77 @@ allow sysadm_t systemd_sysusers_t:process { siginh rlimitinh noatsecure };
 # of the record is that somebody added a group.
 allow systemd_sysusers_t self:netlink_audit_socket { read write nlmsg_relay };
 allow systemd_sysusers_t self:capability audit_write;
+
+########################################################################
+# 24. depmod, on the build root mkinitcpio creates in /tmp — the §11.5 open
+#     question, closed.
+#
+#   comm="depmod" name="mkinitcpio.tQq4WU" tclass=dir { search }
+#     scontext=staff_u:sysadm_r:kmod_t tcontext=staff_u:object_r:user_tmp_t
+#
+# mkinitcpio assembles the image in a `mktemp -d` under /tmp and then runs
+# `depmod -b <buildroot>` over it. depmod execs kmod, which type-transitions
+# into kmod_t; the build root was created by the administrator's shell, so it
+# is user_tmp_t; and kmod_t has no rule to so much as SEARCH a user_tmp_t
+# directory. depmod therefore cannot enter the tree it was pointed at, exits
+# non-zero, mkinitcpio raises "errors were encountered during the build", and
+# limine-entry-tool follows with "mkinitcpio failed for kernel …, skipping"
+# and does not write the UKI.
+#
+# That is the failure reports/2026-08-29-mandatory-access-control.md §11.5
+# recorded and could not explain, and the reason it looked like it had no
+# denial behind it is worth writing down: the run looked with `ausearch`, and
+# `ausearch` reads auditd's log. This profile does not install auditd. The
+# records were in the kernel ring buffer the whole time — `journalctl -k -g
+# 'avc: *denied'` had them — and they are exactly three lines.
+#
+# It is the same shape as rule 23: **an administrative path that the update
+# timer never takes.** Under the timer, pacman is initrc_t, its temporary
+# directories are initrc_tmp_t, and refpolicy's kmod_t works there. Run by hand
+# through sudo -- `sudo pacman -S linux`, `omarchy-server-selinux disable`,
+# `limine-update` -- pacman is sysadm_t and the same build root lands in the
+# administrator's tmp instead. So a machine whose kernel is updated by the
+# timer never sees it, and a machine whose operator updates it by hand cannot
+# rebuild its own boot image. That asymmetry is why it survived §10 and §11.
+#
+# This is the second rule in this module written wider than the object it was
+# measured on, and, like rule 16, it says so. The alternative -- labelling the
+# build root, which is what this module prefers -- has no mechanism here: the
+# directory is `mkinitcpio.XXXXXX` from mktemp, and a name-based type
+# transition matches an exact name, not a prefix. What limits the widening is
+# the subject rather than the object: kmod_t is entered only by exec'ing
+# depmod/modprobe/modinfo, only from a domain that already had them, and the
+# files it reaches here are files that same administrator created and can read
+# directly. Nothing confined gains anything.
+########################################################################
+allow kmod_t user_tmp_t:dir { search getattr read open write add_name remove_name };
+allow kmod_t user_tmp_t:file { getattr read open map create write rename unlink };
+allow kmod_t user_tmp_t:lnk_file { getattr read };
+
+########################################################################
+# 25. modinfo, and a lock file it never asked for.
+#
+#   comm="modinfo" path="/run/lock/boot-partition.lock" tclass=file { write }
+#     scontext=staff_u:sysadm_r:kmod_t
+#     tcontext=staff_u:object_r:httpd_lock_t   (and initrc_lock_t)
+#
+# limine's mutex_lock() does `exec 200>/run/lock/boot-partition.lock` and holds
+# that descriptor open for the whole of the rebuild. Every process the rebuild
+# starts inherits it, modinfo included -- and modinfo type-transitions into
+# kmod_t, at which point the kernel revalidates the inherited descriptors
+# against the new domain, refuses the write it was opened with, closes the
+# descriptor in the child and logs this.
+#
+# Nothing is broken by that. modinfo does not touch fd 200; the lock belongs to
+# the shell that opened it, and that shell keeps it. So this is a denial for
+# something that is genuinely not needed, which is what `dontaudit` is for --
+# the same treatment rules 17 and 21 give the two capabilities sudo and
+# networkd ask for and do not miss. Allowing kmod_t to write lock files to make
+# the line go away would grant a real permission to silence a non-event.
+#
+# Two types because the lock file's label depends on who created it first: the
+# update timer's pacman is initrc_t and leaves initrc_lock_t, an administrator's
+# shell leaves httpd_lock_t, which is refpolicy's generic for a file created in
+# /run/lock with no transition of its own. Both were measured.
+########################################################################
+dontaudit kmod_t { httpd_lock_t initrc_lock_t }:file write;

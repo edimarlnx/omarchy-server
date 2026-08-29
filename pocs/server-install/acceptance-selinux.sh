@@ -456,12 +456,16 @@ if [[ ${ENFORCE:-0} == 1 ]]; then
     '~/.lab-sudo grep -c "EFI/Linux" /boot/limine.conf; ~/.lab-sudo ls -l /boot/EFI/Linux/' \
     '\.efi'
 
-  # A denial the policy dontaudits is invisible here and in `ausearch`. That is
-  # exactly the shape of "it failed and nothing was logged", so the count is
-  # recorded rather than trusted -- §10 below is what looks underneath it.
-  check "the kernel transaction was denied nothing that is audited" \
-    '~/.lab-sudo ausearch -m avc -m user_avc -ts boot 2>/dev/null | grep -c "denied" || echo 0' \
-    '^0$'
+  # NOT `ausearch`. That reads auditd's log, and this profile does not install
+  # auditd -- which is exactly why the failure in §11.5 looked as though it had
+  # no denial behind it. The kernel ring buffer had the records the whole time.
+  # Only enforcing refusals count: a permissive=1 line is a measurement, not a
+  # failure, and the permissive pass of this same suite produces plenty.
+  check "the kernel transaction was refused nothing in enforcing" \
+    '~/.lab-sudo dmesg | grep -oE "avc: +denied.*permissive=0" |
+       sed -E "s/pid=[0-9]+ //; s/ino=[0-9]+ //; s/dev=\"[^\"]*\" //" | sort | uniq -c;
+     echo "enforcing-denials=$(~/.lab-sudo dmesg | grep -cE "avc: +denied.*permissive=0")"' \
+    '^enforcing-denials=0$'
 
   check "the classifier does not ask for a reboot after a same-version rebuild" \
     'before=$(pacman -Q linux | awk "{print \$2}");

@@ -27,8 +27,28 @@
 # `.machine`, so a certificate enrolled in the firmware `db` -- which is what
 # this profile does -- lands in `.platform` and is never consulted (see
 # docs/secure-boot.md §8). kexec's PE verification path explicitly *does*
-# accept `.platform`. So the same key that cannot sign a module can sign the
-# image this machine kexecs into.
+# accept `.platform`. That was the premise, and it is **measured true**: this
+# machine kexecs into a kernel signed by the same key that cannot sign a
+# module.
+#
+# What is measured FALSE is handing the UKI itself to kexec_file_load. The
+# kernel's PE verifier reports it as
+#
+#   PEFILE: Unsigned PE binary
+#   Lockdown: kexec: kexec of unsigned images is restricted
+#
+# even though `sbctl verify` calls it signed and the firmware boots it: the
+# signature layout systemd-ukify produces is not the one the kernel's `pefile`
+# parser accepts. So the working route unpacks the UKI instead -- .linux,
+# .initrd and .cmdline are three sections of a PE anyone can read with objcopy
+# -- signs the extracted kernel with the machine's own key, and loads that.
+#
+# That is not a weakening, and it is worth being explicit about why: the bytes
+# signed are the same kernel that was already inside a UKI this machine's
+# firmware verified, the key is the same key, and the kernel still verifies the
+# signature before accepting the image. Nothing is trusted that was not trusted
+# before; the signature is simply re-expressed in the format the kexec path can
+# read. The scratch copies live in /var/lib/omarchy/kexec, root-only.
 #
 # This command only loads. Taking the reboot is `systemctl kexec`, which is
 # systemd's ordinary shutdown transaction with a jump at the end instead of a
@@ -114,43 +134,74 @@ uki=$(find_uki) || {
 }
 
 echo "omarchy-server-kexec: loading $uki"
-
-# kexec_file_load first, and not only because of lockdown: it is the syscall
-# that understands a signed image, so on a Secure Boot machine it is the one
-# whose success means something. The classic syscall is tried after it for the
-# machines with no Secure Boot and an older kernel, where it is simply the path
-# that works.
-if kexec --load --kexec-file-syscall "$uki" 2>/tmp/omarchy-kexec.err; then
-  echo "omarchy-server-kexec: loaded via kexec_file_load (signature accepted)"
-  exit 0
-fi
-echo "omarchy-server-kexec: kexec_file_load refused it:" >&2
-sed 's/^/  /' /tmp/omarchy-kexec.err >&2
+errors=$(mktemp)
+trap 'rm -f "$errors"' EXIT
 
 lockdown=$(cat /sys/kernel/security/lockdown 2>/dev/null || echo "")
-if [[ $lockdown == *"[integrity]"* || $lockdown == *"[confidentiality]"* ]]; then
-  echo "omarchy-server-kexec: lockdown is active, so the unsigned path is not tried." >&2
-  exit 1
-fi
+locked_down() { [[ $lockdown == *"[integrity]"* || $lockdown == *"[confidentiality]"* ]]; }
 
-if kexec --load "$uki" 2>/tmp/omarchy-kexec.err; then
-  echo "omarchy-server-kexec: loaded via kexec_load"
+# 1. The UKI as it stands. Measured to fail on this profile (the kernel calls
+#    it an unsigned PE), and tried first anyway: it costs one syscall, it is
+#    the route with nothing to unpack, and a kernel or a ukify that fixes the
+#    layout should be picked up without anyone editing this file.
+if kexec --load --kexec-file-syscall "$uki" 2>"$errors"; then
+  echo "omarchy-server-kexec: loaded the UKI via kexec_file_load"
   exit 0
 fi
-echo "omarchy-server-kexec: kexec_load refused it:" >&2
-sed 's/^/  /' /tmp/omarchy-kexec.err >&2
+echo "omarchy-server-kexec: kexec_file_load did not take the UKI:"
+sed 's/^/  /' "$errors"
 
-# Last resort, and only off lockdown: the kernel image and initramfs as
-# separate files. A UKI-only machine has neither, so this is skipped rather
-# than faked.
-kernel="/usr/lib/modules/$(uname -r)/vmlinuz"
-initramfs="$esp/initramfs-linux.img"
-if [[ -f $kernel && -f $initramfs ]]; then
-  if kexec --load "$kernel" --initrd="$initramfs" --reuse-cmdline; then
-    echo "omarchy-server-kexec: loaded the split kernel + initramfs"
+# 2. The UKI, unpacked. A UKI is a PE with the kernel in .linux, the initramfs
+#    in .initrd and the command line in .cmdline; objcopy reads all three. The
+#    kernel is then signed with the machine's own key -- the same key already
+#    on the UKI, in the layout the kernel's verifier accepts -- and loaded.
+work=/var/lib/omarchy/kexec
+install -d -m 0700 "$work"
+kernel="$work/vmlinuz"
+initrd="$work/initrd.img"
+
+if objcopy -O binary --only-section=.linux "$uki" "$kernel" 2>>"$errors" &&
+  objcopy -O binary --only-section=.initrd "$uki" "$initrd" 2>>"$errors" &&
+  [[ -s $kernel && -s $initrd ]]; then
+
+  # The command line comes out of the UKI too, so the kexec'd kernel gets the
+  # one this machine was actually built to boot with -- lockdown=integrity and
+  # module.sig_enforce=1 included. --reuse-cmdline would read /proc/cmdline,
+  # which is the same string on a first boot and NOT the same after an earlier
+  # kexec chain; taking it from the image keeps every hop identical.
+  cmdline=$(objcopy -O binary --only-section=.cmdline "$uki" /dev/stdout 2>/dev/null | tr -d '\0')
+
+  if command -v sbctl >/dev/null && sbctl sign -o "$work/vmlinuz.signed" "$kernel" >/dev/null 2>>"$errors"; then
+    kernel="$work/vmlinuz.signed"
+    echo "omarchy-server-kexec: signed the extracted kernel with the machine's key"
+  elif locked_down; then
+    echo "omarchy-server-kexec: no sbctl to sign the extracted kernel, and lockdown will not take it unsigned." >&2
+    sed 's/^/  /' "$errors" >&2
+    exit 1
+  fi
+
+  load=(kexec --load --kexec-file-syscall "$kernel" --initrd="$initrd")
+  [[ -n $cmdline ]] && load+=(--command-line="$cmdline")
+  if "${load[@]}" 2>>"$errors"; then
+    echo "omarchy-server-kexec: loaded the unpacked UKI via kexec_file_load"
     exit 0
   fi
 fi
+echo "omarchy-server-kexec: the unpacked UKI did not load either:" >&2
+sed 's/^/  /' "$errors" >&2
+
+# 3. The classic syscall, which verifies nothing. Only off lockdown, where
+#    there is nothing to subvert -- under lockdown the kernel refuses it, and
+#    trying anyway would only print a second, less informative error.
+if locked_down; then
+  echo "omarchy-server-kexec: lockdown is active, so the unverified syscall is not tried." >&2
+  exit 1
+fi
+if kexec --load "$kernel" --initrd="$initrd" --reuse-cmdline 2>>"$errors"; then
+  echo "omarchy-server-kexec: loaded via kexec_load"
+  exit 0
+fi
 
 echo "omarchy-server-kexec: could not load an image; a firmware reboot is the way." >&2
+sed 's/^/  /' "$errors" >&2
 exit 1

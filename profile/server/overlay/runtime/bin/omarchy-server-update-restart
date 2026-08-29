@@ -325,6 +325,14 @@ changed_units() {
 # swaps the listener and leaves every established session alone. That is a
 # property of the shipped unit, not a law, so it is checked rather than
 # assumed -- a machine with a drop-in that changed it defers instead.
+#
+# In practice this rarely fires, and the reason is worth knowing: Arch's
+# openssh package restarts sshd itself, from
+# 10-openssh-mark-sshd-for-restart.hook and 70-openssh-restart-sshd.hook,
+# inside the same pacman transaction. By the time anything here reads /proc the
+# listener is already the new binary. The guard stays because the guarantee
+# does not: it is one distribution's packaging decision, it covers exactly one
+# daemon, and nothing prevents a local drop-in from changing KillMode.
 sshd_survives_restart() {
   [[ $(systemctl show -p KillMode --value "$1" 2>/dev/null) == process ]]
 }

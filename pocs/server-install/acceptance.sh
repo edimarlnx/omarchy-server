@@ -314,11 +314,28 @@ check "a userspace-only transaction restarts services and requires no reboot" \
    ~/.lab-sudo test -f /root/.local/state/omarchy/reboot-required && echo "marker=set" || echo "marker=absent"' \
   '^marker=absent$'
 
-check "the restart pass picked sshd up" \
-  'offset=$(~/.lab-sudo stat -c %s /var/log/pacman.log);
+# Measured, and not what was expected: on Arch, sshd is never one of the
+# services this classifier has to restart, because the openssh package restarts
+# it itself. `10-openssh-mark-sshd-for-restart.hook` marks the unit and
+# `70-openssh-restart-sshd.hook` restarts it inside the same transaction, so by
+# the time anything looks at /proc the listener is already the new binary.
+#
+# The check therefore asserts the mechanism rather than the outcome it was
+# written for: the hooks are there, the listener's PID moved during the
+# transaction, and its exe is not a deleted file. The classifier finding
+# nothing to do here is the correct answer, not a miss -- and the sshd deny-list
+# reasoning still earns its place for the packages and distributions that ship
+# no such hook.
+check "sshd is restarted by openssh's own alpm hooks, before the classifier sees it" \
+  'ls /usr/share/libalpm/hooks/ | grep -E "openssh.*(restart|mark)";
+   before=$(pgrep -x sshd | head -1);
    ~/.lab-sudo pacman -S --noconfirm openssh >/dev/null 2>&1;
-   ~/.lab-sudo env HOME=/root omarchy-server-update-restart --since-offset "$offset" 2>&1 | grep "^restarted:"' \
-  '^restarted:.*sshd'
+   after=$(pgrep -x sshd | head -1);
+   exe=$(~/.lab-sudo readlink /proc/$after/exe);
+   echo "listener $before -> $after exe=$exe";
+   case "$exe" in *"(deleted)"*) echo "verdict=listener-is-stale" ;;
+   *) [ "$before" != "$after" ] && echo "verdict=restarted-by-the-package" || echo "verdict=not-restarted-but-current" ;; esac' \
+  '^verdict=restarted-by-the-package$'
 
 # Restarting sshd is only safe because Arch's unit sets KillMode=process: the
 # per-connection children live outside the unit's kill scope. This proves it on
