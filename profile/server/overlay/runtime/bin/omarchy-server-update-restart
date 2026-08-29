@@ -1,0 +1,427 @@
+#!/bin/bash
+
+# omarchy:summary=After an update, restart what changed and say whether a reboot is really required
+# omarchy:args=[--since-offset N] [--no-restart] [--dry-run] [--kexec] [--no-reboot]
+# omarchy:examples=omarchy server-update-restart | omarchy server-update-restart --dry-run
+# omarchy:requires-sudo=true
+
+# Upstream's omarchy-update-restart asks "Linux kernel has been updated.
+# Reboot?" and, unattended, answers no and leaves the machine running code it
+# has already replaced on disk. That is the right default for a laptop, where
+# the next login reboots anyway. On a headless server nobody logs in, so the
+# machine keeps the old sshd, the old networkd and the old libssl for months.
+#
+# This is the server counterpart: it looks at what the update actually did and
+# splits it three ways.
+#
+#   restarted   a running service whose binary or libraries were replaced on
+#               disk, restarted in place. This is the common case and it needs
+#               no reboot at all.
+#   deferred    something that was replaced and that this machine will not
+#               restart from under itself (the bus, the login manager, the
+#               console gettys, the update's own unit). Reported, not acted on.
+#   reboot      the running kernel, its firmware, its microcode, its initramfs
+#               or its bootloader is no longer the one on disk, or glibc moved
+#               under every process at once. Only then is the upstream
+#               reboot-required marker set.
+#
+# The evidence is deliberately two independent sources, and where they disagree
+# the machine wins over the package log:
+#
+#   * the pacman transaction (/var/log/pacman.log from the offset the update
+#     started at) says WHICH packages moved and from which version to which;
+#   * /proc/<pid>/maps and /proc/<pid>/exe say which processes are still
+#     mapping a file that has since been unlinked -- the `(deleted)` marker --
+#     which is what "running replaced code" means with no guessing about which
+#     package owns which library.
+#
+# So a kernel package that was reinstalled at the same version does not require
+# a reboot (the running kernel is still an installed kernel), and a library
+# nobody happened to have mapped does not cause a restart.
+
+set -euo pipefail
+
+# Overridable so the classification can be exercised against a recorded
+# transaction without a machine to upgrade; the acceptance list uses it.
+pacman_log="${OMARCHY_PACMAN_LOG:-/var/log/pacman.log}"
+since_offset=0
+do_restart=1
+dry_run=0
+want_kexec=0
+allow_reboot=1
+
+while (($#)); do
+  case "$1" in
+    --since-offset)
+      since_offset="${2:?--since-offset needs a byte offset}"
+      shift 2
+      ;;
+    --no-restart)
+      do_restart=0
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
+      do_restart=0
+      shift
+      ;;
+    --kexec)
+      want_kexec=1
+      shift
+      ;;
+    --no-reboot)
+      allow_reboot=0
+      shift
+      ;;
+    -h | --help)
+      echo "Usage: omarchy-server-update-restart [--since-offset N] [--no-restart] [--dry-run] [--kexec] [--no-reboot]"
+      echo
+      echo "  --since-offset N  read /var/log/pacman.log from byte N (the offset before the update)"
+      echo "  --no-restart      classify and report, restart nothing"
+      echo "  --dry-run         --no-restart, and do not set the reboot-required marker either"
+      echo "  --kexec           when a reboot is required, take it now with systemctl kexec"
+      echo "  --no-reboot       never take a reboot, whatever is required (the marker is still set)"
+      exit 0
+      ;;
+    *)
+      echo "omarchy-server-update-restart: unknown option '$1'. Try --help." >&2
+      exit 2
+      ;;
+  esac
+done
+
+if ((EUID != 0)); then
+  echo "omarchy-server-update-restart: must run as root (it reads /proc/<pid>/maps)." >&2
+  exit 2
+fi
+
+# ── the deny-list ───────────────────────────────────────────────────────────
+#
+# Units that are running replaced code and that this command will still not
+# restart. Each one is here for a reason that is about the machine staying
+# reachable, not about the restart failing:
+#
+#   dbus, dbus-broker        every client holds a connection to the bus and
+#                            none of them reconnect; systemd itself documents
+#                            a bus restart as a reboot.
+#   systemd-logind           restarting it invalidates every session, which on
+#                            a headless machine is every ssh login at once.
+#   user@*, user-runtime-dir@*  the per-user manager; restarting it takes the
+#                            user's session with it.
+#   getty@*, serial-getty@*, console-getty  the console login. Restarting one
+#                            drops whoever is sitting at it -- and on this
+#                            profile the serial console is the recovery path.
+#   omarchy-server-update    the unit this command is running inside when the
+#                            timer drives it. Restarting it kills the update.
+#   emergency, rescue        the paths that exist for when the rest failed.
+#
+# init.scope is absent on purpose: PID 1 is not restarted, it is re-executed
+# (systemctl daemon-reexec), which is handled separately below.
+deny_units=(
+  'dbus.service'
+  'dbus-broker.service'
+  'systemd-logind.service'
+  'systemd-journald-audit.socket'
+  'omarchy-server-update.service'
+  'emergency.service'
+  'rescue.service'
+  'console-getty.service'
+)
+deny_patterns=(
+  'getty@'
+  'serial-getty@'
+  'user@'
+  'user-runtime-dir@'
+)
+
+is_denied() {
+  local unit="$1" entry pattern
+  for entry in "${deny_units[@]}"; do
+    [[ $unit == "$entry" ]] && return 0
+  done
+  for pattern in "${deny_patterns[@]}"; do
+    [[ $unit == "$pattern"* ]] && return 0
+  done
+  return 1
+}
+
+# ── the pacman transaction ──────────────────────────────────────────────────
+#
+# Everything ALPM logged since the offset the update recorded before it began.
+# `upgraded` carries both versions, `installed` and `reinstalled` only one; the
+# distinction matters, because a reinstall at the same version replaces files
+# without changing what the machine is running.
+transaction=$(mktemp)
+trap 'rm -f "$transaction"' EXIT
+if [[ -r $pacman_log ]]; then
+  tail -c "+$((since_offset + 1))" "$pacman_log" |
+    grep -oE '\[ALPM\] (upgraded|installed|reinstalled) [^ ]+ \(.*\)$' |
+    sed 's/^\[ALPM\] //' >"$transaction" || true
+fi
+
+# event_version PACKAGE → "old -> new" for an upgrade, the single version
+# otherwise, and empty when the package was not in this transaction.
+event_field() {
+  local package="$1" field="$2"
+  awk -v pkg="$package" -v field="$field" '
+    $2 == pkg { print (field == "action" ? $1 : substr($0, index($0, "(") + 1, length($0) - index($0, "(") - 1)); exit }
+  ' "$transaction"
+}
+
+upgraded_packages=$(awk '$1 == "upgraded" { print $2 }' "$transaction")
+touched_packages=$(awk '{ print $2 }' "$transaction")
+
+matches_any() {
+  local name="$1" pattern
+  shift
+  for pattern in "$@"; do
+    # shellcheck disable=SC2053 -- the pattern is meant to glob.
+    [[ $name == $pattern ]] && return 0
+  done
+  return 1
+}
+
+# ── the classes ─────────────────────────────────────────────────────────────
+#
+# Matched on the package name, because that is what the transaction gives. The
+# kernel patterns list the kernels Arch ships rather than `linux*`: that glob
+# also catches linux-firmware, linux-api-headers and linux-tools, only one of
+# which is a kernel.
+kernel_patterns=(linux linux-lts linux-zen linux-hardened linux-rt linux-rt-lts)
+firmware_patterns=(linux-firmware 'linux-firmware-*' amd-ucode intel-ucode '*-ucode')
+initramfs_patterns=(mkinitcpio 'mkinitcpio-*' booster dracut)
+bootloader_patterns=(limine 'limine-*')
+systemd_patterns=(systemd systemd-libs systemd-sysvcompat systemd-ukify)
+bus_patterns=(dbus dbus-broker dbus-broker-units dbus-units)
+
+declare -a reboot_reasons=()
+declare -a deferred=()
+kernel_touched=0
+systemd_touched=0
+bus_touched=0
+
+while read -r package; do
+  [[ -n $package ]] || continue
+  if matches_any "$package" "${kernel_patterns[@]}"; then
+    kernel_touched=1
+  elif matches_any "$package" "${systemd_patterns[@]}"; then
+    systemd_touched=1
+  elif matches_any "$package" "${bus_patterns[@]}"; then
+    bus_touched=1
+  fi
+done <<<"$touched_packages"
+
+# Only an actual version change requires a reboot. A reinstall replaced the
+# files with the same content the machine is already running.
+while read -r package; do
+  [[ -n $package ]] || continue
+  versions=$(event_field "$package" "versions")
+  if matches_any "$package" "${firmware_patterns[@]}"; then
+    # Firmware and microcode are handed to the hardware once, early: the
+    # running machine keeps the blob it was given at boot.
+    reboot_reasons+=("$package $versions")
+  elif matches_any "$package" "${initramfs_patterns[@]}"; then
+    # The initramfs was rebuilt by this package's own hooks; the running kernel
+    # booted from the old one.
+    reboot_reasons+=("$package $versions")
+  elif matches_any "$package" "${bootloader_patterns[@]}"; then
+    # A bootloader takes effect on the next boot whatever happens. It is listed
+    # as a reboot because that next boot is the first proof the new boot chain
+    # works, and a server should take it while somebody is watching rather than
+    # discover it during an unplanned power cycle.
+    reboot_reasons+=("$package $versions")
+  elif [[ $package == glibc ]]; then
+    # Every process on the machine is linked against it. The restart pass below
+    # will catch the services, but nothing catches PID 1's children's children,
+    # the login shells and the timers' leftovers.
+    reboot_reasons+=("$package $versions")
+  fi
+done <<<"$upgraded_packages"
+
+# ── the kernel, checked against the machine rather than the log ─────────────
+#
+# Upstream's test, and it is the better one: the question is not whether a
+# kernel package was in the transaction but whether the kernel this machine is
+# running is still one of the kernels installed on it. A same-version reinstall
+# -- which is what a `pacman -S linux` with no update behind it does, and what
+# rebuilding the initramfs under SELinux does -- leaves the answer yes.
+running_kernel=$(uname -r)
+kernel_is_installed=0
+for image in /usr/lib/modules/*/vmlinuz; do
+  [[ -f $image ]] || continue
+  pacman -Qo "$image" &>/dev/null || continue
+  if [[ $(basename "$(dirname "$image")") == "$running_kernel" ]]; then
+    kernel_is_installed=1
+    break
+  fi
+done
+
+if ((kernel_is_installed == 0)); then
+  versions=""
+  for package in "${kernel_patterns[@]}"; do
+    versions=$(event_field "$package" "versions")
+    [[ -n $versions ]] && { reboot_reasons+=("$package $versions"); break; }
+  done
+  [[ -n $versions ]] || reboot_reasons+=("running kernel $running_kernel is no longer installed")
+elif ((kernel_touched)); then
+  echo "kernel package changed, but $running_kernel is still an installed kernel: no reboot for it"
+fi
+
+# ── systemd: re-execute PID 1 rather than reboot for it ─────────────────────
+#
+# systemd is built to be upgraded in place: `daemon-reexec` replaces the
+# running PID 1 with the new binary while keeping every unit's state. The proof
+# is /proc/1/exe -- while PID 1 is running a deleted binary the upgrade has not
+# landed. A reexec that does not clear it is the one case where systemd earns a
+# reboot.
+pid1_is_stale() { [[ $(readlink /proc/1/exe 2>/dev/null) == *"(deleted)"* ]]; }
+
+if ((systemd_touched)) || pid1_is_stale; then
+  if ((do_restart)); then
+    echo "systemd changed: re-executing PID 1"
+    systemctl daemon-reexec || true
+    systemctl daemon-reload || true
+    if pid1_is_stale; then
+      reboot_reasons+=("systemd $(event_field systemd versions) (PID 1 could not re-execute)")
+    fi
+  else
+    echo "systemd changed: would re-execute PID 1"
+  fi
+fi
+
+if ((bus_touched)); then
+  # daemon-reload picks up unit files the bus packages ship; the bus process
+  # itself is on the deny-list and reported below.
+  ((do_restart)) && systemctl daemon-reload || true
+  deferred+=("dbus (the bus keeps its old process until a reboot)")
+fi
+
+# ── the processes running replaced code ─────────────────────────────────────
+#
+# A mapping marked `(deleted)` is a file this process still has open and that
+# no longer exists at that path: exactly what a package upgrade does to a
+# binary or a shared library. Only /usr and /opt count. Everything under /tmp,
+# /run, /var, /dev and /memfd is a program managing its own scratch files, and
+# a deleted /dev/zero mapping is how some allocators work.
+changed_units() {
+  local pid unit
+  for entry in /proc/[0-9]*; do
+    pid=${entry#/proc/}
+    [[ $pid == "$$" ]] && continue
+    [[ -r $entry/maps ]] || continue
+    if ! grep -qE '^[^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ +/(usr|opt)/.* \(deleted\)$' "$entry/maps" 2>/dev/null &&
+      [[ $(readlink "$entry/exe" 2>/dev/null) != *"(deleted)"* ]]; then
+      continue
+    fi
+    # The unit is the last path component of the cgroup, when it is a service.
+    unit=$(awk -F/ '/^0::/ { print $NF }' "$entry/cgroup" 2>/dev/null)
+    [[ $unit == *.service ]] || continue
+    printf '%s\n' "$unit"
+  done | sort -u
+}
+
+# sshd is restartable on Arch only because its unit sets KillMode=process: the
+# per-connection children live outside the unit's kill scope, so a restart
+# swaps the listener and leaves every established session alone. That is a
+# property of the shipped unit, not a law, so it is checked rather than
+# assumed -- a machine with a drop-in that changed it defers instead.
+sshd_survives_restart() {
+  [[ $(systemctl show -p KillMode --value "$1" 2>/dev/null) == process ]]
+}
+
+declare -a restarted=()
+declare -a restart_failed=()
+
+if ((do_restart || dry_run)); then
+  while read -r unit; do
+    [[ -n $unit ]] || continue
+    if is_denied "$unit"; then
+      deferred+=("$unit (deny-list)")
+      continue
+    fi
+    if [[ $unit == sshd.service || $unit == sshd@* ]] && ! sshd_survives_restart "$unit"; then
+      deferred+=("$unit (KillMode is not process: a restart would drop live sessions)")
+      continue
+    fi
+    if ((do_restart == 0)); then
+      restarted+=("$unit")
+      continue
+    fi
+    # sshd goes last, so a surprise there cannot take the rest of the pass with
+    # it; every other unit is restarted in the order the scan found it.
+    if [[ $unit == sshd* ]]; then
+      sshd_unit="$unit"
+      continue
+    fi
+    if systemctl restart "$unit"; then
+      restarted+=("$unit")
+    else
+      restart_failed+=("$unit")
+    fi
+  done < <(changed_units)
+
+  if [[ -n ${sshd_unit:-} ]]; then
+    if systemctl restart "$sshd_unit"; then
+      restarted+=("$sshd_unit")
+    else
+      restart_failed+=("$sshd_unit")
+    fi
+  fi
+fi
+
+# ── the summary ─────────────────────────────────────────────────────────────
+#
+# Three lines, always all three, always in this order, whether or not they have
+# anything in them. A record that only says something when something happened
+# cannot be read as "nothing happened" -- and this is what the journal keeps
+# for a run nobody watched.
+short_unit() { printf '%s' "${1%.service}"; }
+
+format_list() {
+  local -n items="$1"
+  ((${#items[@]})) || {
+    printf 'none'
+    return
+  }
+  local item first=1
+  for item in "${items[@]}"; do
+    ((first)) || printf ' '
+    printf '%s' "$(short_unit "$item")"
+    first=0
+  done
+}
+
+echo
+echo "restarted: $(format_list restarted)"
+((${#restart_failed[@]} == 0)) || echo "restart failed: $(format_list restart_failed)"
+echo "deferred: $(format_list deferred)"
+
+if ((${#reboot_reasons[@]})); then
+  reason=$(
+    IFS='; '
+    echo "${reboot_reasons[*]}"
+  )
+  echo "reboot required: $reason"
+  if ((dry_run == 0)); then
+    omarchy-state set reboot-required || true
+  fi
+else
+  echo "reboot required: no"
+fi
+
+# ── taking the reboot ───────────────────────────────────────────────────────
+if ((${#reboot_reasons[@]} && allow_reboot && (want_kexec))); then
+  if ((dry_run)); then
+    echo "would kexec into the new kernel"
+    exit 0
+  fi
+  echo
+  if omarchy-server-kexec load; then
+    omarchy-state clear reboot-required || true
+    echo "kexec image loaded; taking the reboot now"
+    exec systemctl kexec
+  fi
+  echo "kexec unavailable; the reboot-required marker stands for the next window" >&2
+fi
+
+exit 0

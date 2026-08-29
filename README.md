@@ -115,7 +115,7 @@ ssh and be firewalled, and nothing else. What a machine needs on top comes from
 an addon, bundled in the ISO's offline mirror but not installed:
 
 ```bash
-omarchy-server-addon --list          # cli-tools dev docker editor fwall net-tools secureboot tailscale vm
+omarchy-server-addon --list          # cli-tools dev docker editor fwall kexec net-tools secureboot tailscale vm
 omarchy-server-addon docker
 pocs/lab/mkcidata.sh --profile server --addons docker    # or at install time
 ```
@@ -143,6 +143,46 @@ The timer ships **disabled**. It can also be turned on at install time by an
 autoinstall drive carrying an `unattended-updates` file
 (`mkcidata.sh --unattended-updates`). `journalctl -u omarchy-server-update` is
 the record of a run. `docs/iso-server.md` §3.1 is what had to change and why.
+
+### Restart what changed, reboot only when you must
+
+An update that finishes leaves the machine running the code it just replaced.
+Upstream asks "Linux kernel has been updated. Reboot?" and, with nobody to
+answer, does nothing — right for a laptop that reboots at the next login, wrong
+for a server nobody logs into for months. So the update does not end when
+`omarchy-update` returns: `omarchy-server-update-restart` reads the pacman
+transaction it just made and `/proc/<pid>/maps`, and splits the result three
+ways.
+
+```
+restarted: sshd systemd-networkd systemd-resolved
+deferred: dbus (the bus keeps its old process until a reboot)
+reboot required: no
+```
+
+A service whose binary or libraries were unlinked from under it is restarted in
+place. The bus, logind, the gettys and the update's own unit are on a deny-list
+and reported instead. **Only** the running kernel no longer being an installed
+kernel, or firmware, microcode, the initramfs, the bootloader or `glibc` moving,
+sets the upstream `reboot-required` marker — and systemd is upgraded by
+re-executing PID 1, not by rebooting. A kernel *reinstalled at the version the
+machine is running* costs nothing, which is what makes an initramfs rebuild
+under SELinux or a re-signed UKI a non-event.
+
+When a reboot really is required, the `kexec` addon can take it without the
+firmware:
+
+```bash
+sudo omarchy-server-addon kexec       # kexec-tools, one package
+sudo omarchy-server-update --kexec    # or: omarchy-server-update kexec on
+```
+
+`omarchy-server-kexec` loads the **signed UKI** through `kexec_file_load(2)`,
+which is the only route under this profile's `lockdown=integrity` and which
+verifies the image's signature in the kernel. It is also where the keyring that
+defeats module signing does not apply: kexec's verification accepts `.platform`,
+where a firmware-`db` certificate lands. Measured against the firmware path in
+`reports/2026-08-29-update-without-reboot.md`.
 
 ## Secure Boot
 

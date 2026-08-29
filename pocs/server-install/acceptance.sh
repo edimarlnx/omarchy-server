@@ -291,4 +291,76 @@ check "no prompt was rendered during the unattended update" \
    ~/.lab-sudo grep -a "not rebooting: unattended update" /tmp/omarchy-update.log || echo "no reboot was required"' \
   '^confirm-prompts=0$'
 
+# ── restart what changed ────────────────────────────────────────────────────
+#
+# The update above ended in omarchy-server-update-restart, whose whole contract
+# is that it always says all three things: what it restarted, what it deferred,
+# and whether a reboot is genuinely required. A report that only speaks when
+# something happened cannot be read as "nothing happened".
+check "the update reported restarts, deferrals and a reboot verdict" \
+  '~/.lab-sudo omarchy-server-update-restart --dry-run 2>&1 | grep -cE "^(restarted|deferred|reboot required):"' \
+  '^3$'
+
+# A transaction with nothing but userspace in it: openssl and openssh
+# reinstalled at the version already on the machine. Files are replaced, so
+# every process mapping libcrypto or /usr/bin/sshd is now running code that no
+# longer exists at that path -- and NO version moved, so there is nothing a
+# reboot would fix. The classifier has to restart and not reboot.
+check "a userspace-only transaction restarts services and requires no reboot" \
+  'offset=$(~/.lab-sudo stat -c %s /var/log/pacman.log);
+   ~/.lab-sudo pacman -S --noconfirm openssl openssh >/dev/null 2>&1; echo "reinstall-rc=$?";
+   ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required;
+   ~/.lab-sudo env HOME=/root omarchy-server-update-restart --since-offset "$offset" 2>&1 | grep -E "^(restarted|deferred|reboot required):";
+   ~/.lab-sudo test -f /root/.local/state/omarchy/reboot-required && echo "marker=set" || echo "marker=absent"' \
+  '^marker=absent$'
+
+check "the restart pass picked sshd up" \
+  'offset=$(~/.lab-sudo stat -c %s /var/log/pacman.log);
+   ~/.lab-sudo pacman -S --noconfirm openssh >/dev/null 2>&1;
+   ~/.lab-sudo env HOME=/root omarchy-server-update-restart --since-offset "$offset" 2>&1 | grep "^restarted:"' \
+  '^restarted:.*sshd'
+
+# Restarting sshd is only safe because Arch's unit sets KillMode=process: the
+# per-connection children live outside the unit's kill scope. This proves it on
+# the machine rather than quoting it -- the shell running these three commands
+# IS an ssh session, and it is still there after the restart.
+check "an ssh session survives the sshd restart it triggers" \
+  'before=$$; systemctl show -p KillMode --value sshd.service;
+   ~/.lab-sudo systemctl restart sshd.service; sleep 1;
+   echo "same-shell=$([[ $$ == $before ]] && echo yes || echo no) still-connected=$([[ -n $SSH_CONNECTION ]] && echo yes || echo no)"' \
+  '^same-shell=yes still-connected=yes$'
+
+# The reboot classes, proved against a recorded transaction rather than by
+# waiting for Arch to ship a kernel. linux-firmware is the honest one to use:
+# unlike a kernel package, no check against the running machine can excuse it,
+# because the blob the hardware was handed at boot is not on disk any more.
+check "a firmware upgrade sets the reboot-required marker" \
+  '~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required;
+   printf "[ALPM] upgraded linux-firmware (20260801-1 -> 20260901-1)\n" | ~/.lab-sudo tee /tmp/fake-pacman.log >/dev/null;
+   ~/.lab-sudo env HOME=/root OMARCHY_PACMAN_LOG=/tmp/fake-pacman.log omarchy-server-update-restart --no-restart 2>&1 | grep "^reboot required:";
+   ~/.lab-sudo test -f /root/.local/state/omarchy/reboot-required && echo "marker=set" || echo "marker=absent";
+   ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required /tmp/fake-pacman.log' \
+  '^marker=set$'
+
+# The rule that keeps a kernel reinstall from costing a reboot: the question is
+# not whether a kernel package was in the transaction but whether the running
+# kernel is still one of the installed ones. This is the real thing -- pacman
+# rebuilds the initramfs, re-signs the UKI and updates limine -- and it still
+# must not ask for a reboot.
+check "reinstalling the running kernel rebuilds the boot chain without a reboot" \
+  'offset=$(~/.lab-sudo stat -c %s /var/log/pacman.log);
+   ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required;
+   timeout 900 ~/.lab-sudo pacman -S --noconfirm linux 2>&1 | tail -12 | ~/.lab-redact; echo "pacman-rc=${PIPESTATUS[0]}";
+   ~/.lab-sudo env HOME=/root omarchy-server-update-restart --since-offset "$offset" --no-restart 2>&1 | grep -E "^(kernel package|reboot required)";
+   ~/.lab-sudo test -f /root/.local/state/omarchy/reboot-required && echo "marker=set" || echo "marker=absent"' \
+  '^marker=absent$'
+
+# The addon is not in the base, and the update path notices its absence rather
+# than failing on it: with no kexec-tools, a required reboot is left as the
+# marker exactly as it was before any of this existed.
+check "kexec is an addon, absent from the base" \
+  'pacman -Qq kexec-tools >/dev/null 2>&1 && echo "kexec-tools=present" || echo "kexec-tools=absent";
+   omarchy-server-addon --list | tr "\n" " "' \
+  '^kexec-tools=absent$'
+
 echo "=== $pass passed, $fail failed ==="

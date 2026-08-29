@@ -255,4 +255,78 @@ check "and it is still refusing unsigned modules" \
   'cat /sys/module/module/parameters/sig_enforce' \
   '^Y$'
 
+# ── kexec, on the machine where it is hardest ───────────────────────────────
+#
+# This is the interesting environment for kexec and the reason the check lives
+# in the Secure Boot suite rather than the base one. The UKI here is signed by
+# a key in the firmware `db`, the cmdline inside it carries lockdown=integrity,
+# and lockdown blocks the classic kexec_load(2) outright. The only route is
+# kexec_file_load(2), which verifies the image's PE signature in the kernel --
+# against `.builtin`, `.secondary` and `.platform`.
+#
+# That last keyring is the point. Module signing on this profile is defeated
+# because a db certificate lands in `.platform` and module verification only
+# consults `.builtin` and `.machine` (docs/secure-boot.md §8). kexec's
+# verification path accepts `.platform`, so the same key that cannot sign a
+# module should be able to sign the image this machine kexecs into. Either the
+# run proves that or it disproves it; both are worth writing down.
+echo "=== kexec ==="
+
+# reboot_seconds <label> <remote command>: the wall-clock gap between issuing
+# the command and ssh answering on a NEW boot id. Both paths are measured the
+# same way, from the same client, so the two numbers can be compared.
+reboot_seconds() {
+  local label=$1 command=$2 before after started elapsed
+  before=$(run 'cat /proc/sys/kernel/random/boot_id')
+  started=$(date +%s)
+  run "$command" >/dev/null 2>&1
+  for _ in $(seq 1 90); do
+    sleep 2
+    after=$(run 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null)
+    [[ -n $after && $after != "$before" ]] && break
+  done
+  elapsed=$(($(date +%s) - started))
+  if [[ -n ${after:-} && $after != "$before" ]]; then
+    echo "$label: ${elapsed}s (boot_id $before -> $after)"
+  else
+    echo "$label: did not come back within ${elapsed}s"
+  fi
+}
+
+check "the kexec addon installs kexec-tools and finds the signed UKI" \
+  '~/.lab-sudo omarchy-server-addon kexec >/dev/null 2>&1; echo "addon-rc=$?";
+   pacman -Qq kexec-tools;
+   ~/.lab-sudo omarchy-server-kexec status' \
+  '^image: .*\.efi$'
+
+# The load, on its own, before anything reboots: this is where a rejected
+# signature shows up as a message rather than as a machine that did not
+# come back.
+check "kexec_file_load accepts the UKI signed by the machine's own db key" \
+  '~/.lab-sudo omarchy-server-kexec load 2>&1; echo "loaded=$(cat /sys/kernel/kexec_loaded)"' \
+  'loaded via kexec_file_load'
+
+echo "--- timing the two reboot paths ---"
+firmware_time=$(reboot_seconds "firmware reboot" '~/.lab-sudo systemctl reboot')
+echo "$firmware_time"
+kexec_time=$(reboot_seconds "kexec reboot" '~/.lab-sudo omarchy-server-kexec load && ~/.lab-sudo systemctl kexec')
+echo "$kexec_time"
+echo
+
+if [[ $kexec_time == *"did not come back"* ]]; then
+  report FAIL "the machine came back from a kexec" "$kexec_time"
+else
+  report PASS "the machine came back from a kexec" "$firmware_time" "$kexec_time"
+fi
+
+# A kexec'd kernel is not launched by the firmware, so it cannot be verified by
+# it: whatever it reports about Secure Boot is inherited from the kernel that
+# loaded it, not a fresh firmware verdict. Recording what it actually says is
+# the point -- a machine that quietly drops out of lockdown across a kexec
+# would be a reason not to use this path at all.
+check "lockdown and module signing survived the kexec" \
+  'cat /sys/kernel/security/lockdown; cat /sys/module/module/parameters/sig_enforce;
+   ~/.lab-sudo dmesg | grep -iE "secure boot|lockdown" | head -5; uname -r' \
+  '^Y$'
+
 echo "=== $pass passed, $fail failed ==="

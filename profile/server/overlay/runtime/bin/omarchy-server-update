@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # omarchy:summary=Run the system update non-interactively on a headless server
-# omarchy:args=[run|enable|disable|status]
+# omarchy:args=[run|enable|disable|status|kexec] [--kexec|--no-reboot]
 # omarchy:examples=omarchy server-update | omarchy server-update enable
 # omarchy:requires-sudo=true
 
@@ -21,10 +21,22 @@
 #
 # `enable` turns on the daily timer, which ships disabled: a machine that
 # upgrades a database under load is not something to opt anyone into.
+#
+# The update does not end when omarchy-update returns. An unattended update
+# leaves every service running the code it replaced on disk -- upstream's
+# omarchy-update-restart would have asked about a reboot and, with nobody to
+# answer, does nothing. So this records where /var/log/pacman.log ended before
+# the update and hands that offset to omarchy-server-update-restart afterwards,
+# which restarts what actually changed and decides whether a reboot is really
+# required. See that command for the classification and the deny-list.
 
 set -euo pipefail
 
 timer=omarchy-server-update.timer
+# The toggle the timer reads. `omarchy-server-update kexec on` writes it, and
+# the unit runs the same code path a person does, so a fleet is configured once
+# rather than by editing a unit file.
+config=/etc/omarchy-server-update.conf
 
 require_root() {
   if ((EUID != 0)); then
@@ -32,7 +44,46 @@ require_root() {
   fi
 }
 
-case "${1:-run}" in
+# Flags that qualify `run` and are also accepted before it, so both
+# `omarchy-server-update --kexec` and `omarchy-server-update run --kexec` work.
+restart_args=()
+action=""
+for argument in "$@"; do
+  case "$argument" in
+    --kexec | --no-reboot | --no-restart | --dry-run) restart_args+=("$argument") ;;
+    *) [[ -n $action ]] || action="$argument" ;;
+  esac
+done
+
+# The configured default, overridden by an explicit flag on the command line.
+if [[ -r $config ]]; then
+  # shellcheck source=/dev/null
+  . "$config"
+fi
+if [[ ${KEXEC:-0} == 1 && " ${restart_args[*]:-} " != *" --kexec "* ]]; then
+  restart_args+=(--kexec)
+fi
+
+case "${action:-run}" in
+  kexec)
+    require_root "$@"
+    case "${2:-status}" in
+      on)
+        printf 'KEXEC=1\n' >"$config"
+        echo "kexec on: a required reboot will be taken with systemctl kexec"
+        ;;
+      off)
+        printf 'KEXEC=0\n' >"$config"
+        echo "kexec off: a required reboot leaves the marker for the next window"
+        ;;
+      status) omarchy-server-kexec status ;;
+      *)
+        echo "Usage: omarchy-server-update kexec [on|off|status]" >&2
+        exit 2
+        ;;
+    esac
+    exit 0
+    ;;
   status)
     # Reporting, so a disabled timer is an answer rather than a failure.
     systemctl is-enabled "$timer" 2>/dev/null || true
@@ -70,17 +121,40 @@ case "${1:-run}" in
     # happened to carry the variable, succeeded. Depending on the caller's
     # environment is the bug; this line is the fix, and it is right whether or
     # not any MAC is installed.
-    exec env OMARCHY_NONINTERACTIVE=1 \
+    #
+    # Not `exec`: the update is half the job. The byte offset of the pacman log
+    # is taken first, so what follows reads exactly this transaction and not
+    # the machine's whole upgrade history.
+    offset=0
+    [[ -r /var/log/pacman.log ]] && offset=$(stat -c %s /var/log/pacman.log)
+
+    update_rc=0
+    env OMARCHY_NONINTERACTIVE=1 \
       OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}" \
-      omarchy-update -y
+      omarchy-update -y || update_rc=$?
+
+    # Restart what the update replaced, and decide the reboot. This runs even
+    # when the update above failed partway -- hence the captured status rather
+    # than letting `set -e` take the script out: whatever the update did manage
+    # to upgrade is already on disk, and a half-updated machine still running
+    # the old binaries is the worse of the two states.
+    omarchy-server-update-restart --since-offset "$offset" ${restart_args[@]+"${restart_args[@]}"}
+    exit "$update_rc"
     ;;
   -h | --help)
-    echo "Usage: omarchy-server-update [run|enable|disable|status]"
+    echo "Usage: omarchy-server-update [run|enable|disable|status|kexec] [flags]"
     echo
-    echo "  run       update now, non-interactively (default)"
+    echo "  run       update now, non-interactively (default), then restart what changed"
     echo "  enable    enable the daily $timer"
     echo "  disable   disable the daily $timer"
     echo "  status    report whether the timer is enabled and when it next runs"
+    echo "  kexec     on|off|status -- whether a required reboot is taken with kexec"
+    echo
+    echo "Flags, passed through to omarchy-server-update-restart:"
+    echo "  --kexec       take a required reboot now, via kexec into the signed UKI"
+    echo "  --no-reboot   never take a reboot (the reboot-required marker is still set)"
+    echo "  --no-restart  classify and report, restart nothing"
+    echo "  --dry-run     --no-restart, and do not set the marker either"
     exit 0
     ;;
   *)

@@ -1,0 +1,156 @@
+#!/bin/bash
+
+# omarchy:summary=Load the signed UKI for a kexec, so a required reboot skips the firmware
+# omarchy:args=[load|status|unload]
+# omarchy:examples=omarchy server-kexec load && systemctl kexec
+# omarchy:requires-sudo=true
+
+# A reboot on a server is mostly firmware: POST, device init, option ROMs, the
+# bootloader's menu. kexec skips all of it -- the running kernel loads the next
+# kernel into memory and jumps to it -- and on this profile there is a specific
+# reason it is not simply "load /boot/vmlinuz": the boot image is a **UKI**, a
+# PE binary carrying the kernel, the initramfs and the command line in its own
+# sections, signed by the machine's own Secure Boot key.
+#
+# That shapes the whole command.
+#
+#   * kexec_load(2), the classic syscall, takes a bzImage and an initrd as
+#     separate files and does no signature check at all. Under the
+#     `lockdown=integrity` this profile's UKI bakes in, the kernel refuses it
+#     outright -- which is the point of lockdown.
+#   * kexec_file_load(2) takes one file descriptor and verifies its signature
+#     inside the kernel before accepting it. `kexec --kexec-file-syscall` is
+#     how kexec-tools reaches it, and it is the only route under lockdown.
+#
+# The keyring question is the interesting one, and it is not the same question
+# module signing lost. Module signature verification consults `.builtin` and
+# `.machine`, so a certificate enrolled in the firmware `db` -- which is what
+# this profile does -- lands in `.platform` and is never consulted (see
+# docs/secure-boot.md §8). kexec's PE verification path explicitly *does*
+# accept `.platform`. So the same key that cannot sign a module can sign the
+# image this machine kexecs into.
+#
+# This command only loads. Taking the reboot is `systemctl kexec`, which is
+# systemd's ordinary shutdown transaction with a jump at the end instead of a
+# firmware reset -- units stop, filesystems are unmounted, and nothing is lost.
+
+set -euo pipefail
+
+esp=/boot
+uki_dir="$esp/EFI/Linux"
+
+require_root() {
+  if ((EUID != 0)); then
+    exec sudo -E "$0" "$@"
+  fi
+}
+
+have_kexec() { command -v kexec >/dev/null 2>&1; }
+
+# find_uki prints the image to load. The fallback UKI is deliberately excluded:
+# it exists for the case where the normal one does not boot, and kexecing into
+# it hides exactly the failure it is there to survive.
+find_uki() {
+  local candidate newest=""
+  for candidate in "$uki_dir"/*.efi; do
+    [[ -f $candidate ]] || continue
+    [[ $candidate == *-fallback.efi ]] && continue
+    if [[ -z $newest || $candidate -nt $newest ]]; then
+      newest="$candidate"
+    fi
+  done
+  [[ -n $newest ]] || return 1
+  printf '%s\n' "$newest"
+}
+
+case "${1:-load}" in
+  status)
+    if ! have_kexec; then
+      echo "kexec-tools is not installed (omarchy-server-addon kexec)"
+      exit 1
+    fi
+    echo "kexec:  $(command -v kexec)"
+    if uki=$(find_uki); then
+      echo "image:  $uki"
+    else
+      echo "image:  none found in $uki_dir"
+    fi
+    # /sys/kernel/kexec_loaded is 1 once an image is in the reserved region.
+    echo "loaded: $(cat /sys/kernel/kexec_loaded 2>/dev/null || echo unknown)"
+    echo "lockdown: $(cat /sys/kernel/security/lockdown 2>/dev/null || echo none)"
+    exit 0
+    ;;
+  unload)
+    require_root "$@"
+    have_kexec || exit 1
+    kexec --unload
+    exit 0
+    ;;
+  load) ;;
+  -h | --help)
+    echo "Usage: omarchy-server-kexec [load|status|unload]"
+    echo
+    echo "  load     load the signed UKI into the kexec region (then: systemctl kexec)"
+    echo "  status   report the tool, the image and whether one is already loaded"
+    echo "  unload   drop a loaded image"
+    exit 0
+    ;;
+  *)
+    echo "omarchy-server-kexec: unknown command '$1'. Try --help." >&2
+    exit 2
+    ;;
+esac
+
+require_root "$@"
+
+if ! have_kexec; then
+  echo "omarchy-server-kexec: kexec-tools is not installed. Run: omarchy-server-addon kexec" >&2
+  exit 1
+fi
+
+uki=$(find_uki) || {
+  echo "omarchy-server-kexec: no UKI in $uki_dir" >&2
+  exit 1
+}
+
+echo "omarchy-server-kexec: loading $uki"
+
+# kexec_file_load first, and not only because of lockdown: it is the syscall
+# that understands a signed image, so on a Secure Boot machine it is the one
+# whose success means something. The classic syscall is tried after it for the
+# machines with no Secure Boot and an older kernel, where it is simply the path
+# that works.
+if kexec --load --kexec-file-syscall "$uki" 2>/tmp/omarchy-kexec.err; then
+  echo "omarchy-server-kexec: loaded via kexec_file_load (signature accepted)"
+  exit 0
+fi
+echo "omarchy-server-kexec: kexec_file_load refused it:" >&2
+sed 's/^/  /' /tmp/omarchy-kexec.err >&2
+
+lockdown=$(cat /sys/kernel/security/lockdown 2>/dev/null || echo "")
+if [[ $lockdown == *"[integrity]"* || $lockdown == *"[confidentiality]"* ]]; then
+  echo "omarchy-server-kexec: lockdown is active, so the unsigned path is not tried." >&2
+  exit 1
+fi
+
+if kexec --load "$uki" 2>/tmp/omarchy-kexec.err; then
+  echo "omarchy-server-kexec: loaded via kexec_load"
+  exit 0
+fi
+echo "omarchy-server-kexec: kexec_load refused it:" >&2
+sed 's/^/  /' /tmp/omarchy-kexec.err >&2
+
+# Last resort, and only off lockdown: the kernel image and initramfs as
+# separate files. A UKI-only machine has neither, so this is skipped rather
+# than faked.
+kernel="/usr/lib/modules/$(uname -r)/vmlinuz"
+initramfs="$esp/initramfs-linux.img"
+if [[ -f $kernel && -f $initramfs ]]; then
+  if kexec --load "$kernel" --initrd="$initramfs" --reuse-cmdline; then
+    echo "omarchy-server-kexec: loaded the split kernel + initramfs"
+    exit 0
+  fi
+fi
+
+echo "omarchy-server-kexec: could not load an image; a firmware reboot is the way." >&2
+exit 1

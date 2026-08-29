@@ -26,5 +26,5 @@ iso/release/
 
 # serverlab: the compiled driver and the log of every run it makes. The source
 # is tools/serverlab/; `make serverlab` rebuilds the binary.
-bin/
+/bin/
 pocs/lab/runs/
