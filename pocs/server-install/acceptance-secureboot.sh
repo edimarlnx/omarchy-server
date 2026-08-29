@@ -353,8 +353,11 @@ check "kexec_file_load refuses the UKI and accepts the kernel inside it" \
    ~/.lab-sudo dmesg | grep -E "PEFILE|Lockdown: kexec" | tail -2' \
   '^loaded=1$'
 
+# grep, not `tail -N`: the number of trailing lines `load` prints is not a
+# stable interface, and pinning it to two broke this check the moment the
+# command grew a warning about a loaded image redirecting the next reboot.
 check "and it was the unpacked UKI that the kernel took" \
-  '~/.lab-sudo omarchy-server-kexec load 2>&1 | tail -2' \
+  '~/.lab-sudo omarchy-server-kexec load 2>&1 | grep -E "loaded (the unpacked UKI|the UKI) via kexec_file_load|cmdline:"' \
   'loaded the unpacked UKI via kexec_file_load'
 
 echo "--- timing the two reboot paths ---"
