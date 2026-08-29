@@ -272,11 +272,21 @@ check "and it is still refusing unsigned modules" \
 # run proves that or it disproves it; both are worth writing down.
 echo "=== kexec ==="
 
-# reboot_seconds <label> <remote command>: the wall-clock gap between issuing
-# the command and ssh answering on a NEW boot id. Both paths are measured the
-# same way, from the same client, so the two numbers can be compared.
+# reboot_seconds <label> <remote command>: two measurements of the same reboot,
+# because neither alone is trustworthy here.
+#
+#   client   the wall-clock gap between issuing the command and ssh answering
+#            on a NEW boot id. It is what an operator feels, and it carries the
+#            lab's own noise: the helpers multiplex ssh (ControlPersist=120,
+#            because `ufw limit 22` drops the seventh connection in thirty
+#            seconds), so the first probe after a reboot can be answered by a
+#            socket that has not yet noticed the machine is gone.
+#   guest    `systemd-analyze time`, read off the machine afterwards. This is
+#            the honest one for comparing the two paths, because the firmware
+#            and loader phases it names are EXACTLY what kexec skips: a kexec
+#            boot has no firmware line at all.
 reboot_seconds() {
-  local label=$1 command=$2 before after started elapsed
+  local label=$1 command=$2 before after started elapsed analyze
   before=$(run 'cat /proc/sys/kernel/random/boot_id')
   started=$(date +%s)
   run "$command" >/dev/null 2>&1
@@ -287,7 +297,8 @@ reboot_seconds() {
   done
   elapsed=$(($(date +%s) - started))
   if [[ -n ${after:-} && $after != "$before" ]]; then
-    echo "$label: ${elapsed}s (boot_id $before -> $after)"
+    analyze=$(run 'systemd-analyze time 2>/dev/null | head -1')
+    echo "$label: client ${elapsed}s | guest ${analyze:-<unavailable>} | boot_id $before -> $after"
   else
     echo "$label: did not come back within ${elapsed}s"
   fi
