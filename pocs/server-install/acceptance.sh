@@ -239,20 +239,56 @@ check "the docker addon opens only the container DNS stub" \
   '~/.lab-sudo ss -ltnpH | awk "{print \$4}" | grep -vE "^127\.|^172\.17\.0\.1:53$" | sort -u | tee /dev/stderr | grep -qvE ":22$" && echo unexpected-listener || echo expected-only; ~/.lab-sudo ufw status | grep -c allow-docker-dns' \
   '^expected-only$'
 
-# omarchy-update is not sudo-less: several of its steps shell out to `sudo`
-# and prompt on the terminal, so a plain `</dev/null` run stalls on every one
-# of them until sudo times out. Feeding the lab password to the pty `script`
-# allocates is what makes an unattended run possible at all — a finding in its
-# own right, recorded in the README.
+# The update timer is opt-in. It has to be off on a machine whose autoinstall
+# drive did not ask for it, and the toggle has to work in both directions.
+check "the update timer ships disabled and toggles" \
+  'shipped=$(systemctl is-enabled omarchy-server-update.timer 2>&1);
+   ~/.lab-sudo omarchy-server-update enable >/dev/null 2>&1;
+   on=$(systemctl is-enabled omarchy-server-update.timer 2>&1);
+   ~/.lab-sudo omarchy-server-update disable >/dev/null 2>&1;
+   off=$(systemctl is-enabled omarchy-server-update.timer 2>&1);
+   echo "shipped=$shipped enabled=$on disabled=$off"' \
+  '^shipped=disabled enabled=enabled disabled=disabled$'
+
+# The desktop floor is 10 GiB, which a 1.2 GiB install on a small volume can
+# fail while having room to spare. The server profile asks for 2.
+# The threshold itself is the evidence, not the verdict: a 40 GiB lab disk
+# passes either floor, so the check reads the value the script computed.
+check "the free-space check uses the server threshold" \
+  'bash -x /usr/bin/omarchy-update-requires-free-space 2>&1 | grep -E "^\+ required_gib=" | tail -1;
+   omarchy-update-requires-free-space; echo "rc=$?"; df -h --output=avail / | tail -1' \
+  '^\+ required_gib=2$'
+
+# The update path as a headless machine actually takes it: as root, with stdin
+# closed, nothing to answer a prompt with and nobody to notice. Every step that
+# used to prompt would stall here for the whole timeout, so a rc=0 inside 40
+# minutes is itself the proof that nothing asked a question.
 #
-# `while cat`, not `while :; do cat`: the feeder has to end when the update
-# closes the pipe. With `:` as the condition only the inner cat dies of
-# SIGPIPE and the loop spins forever, holding the ssh session open long after
-# the update finished.
-# The password is fed on stdin and some steps (yay) echo stdin back, so the
-# output is redacted before it becomes evidence.
-check "omarchy-update runs to completion" \
-  'timeout 2400 omarchy-update -y < <(while cat ~/.lab-pw; do sleep 2; done) 2>&1 | tail -40 | ~/.lab-redact; echo "rc=${PIPESTATUS[0]}"' \
+# Run LAST: it pulls the online mirrors and changes the package set every check
+# above measures.
+#
+# Stdin is the exhausted password file the ~/.lab-sudo wrapper reads from, so
+# the update sees a closed non-tty stdin — which is exactly the condition it
+# now recognizes as unattended, and exactly what a systemd unit gives it.
+check "omarchy-server-update runs non-interactively to completion" \
+  'timeout 2400 ~/.lab-sudo omarchy-server-update 2>&1 | tail -40 | ~/.lab-redact; echo "rc=${PIPESTATUS[0]}"' \
   '^rc=0$'
+
+# The two steps a stalled sudo used to skip, which is what made the old
+# "successful" unattended run worth nothing: the cache prune before the
+# snapshot, and the snapshot itself.
+check "the unattended update pruned the cache and took a snapshot" \
+  '~/.lab-sudo grep -aq "Prune package cache" /tmp/omarchy-update.log && p=yes || p=no;
+   ~/.lab-sudo grep -aq "Create system snapshot" /tmp/omarchy-update.log && s=yes || s=no;
+   echo "pruned=$p snapshotted=$s";
+   ~/.lab-sudo snapper -c root --csvout list | tail -n +2' \
+  '^pruned=yes snapshotted=yes$'
+
+# gum never ran: no confirmation box, no reboot prompt. The reboot question is
+# reported instead of asked, and only when a kernel upgrade actually landed.
+check "no prompt was rendered during the unattended update" \
+  '~/.lab-sudo grep -ac "Continue with update?" /tmp/omarchy-update.log | sed "s/^/confirm-prompts=/";
+   ~/.lab-sudo grep -a "not rebooting: unattended update" /tmp/omarchy-update.log || echo "no reboot was required"' \
+  '^confirm-prompts=0$'
 
 echo "=== $pass passed, $fail failed ==="

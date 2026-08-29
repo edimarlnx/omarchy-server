@@ -1,5 +1,5 @@
 {
-  "started_at": 1787976159.1160333,
+  "started_at": 1787988715.5697773,
   "target": "/mnt",
   "total_phases": 15,
   "current_index": 14,
@@ -8,81 +8,81 @@
     {
       "name": "Preparing live environment",
       "status": "ok",
-      "elapsed": 0.05095410346984863
+      "elapsed": 0.08748507499694824
     },
     {
       "name": "Preparing install target",
       "status": "ok",
-      "elapsed": 5.245208740234375e-06
+      "elapsed": 5.4836273193359375e-06
     },
     {
       "name": "Installing Arch + Omarchy",
       "status": "ok",
-      "elapsed": 14.707059860229492
+      "elapsed": 17.73537254333496
     },
     {
       "name": "Configuring hibernation",
       "status": "ok",
-      "elapsed": 4.029273986816406e-05
+      "elapsed": 3.838539123535156e-05
     },
     {
       "name": "Configuring system",
       "status": "ok",
-      "elapsed": 0.35327601432800293
+      "elapsed": 0.3983604907989502
     },
     {
       "name": "Installing addons",
       "status": "ok",
-      "elapsed": 3.62396240234375e-05
+      "elapsed": 6.961822509765625e-05
     },
     {
       "name": "Staging provisioning",
       "status": "ok",
-      "elapsed": 0.08571267127990723
+      "elapsed": 0.6924498081207275
     },
     {
       "name": "Finalizing Limine boot",
       "status": "ok",
-      "elapsed": 2.4612154960632324
+      "elapsed": 2.414273500442505
     },
     {
       "name": "Finalizing user",
       "status": "ok",
-      "elapsed": 0.08360695838928223
+      "elapsed": 0.08913660049438477
     },
     {
       "name": "Configuring login",
       "status": "ok",
-      "elapsed": 3.838539123535156e-05
+      "elapsed": 3.790855407714844e-05
     },
     {
       "name": "Configuring SSH access",
       "status": "ok",
-      "elapsed": 0.11951327323913574
+      "elapsed": 0.11609005928039551
     },
     {
       "name": "Configuring Tailscale",
       "status": "ok",
-      "elapsed": 7.152557373046875e-07
+      "elapsed": 9.5367431640625e-07
     },
     {
       "name": "Configuring DNS resolver",
       "status": "ok",
-      "elapsed": 6.937980651855469e-05
+      "elapsed": 7.724761962890625e-05
     },
     {
       "name": "Validating boot setup",
       "status": "ok",
-      "elapsed": 0.002190828323364258
+      "elapsed": 0.002172231674194336
     },
     {
       "name": "Creating factory snapshot",
       "status": "ok",
-      "elapsed": 0.7378878593444824
+      "elapsed": 0.7464144229888916
     }
   ],
-  "phase_started_at": 1787976176.9811702,
-  "finished_at": 1787976177.719243,
+  "phase_started_at": 1787988737.1068702,
+  "finished_at": 1787988737.8534327,
   "installed_packages": 220,
   "expected_packages": 223
 }

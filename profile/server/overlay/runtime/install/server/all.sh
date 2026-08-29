@@ -29,8 +29,17 @@ run_logged "$OMARCHY_INSTALL/server/limine-branding-server.sh"
 # NetworkManager.
 run_logged "$OMARCHY_INSTALL/server/network-server.sh"
 
+# --- updates ------------------------------------------------------------
+# A headless machine updates as root, and root has no /etc/skel seeding.
+run_logged "$OMARCHY_INSTALL/server/root-migration-state-server.sh"
+
 # --- services -----------------------------------------------------------
 run_logged "$OMARCHY_INSTALL/server/enable-services-server.sh"
+
+# The daily update timer, off unless the autoinstall drive asked for it. After
+# enable-services-server.sh so every enablement this profile does is in one
+# region of the log.
+run_logged "$OMARCHY_INSTALL/server/unattended-updates-server.sh"
 
 # --- firewall -----------------------------------------------------------
 run_logged "$OMARCHY_INSTALL/server/firewall-server.sh"

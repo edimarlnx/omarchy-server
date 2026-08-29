@@ -61,7 +61,15 @@ Note `--disk-gb 40`: the cidata JSON carries an absolute partition layout for a
 runtime/settings package names, `audio_config: null` (no PipeWire), a shorter
 `packages` list (no `base-devel`, no `git`), and a `profile` file that tells the
 ISO's orchestrator which profile to install even if the ISO itself was built
-for another one. `--addons` adds a fifth, the `addons` file.
+for another one. `--addons` adds a fifth, the `addons` file, and
+`--unattended-updates` a sixth: a marker file whose presence makes the install
+enable the daily `omarchy-server-update.timer`, which the package ships
+disabled.
+
+```bash
+./pocs/lab/mkcidata.sh --profile server --unattended-updates \
+  --out pocs/lab/out-server-auto
+```
 
 ## Debugging a failed install
 
@@ -234,9 +242,13 @@ Full evidence in `reference/acceptance.txt`.
 | 30 | `fwall` is not in the base | **PASS** | not installed |
 | 31 | `omarchy-server-addon docker` installs and runs a container | **PASS** | `Hello from Docker!` |
 | 32 | the docker addon opens only the container DNS stub | **PASS** | new listener is `172.17.0.1:53`, gated by the two `allow-docker-dns` rules |
-| 33 | `omarchy-update` runs to completion | **PASS** (with a caveat, below) | `rc=0` |
+| 33 | the update timer ships disabled and toggles | **PASS** | `shipped=disabled enabled=enabled disabled=disabled` |
+| 34 | the free-space check uses the server threshold | **PASS** | `+ required_gib=2` under `bash -x` |
+| 35 | `omarchy-server-update` runs non-interactively to completion | **PASS** | `rc=0`, as root, stdin closed, nothing to answer |
+| 36 | the unattended update pruned the cache and took a snapshot | **PASS** | `pruned=yes snapshotted=yes`, and the snapper list shows the new snapshot |
+| 37 | no prompt was rendered during the unattended update | **PASS** | `confirm-prompts=0` in the transcript |
 
-**33 of 33 checks pass**, plus the reboot check
+**37 of 37 checks pass**, plus the reboot check
 (`reboot-check.sh`): the machine comes back, 0 failed units, the profile marker,
 default target, cmdline, `ufw` rules and listener set all survive.
 
@@ -262,30 +274,43 @@ repository is published.
 
 ![fwall running on the console of a server installed with the addon](../../docs/screenshots/fwall.png)
 
-### The `omarchy-update` caveat
+### The update path
 
-`omarchy-update` completes on a server, but it is **not** non-interactive:
-several steps shell out to `sudo`, which prompts on the terminal. Run
-`omarchy-update -y </dev/null` and every one of those steps stalls until sudo
-times out, then reports its own failure and moves on — the update "finishes"
-having pruned nothing and snapshotted nothing. The acceptance harness feeds the
-password to the pty `script` allocates, which is why its run is clean.
-
-Two aggravating factors of this profile:
+`omarchy-update` used to be the one acceptance item met with a caveat: several
+of its steps shell out to `sudo`, which prompts on the terminal, so
+`omarchy-update -y </dev/null` stalled on each one until sudo timed out and then
+"finished" having pruned nothing and snapshotted nothing. Two aggravating
+factors of this profile made that worse:
 
 - `install/server/increase-lockout-limit-server.sh` raises `pam_faillock` to
   `deny=10 unlock_time=120`, and the `preauth silent` line means a locked
   account is indistinguishable from a wrong password. A stalled unattended run
-  therefore leaves the account locked for two minutes with no explanation.
+  left the account locked for two minutes with no explanation.
 - `omarchy-update-status` calls `omarchy-shell`, which is not usable without
-  Quickshell. It happens to be harmless: `omarchy-shell -q` returns 0 when
+  Quickshell. That one is harmless: `omarchy-shell -q` returns 0 when
   `$OMARCHY_PATH/shell/shell.qml` is missing, which it is because the server
-  runtime does not ship `shell/`. So the graphical status refresh silently
-  no-ops instead of failing the update. No patch was needed.
+  runtime does not ship `shell/`, so the graphical status refresh silently
+  no-ops. No patch was needed.
 
-A truly unattended server update wants a non-interactive mode that either
-requires root outright or a NOPASSWD rule for the specific commands. That is
-the one acceptance item met with a caveat rather than cleanly.
+Both are settled now, and the fix is two moves. **Run as root**, where `sudo`
+never asks for a password and `pam_faillock` is never consulted — that is what
+`omarchy-server-update` does, and what the systemd unit does. **Make the
+promise explicit before the transcript's pty exists**: `omarchy-update` re-execs
+itself under `script`, which allocates a pseudo-terminal, so every `-t` test
+below that line reports a terminal nobody is at. The patched
+`omarchy-update` decides "unattended" from `-y`, `OMARCHY_NONINTERACTIVE=1` or a
+non-tty stdin *before* the re-exec, and `omarchy-update-restart` and
+`omarchy-update-orphan-pkgs` honor the answer.
+
+```bash
+sudo omarchy-server-update           # now
+sudo omarchy-server-update enable    # daily timer (ships disabled)
+journalctl -u omarchy-server-update  # what a run did
+```
+
+`docs/iso-server.md` §3.1 has the full audit, including the three things a
+root-run update needs that neither `sudo` nor systemd supplies (`$OMARCHY_PATH`,
+`$HOME`, and root's migration markers).
 
 ### The firewall rate-limits the test harness
 

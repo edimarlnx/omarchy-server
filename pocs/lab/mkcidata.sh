@@ -5,7 +5,8 @@
 # install (Limine, btrfs @/@home/@log/@pkg, 2 GiB ESP), see docs/upstream-map.md.
 #
 # Usage: mkcidata.sh [--profile desktop|server] [--hostname NAME] [--user NAME]
-#                    [--disk /dev/vda] [--disk-size-gb 40] [--addons a,b] [--out DIR]
+#                    [--disk /dev/vda] [--disk-size-gb 40] [--addons a,b]
+#                    [--unattended-updates] [--out DIR]
 # Output: $OUT/cidata/* (the plain files) and $OUT/cidata.iso (volume label
 # "cidata", ISO9660+Joliet+RockRidge, which udev exposes as
 # /dev/disk/by-label/cidata inside the live ISO).
@@ -21,6 +22,7 @@ username=omarchy
 disk=/dev/vda
 disk_size_gb=40
 addons=""
+unattended_updates=0
 out="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/out"
 timezone="${TZ_NAME:-America/Sao_Paulo}"
 keyboard="${KB_LAYOUT:-us}"
@@ -35,6 +37,7 @@ while (($#)); do
     --disk) disk="$2"; shift 2 ;;
     --disk-size-gb) disk_size_gb="$2"; shift 2 ;;
     --addons) addons="$2"; shift 2 ;;
+    --unattended-updates) unattended_updates=1; shift ;;
     --out) out="$2"; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
@@ -205,6 +208,12 @@ if [[ -n $addons ]]; then
   tr ',' '\n' <<<"$addons" | sed '/^[[:space:]]*$/d' >"$dir/addons"
 fi
 
+# A marker file, not a value: its presence turns on the server profile's daily
+# update timer during the install (install/server/unattended-updates-server.sh).
+if ((unattended_updates)); then
+  echo "enabled" >"$dir/unattended-updates"
+fi
+
 echo "$full_name" >"$dir/user_full_name.txt"
 echo "$email" >"$dir/user_email_address.txt"
 echo false >"$dir/user_encrypt_installation.txt"
@@ -221,5 +230,5 @@ done
 jq . "$dir/user_configuration.json" >/dev/null # validate
 
 xorriso -as mkisofs -quiet -V cidata -J -r -o "$out/cidata.iso" "$dir" 2>/dev/null
-echo "cidata: $out/cidata.iso (profile=$profile host=${hostname:-<installer default>} user=$username disk=$disk ${disk_size_gb}G addons=${addons:-none})"
+echo "cidata: $out/cidata.iso (profile=$profile host=${hostname:-<installer default>} user=$username disk=$disk ${disk_size_gb}G addons=${addons:-none} unattended-updates=$unattended_updates)"
 echo "password: $password_file"

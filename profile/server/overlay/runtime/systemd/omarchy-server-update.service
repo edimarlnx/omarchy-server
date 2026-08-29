@@ -1,0 +1,31 @@
+[Unit]
+Description=Omarchy server system update
+# The update syncs pacman databases and downloads packages, so it is pointless
+# before the machine has an address. It is not Requires=: a machine whose
+# network comes up late should still have tried.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The Omarchy commands read $OMARCHY_PATH and, per AGENTS.md, never default it
+# themselves. On a server it is supplied by /etc/profile.d for login shells and
+# by the pam_env line install/server/ssh-command-path-server.sh writes for ssh
+# commands and sudo; a systemd unit goes through neither, so it is declared here.
+Environment=OMARCHY_PATH=/usr/share/omarchy
+# systemd does not set $HOME for a system service running as root, and the
+# update reads it: omarchy-migrate keeps its per-user markers under
+# ~/.local/state/omarchy/migrations, and omarchy-update-restart looks there for
+# the restart-required flags. /root is what `sudo omarchy-update` gets, so the
+# timer and a hand-run update read and write the same state.
+Environment=HOME=/root
+# omarchy-update holds its own lock (omarchy-update-lock), so a run that
+# overlaps a manual `sudo omarchy-update` exits saying so rather than racing it.
+ExecStart=/usr/bin/omarchy-server-update run
+# A full mirror sync plus an initramfs rebuild on a slow link takes a while, and
+# a killed update is worse than a late one.
+TimeoutStartSec=2h
+# The whole transcript goes to the journal. There is no desktop to notify and
+# no terminal to print to; `journalctl -u omarchy-server-update` is the record.
+StandardOutput=journal
+StandardError=journal

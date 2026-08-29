@@ -1,0 +1,82 @@
+# `omarchy update` asks three questions — start?, remove orphans?, reboot? —
+# and upstream already has the answer for when nobody is there to be asked:
+# `-y` sets OMARCHY_UPDATE_UNATTENDED so "steps that would need an answer
+# report and move on". This extends that promise to the two cases it did not
+# cover, and to the two steps that never honored it.
+#
+#   * A run with no terminal on stdin is unattended whether or not -y was
+#     passed, and OMARCHY_NONINTERACTIVE=1 says so outright. Both are decided
+#     BEFORE the `script` re-exec, which allocates a pty: after it, every -t
+#     test in the update reports a terminal nobody is sitting at, which is why
+#     the existing check in omarchy-update-orphan-pkgs never fires.
+#   * omarchy-update-restart's gum confirm was unconditional, so an unattended
+#     update stalled there after a kernel upgrade — the last step, with the
+#     whole update already done.
+#
+# Nothing here is server-specific: with a terminal and no -y the desktop path
+# is unchanged.
+--- a/bin/omarchy-update	2026-08-29 04:01:38.083239377 -0300
++++ b/bin/omarchy-update	2026-08-29 04:01:48.670295338 -0300
+@@ -7,6 +7,15 @@
+ 
+ set -e
+ 
++# -y is a promise not to ask anything. A run with no terminal to answer on
++# makes the same promise by circumstance — a systemd unit, a cron job,
++# `ssh host omarchy-update` — and OMARCHY_NONINTERACTIVE=1 makes it outright.
++# All three are settled here, before the `script` re-exec below allocates a pty
++# that would make every later `-t` test report a terminal nobody is sitting at.
++if [[ ${1:-} == "-y" || ${OMARCHY_NONINTERACTIVE:-} == 1 || ! -t 0 ]]; then
++  export OMARCHY_UPDATE_UNATTENDED=1
++fi
++
+ if [[ -z ${OMARCHY_UPDATE_LOGGED:-} ]]; then
+   script_command=$(printf '%q ' "$0" "$@")
+   exec env OMARCHY_UPDATE_LOGGED=1 script -qefc "$script_command" "/tmp/omarchy-update.log"
+@@ -21,11 +30,9 @@
+ 
+ omarchy-update-requires-free-space
+ 
+-# -y is a promise not to ask anything. Steps that would need an answer report
+-# and move on instead of waiting on a prompt nobody is here to give.
+-[[ ${1:-} != "-y" ]] || export OMARCHY_UPDATE_UNATTENDED=1
+-
+-if [[ ${1:-} == "-y" ]] || omarchy-update-confirm; then
++# Unattended: steps that would need an answer report and move on instead of
++# waiting on a prompt nobody is here to give.
++if [[ ${OMARCHY_UPDATE_UNATTENDED:-} == 1 ]] || omarchy-update-confirm; then
+   # Before the snapshot: the cache is on the snapshotted subvolume, so pruning
+   # after it frees nothing until that snapshot ages out.
+   omarchy-update-pkg-prune
+--- a/bin/omarchy-update-restart	2026-08-29 04:01:38.085717715 -0300
++++ b/bin/omarchy-update-restart	2026-08-29 04:01:54.161391490 -0300
+@@ -5,6 +5,15 @@
+ echo
+ 
+ confirm_reboot() {
++  # Unattended, there is nobody to answer, and a reboot taken without an answer
++  # is a reboot taken out from under whatever the machine was doing. Say what
++  # would have been asked and carry on exactly as a declined prompt does: the
++  # reboot-required state is left in place for the next login to act on.
++  if [[ ${OMARCHY_UPDATE_UNATTENDED:-} == 1 ]]; then
++    echo "$1 (not rebooting: unattended update)"
++    return 0
++  fi
++
+   gum confirm "$1" && { omarchy-system-reboot; exit 0; }
+ }
+ 
+--- a/bin/omarchy-update-orphan-pkgs	2026-08-29 04:01:38.087983450 -0300
++++ b/bin/omarchy-update-orphan-pkgs	2026-08-29 04:01:58.510467644 -0300
+@@ -12,7 +12,10 @@
+ printf '  %s\n' "${orphans[@]}"
+ echo
+ 
+-if [[ ! -t 0 || ! -t 1 ]]; then
++# The pty that `script` allocates for the update transcript makes -t report a
++# terminal even when the update is unattended, so the promise is what counts
++# here and the -t tests only cover a direct run outside the update.
++if [[ ${OMARCHY_UPDATE_UNATTENDED:-} == 1 || ! -t 0 || ! -t 1 ]]; then
+   echo "${#orphans[@]} orphaned package(s) found. Re-run omarchy-update-orphan-pkgs in a terminal to review/remove them."
+   echo
+   exit 0

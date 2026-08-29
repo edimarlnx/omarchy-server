@@ -32,7 +32,7 @@ version
 .pi
 .ssh
 --- /proc/cmdline ---
-root=PARTUUID=729089c6-0789-425f-a58d-6d5219ce00e1 zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
+root=PARTUUID=f5e895a8-020e-4abb-8963-2b3f5d677f3d zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
 --- default target ---
 multi-user.target
 --- zram/swap ---

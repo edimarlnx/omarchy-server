@@ -34,7 +34,7 @@ gpg: migration succeeded
 ==> Generating pacman master key. This may take some time.
 gpg: Generating pacman keyring master key...
 gpg: directory '/mnt//etc/pacman.d/gnupg/openpgp-revocs.d' created
-gpg: revocation certificate stored as '/mnt//etc/pacman.d/gnupg/openpgp-revocs.d/1BEA5F5FED2E6218F9A7BF46FB6513EEF7BA23A1.rev'
+gpg: revocation certificate stored as '/mnt//etc/pacman.d/gnupg/openpgp-revocs.d/2202FC992C65DA6346EC09593BF922CD01D8B0F9.rev'
 gpg: Done
 ==> Updating trust database...
 gpg: marginals needed: 3  completes needed: 1  trust model: pgp
@@ -557,8 +557,8 @@ Boot0003* UEFI Misc Device	PciRoot(0x0)/Pci(0x2,0x0)걎脈鼑䵙຅᫢ⱒ뉙
     data: 4e ac 08 81 11 9f 59 4d 85 0e e2 1a 52 2c 59 b2
 Boot0004* EFI Internal Shell	FvVol(7cb8bdc9-f8eb-4f34-aaea-3ee4af6516a1)/FvFile(7c04a583-9e3e-4f1c-ad65-e05268d0b4d1)
       dp: 04 07 14 00 c9 bd b8 7c eb f8 34 4f aa ea 3e e4 af 65 16 a1 / 04 06 14 00 83 a5 04 7c 3e 9e 1c 4f ad 65 e0 52 68 d0 b4 d1 / 7f ff 04 00
-Boot0005* Limine	HD(1,GPT,5142f2c6-2222-4050-a128-282aa28fb80e,0x800,0x400000)/\EFI\limine\limine_x64.efi
-      dp: 04 01 2a 00 01 00 00 00 00 08 00 00 00 00 00 00 00 00 40 00 00 00 00 00 c6 f2 42 51 22 22 50 40 a1 28 28 2a a2 8f b8 0e 02 02 / 04 04 3a 00 5c 00 45 00 46 00 49 00 5c 00 6c 00 69 00 6d 00 69 00 6e 00 65 00 5c 00 6c 00 69 00 6d 00 69 00 6e 00 65 00 5f 00 78 00 36 00 34 00 2e 00 65 00 66 00 69 00 00 00 / 7f ff 04 00
+Boot0005* Limine	HD(1,GPT,73cb2692-0e70-40d3-967f-62cd48097546,0x800,0x400000)/\EFI\limine\limine_x64.efi
+      dp: 04 01 2a 00 01 00 00 00 00 08 00 00 00 00 00 00 00 00 40 00 00 00 00 00 92 26 cb 73 70 0e d3 40 96 7f 62 cd 48 09 75 46 02 02 / 04 04 3a 00 5c 00 45 00 46 00 49 00 5c 00 6c 00 69 00 6d 00 69 00 6e 00 65 00 5c 00 6c 00 69 00 6d 00 69 00 6e 00 65 00 5f 00 78 00 36 00 34 00 2e 00 65 00 66 00 69 00 00 00 / 7f ff 04 00
 
     › writing Limine config
 
@@ -590,7 +590,7 @@ Packages (58) boost-libs-1.92.0-1  bubblewrap-0.12.0-1  cairo-1.18.4-1  dav1d-1.
               limine-snapper-sync-1.31.0-1  nano-9.2-1  omarchy-server-4.0.1-1  openssh-10.5p1-1  pacman-contrib-1.13.1-1  starship-1.26.0-1  tzupdate-3.1.0-1
               ufw-0.36.2-7
 
-Total Installed Size:  312.52 MiB
+Total Installed Size:  312.53 MiB
 
 :: Proceed with installation? [Y/n] 
 checking keyring...
@@ -762,24 +762,26 @@ installing tzupdate...
     › server profile: skipping hibernation
 
     › Configuring system
-=== Omarchy Target Setup Started: 2026-08-29 04:02:53 ===
-=== Omarchy Setup Started: 2026-08-29 04:02:53 ===
-[2026-08-29 01:02:53] Starting: /usr/share/omarchy/install/server/increase-lockout-limit-server.sh
-[2026-08-29 01:02:53] Completed: /usr/share/omarchy/install/server/increase-lockout-limit-server.sh
-[2026-08-29 01:02:53] Starting: /usr/share/omarchy/install/server/ssh-command-path-server.sh
-[2026-08-29 01:02:53] Completed: /usr/share/omarchy/install/server/ssh-command-path-server.sh
-[2026-08-29 01:02:53] Starting: /usr/share/omarchy/install/config/ssh-keepalive.sh
-[2026-08-29 01:02:53] Completed: /usr/share/omarchy/install/config/ssh-keepalive.sh
-[2026-08-29 01:02:53] Starting: /usr/share/omarchy/install/server/sshd-hardening-server.sh
-[2026-08-29 01:02:53] Completed: /usr/share/omarchy/install/server/sshd-hardening-server.sh
-[2026-08-29 01:02:53] Starting: /usr/share/omarchy/install/config/snapper.sh
+=== Omarchy Target Setup Started: 2026-08-29 07:32:13 ===
+=== Omarchy Setup Started: 2026-08-29 07:32:13 ===
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/server/increase-lockout-limit-server.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/server/increase-lockout-limit-server.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/server/ssh-command-path-server.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/server/ssh-command-path-server.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/config/ssh-keepalive.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/config/ssh-keepalive.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/server/sshd-hardening-server.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/server/sshd-hardening-server.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/config/snapper.sh
 Configuring Omarchy Snapper snapshot retention
-[2026-08-29 01:02:53] Completed: /usr/share/omarchy/install/config/snapper.sh
-[2026-08-29 01:02:53] Starting: /usr/share/omarchy/install/server/limine-branding-server.sh
-[2026-08-29 01:02:53] Completed: /usr/share/omarchy/install/server/limine-branding-server.sh
-[2026-08-29 01:02:53] Starting: /usr/share/omarchy/install/server/network-server.sh
-[2026-08-29 01:02:53] Completed: /usr/share/omarchy/install/server/network-server.sh
-[2026-08-29 01:02:53] Starting: /usr/share/omarchy/install/server/enable-services-server.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/config/snapper.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/server/limine-branding-server.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/server/limine-branding-server.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/server/network-server.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/server/network-server.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/server/root-migration-state-server.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/server/root-migration-state-server.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/server/enable-services-server.sh
 Created symlink '/etc/systemd/system/default.target' → '/usr/lib/systemd/system/multi-user.target'.
 Created symlink '/etc/systemd/system/multi-user.target.wants/sshd.service' → '/usr/lib/systemd/system/sshd.service'.
 Created symlink '/etc/systemd/system/dbus-org.freedesktop.network1.service' → '/usr/lib/systemd/system/systemd-networkd.service'.
@@ -800,8 +802,10 @@ Created symlink '/etc/systemd/system/multi-user.target.wants/systemd-oomd.servic
 Created symlink '/etc/systemd/system/sockets.target.wants/systemd-oomd.socket' → '/usr/lib/systemd/system/systemd-oomd.socket'.
 Created symlink '/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service' → '/usr/lib/systemd/system/serial-getty@.service'.
 Created symlink '/etc/systemd/system/multi-user.target.wants/omarchy-tty-palette.service' → '/usr/lib/systemd/system/omarchy-tty-palette.service'.
-[2026-08-29 01:02:53] Completed: /usr/share/omarchy/install/server/enable-services-server.sh
-[2026-08-29 01:02:53] Starting: /usr/share/omarchy/install/server/firewall-server.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/server/enable-services-server.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/server/unattended-updates-server.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/server/unattended-updates-server.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/server/firewall-server.sh
 Default incoming policy changed to 'deny'
 (be sure to update your rules accordingly)
 Default outgoing policy changed to 'allow'
@@ -809,20 +813,21 @@ Default outgoing policy changed to 'allow'
 Rules updated
 Rules updated (v6)
 Created symlink '/etc/systemd/system/multi-user.target.wants/ufw.service' → '/usr/lib/systemd/system/ufw.service'.
-[2026-08-29 01:02:54] Completed: /usr/share/omarchy/install/server/firewall-server.sh
-[2026-08-29 01:02:54] Starting: /usr/share/omarchy/install/server/post-install-pacman-server.sh
-[2026-08-29 01:02:54] Completed: /usr/share/omarchy/install/server/post-install-pacman-server.sh
-[2026-08-29 01:02:54] Starting: /usr/share/omarchy/install/post-install/udev.sh
-[2026-08-29 01:02:54] Completed: /usr/share/omarchy/install/post-install/udev.sh
-[2026-08-29 01:02:54] Starting: /usr/share/omarchy/install/server/prune-pkg-cache-server.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/server/firewall-server.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/server/post-install-pacman-server.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/server/post-install-pacman-server.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/post-install/udev.sh
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/post-install/udev.sh
+[2026-08-29 04:32:13] Starting: /usr/share/omarchy/install/server/prune-pkg-cache-server.sh
 warning: database file for 'core' does not exist (use '-Sy' to download)
 warning: database file for 'extra' does not exist (use '-Sy' to download)
 warning: database file for 'multilib' does not exist (use '-Sy' to download)
 warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
 ==> no candidate packages found for pruning
-[2026-08-29 01:02:54] Completed: /usr/share/omarchy/install/server/prune-pkg-cache-server.sh
-=== Omarchy Setup Completed: 2026-08-29 01:02:54 ===
-Omarchy setup: 0m 1s
+[2026-08-29 04:32:13] Completed: /usr/share/omarchy/install/server/prune-pkg-cache-server.sh
+=== Omarchy Setup Completed: 2026-08-29 04:32:13 ===
+Omarchy setup: 0m 0s
 
     › Installing addons
 
@@ -858,9 +863,9 @@ Building UKI for linux (7.1.11-arch1-1)
 ==> Creating zstd-compressed initcpio image
   -> Early uncompressed CPIO image generation successful
 ==> Initcpio image generation successful
-==> Creating unified kernel image: '/tmp/limine-mkinitcpio.LzPQ5v/linux.efi'
+==> Creating unified kernel image: '/tmp/limine-mkinitcpio.hINUmQ/linux.efi'
 ==> Unified kernel image generation successful
-Copied: /tmp/limine-mkinitcpio.LzPQ5v/linux.efi -> /boot/EFI/Linux/omarchy_linux.efi
+Copied: /tmp/limine-mkinitcpio.hINUmQ/linux.efi -> /boot/EFI/Linux/omarchy_linux.efi
 Updated: /boot/limine.conf
 
     › Finalizing user

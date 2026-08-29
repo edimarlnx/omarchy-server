@@ -134,7 +134,7 @@ index 6d48624..87fa246 100644
      setup = ctx.target / "usr" / "bin" / "omarchy-hibernation-setup"
      if not setup.exists():
          _debug_log(ctx, "skipping hibernation: /usr/bin/omarchy-hibernation-setup is not installed")
-@@ -1097,6 +1159,10 @@ def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str
+@@ -1097,6 +1159,15 @@ def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str
          f"OMARCHY_RUNTIME_PACKAGE={_omarchy_runtime_package()}",
          f"OMARCHY_SETTINGS_PACKAGE={_omarchy_settings_package()}",
          f"OMARCHY_NVIM_PACKAGE={_omarchy_nvim_package()}",
@@ -142,10 +142,15 @@ index 6d48624..87fa246 100644
 +        # Empty unless install_addons is running; omarchy-server-addon treats
 +        # an empty value as "use the system configuration".
 +        f"OMARCHY_ADDON_PACMAN_CONF={os.environ.get('OMARCHY_ADDON_PACMAN_CONF', '')}",
++        # A marker file on the autoinstall drive, copied to /root by
++        # omarchy-cidata-load. install/server/unattended-updates-server.sh
++        # turns the daily update timer on when it says 1; the package ships
++        # that timer disabled.
++        f"OMARCHY_UNATTENDED_UPDATES={'1' if Path('/root/unattended-updates').exists() else '0'}",
          "OMARCHY_INSTALL_LOG_FILE=/var/log/omarchy-install.log",
          "OMARCHY_LOG_TO_STDOUT=1",
      ]
-@@ -1129,7 +1195,22 @@ def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str
+@@ -1129,7 +1195,29 @@ def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str
                  pass
  
  
@@ -155,8 +160,15 @@ index 6d48624..87fa246 100644
 +    omarchy-apply-system reads OMARCHY_PROFILE from the environment, which the
 +    chroot env carries, but every later run on the installed machine
 +    (omarchy-update, a manual re-apply) has only this file to go on.
++
++    A stock desktop install writes nothing: it has no profile-aware code to
++    read the marker, and an unowned file in its /etc would be the one way a
++    desktop ISO built from a patched builder differs from an upstream one.
 +    """
 +    profile = _install_profile()
++    if profile == DEFAULT_PROFILE:
++        return
++
 +    marker = ctx.target / "etc" / "omarchy-profile"
 +    marker.parent.mkdir(parents=True, exist_ok=True)
 +    marker.write_text(profile + "\n")

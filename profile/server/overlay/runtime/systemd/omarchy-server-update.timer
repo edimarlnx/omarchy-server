@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily Omarchy server system update
+
+[Timer]
+OnCalendar=daily
+# Spread a fleet across the small hours instead of having every machine hit the
+# mirrors at 00:00 and reboot-require itself at the same minute.
+RandomizedDelaySec=4h
+# A machine that was off at its slot updates on the next boot rather than
+# skipping a day, which on a server is how an update gets missed for a month.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

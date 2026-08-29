@@ -1,0 +1,34 @@
+# The 10 GiB free-space floor is sized for a desktop install. A server install
+# is 1.2 GiB and often lives on a 20 GiB volume, where the floor refuses an
+# update the machine has plenty of room for. Server profile only; every other
+# profile keeps the 10 GiB it had.
+--- a/bin/omarchy-update-requires-free-space	2026-08-29 04:01:38.090254442 -0300
++++ b/bin/omarchy-update-requires-free-space	2026-08-29 04:02:07.314621809 -0300
+@@ -5,12 +5,25 @@
+ 
+ set -e
+ 
++# 10 GiB is sized for a desktop: ~8 GiB installed, plus a browser, an editor
++# toolchain and the caches they carry. A server install is 1.2 GiB on disk and
++# routinely lives on a 20 GiB volume, where that floor refuses an update the
++# machine has ample room for. The profile is read the way omarchy-apply-system
++# reads it: the environment first, then the marker the installer wrote.
++profile="${OMARCHY_PROFILE:-}"
++if [[ -z $profile && -r /etc/omarchy-profile ]]; then
++  profile=$(tr -d '[:space:]' </etc/omarchy-profile)
++fi
++
++required_gib=10
++[[ $profile != "server" ]] || required_gib=2
++
+ if [[ ${OMARCHY_UPDATE_FORCE:-0} == "1" ]]; then
+   exit 0
+ elif read -r available_bytes < <(df --output=avail --block-size=1 / 2>/dev/null | tail -n 1) &&
+   [[ $available_bytes =~ ^[0-9]+$ ]] &&
+-  (( available_bytes < 10 * 1024 * 1024 * 1024 )); then
+-  echo "You need at least 10 GiB free to safely update Omarchy."
++  (( available_bytes < required_gib * 1024 * 1024 * 1024 )); then
++  echo "You need at least $required_gib GiB free to safely update Omarchy."
+   exit 1
+ else
+   exit 0

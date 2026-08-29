@@ -1,0 +1,73 @@
+#!/bin/bash
+
+# omarchy:summary=Run the system update non-interactively on a headless server
+# omarchy:args=[run|enable|disable|status]
+# omarchy:examples=omarchy server-update | omarchy server-update enable
+# omarchy:requires-sudo=true
+
+# `omarchy update` asks three questions: start?, remove orphans?, reboot? A
+# headless machine has nobody at the console to answer any of them, so this is
+# the entry point that makes the promise on its behalf — OMARCHY_NONINTERACTIVE=1,
+# which omarchy-update turns into OMARCHY_UPDATE_UNATTENDED before it re-execs
+# itself under `script` — and runs the update as root, where every `sudo` inside
+# it is already authenticated and nothing can stall on a password.
+#
+# Running as root is what makes the update unattended-safe at all. Under a user
+# account each privileged step prompts, waits out sudo's timeout, reports its own
+# failure and moves on, and the update "finishes" having pruned nothing and
+# snapshotted nothing; worse, this profile raises pam_faillock to deny=10 with a
+# `preauth silent` line, so the repeated timeouts lock the account for two
+# minutes and look exactly like a wrong password.
+#
+# `enable` turns on the daily timer, which ships disabled: a machine that
+# upgrades a database under load is not something to opt anyone into.
+
+set -euo pipefail
+
+timer=omarchy-server-update.timer
+
+require_root() {
+  if ((EUID != 0)); then
+    exec sudo -E "$0" "$@"
+  fi
+}
+
+case "${1:-run}" in
+  status)
+    # Reporting, so a disabled timer is an answer rather than a failure.
+    systemctl is-enabled "$timer" 2>/dev/null || true
+    systemctl status "$timer" --no-pager 2>&1 || true
+    exit 0
+    ;;
+  enable)
+    require_root "$@"
+    systemctl enable --now "$timer"
+    systemctl list-timers "$timer" --no-pager
+    exit 0
+    ;;
+  disable)
+    require_root "$@"
+    systemctl disable --now "$timer"
+    exit 0
+    ;;
+  run)
+    require_root "$@"
+    # -y as well as the environment variable: the flag is the documented
+    # promise and the variable is what survives the `script` re-exec into every
+    # step below it.
+    exec env OMARCHY_NONINTERACTIVE=1 omarchy-update -y
+    ;;
+  -h | --help)
+    echo "Usage: omarchy-server-update [run|enable|disable|status]"
+    echo
+    echo "  run       update now, non-interactively (default)"
+    echo "  enable    enable the daily $timer"
+    echo "  disable   disable the daily $timer"
+    echo "  status    report whether the timer is enabled and when it next runs"
+    exit 0
+    ;;
+  *)
+    echo "omarchy-server-update: unknown command '$1'. Try --help." >&2
+    exit 2
+    ;;
+esac

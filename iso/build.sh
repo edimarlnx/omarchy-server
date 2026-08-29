@@ -3,7 +3,7 @@
 # Build an Omarchy ISO for a given profile from our local sources.
 #
 #   ./iso/build.sh                    # profile: server (the default here)
-#   ./iso/build.sh --profile desktop  # stock ISO, useful as a diff baseline
+#   ./iso/build.sh --profile desktop  # stock ISO, the desktop-parity baseline
 #   ./iso/build.sh --fresh            # discard the scratch tree first
 #   ./iso/build.sh --debug            # OMARCHY_INSTALL_DEBUG=1 in the ISO
 #
@@ -20,6 +20,12 @@
 #      --local-source, so the builder container builds omarchy-server* from
 #      upstream/omarchy + our overlay and puts them in the ISO's offline
 #      mirror.
+#
+# Steps 4 and 5's --local-source are skipped for --profile desktop: that
+# profile's packages are upstream's own, built from a PKGBUILD repository that
+# is not public, so a desktop build takes them off the published [omarchy]
+# mirror. What it does exercise is every patch in iso/patches/, which is the
+# point of building it at all (docs/iso-server.md, "Desktop parity").
 #
 # The built ISO lands in iso/release/ (gitignored).
 #
@@ -99,50 +105,63 @@ git -C "$scratch" add -A
 # ── 4. the <pkgs-checkout> for --local-source ───────────────────────────────
 # builder/build-omarchy-packages.sh reads /omarchy-pkgs/pkgbuilds/<pkg>, and
 # our patched builder/build-iso.sh reads /omarchy-pkgs/profile/<name>/.
-echo "› assembling $pkgs_scratch"
-# The PKGBUILDs live in the omarchy-server-pkgs checkout beside this one, which
-# is also what GitHub Actions builds the signed [omarchy-server] repository
-# from. OMARCHY_PKGS_DIR moves it.
-pkgs_repo=${OMARCHY_PKGS_DIR:-$repo_root/../omarchy-server-pkgs}
-if [[ ! -d $pkgs_repo/pkgbuilds ]]; then
-  echo "Error: $pkgs_repo/pkgbuilds not found (set OMARCHY_PKGS_DIR)." >&2
-  echo "       git clone https://github.com/edimarlnx/omarchy-server-pkgs.git ../omarchy-server-pkgs" >&2
-  exit 1
-fi
-bash "$repo_root/pkgs/keys/gen-lab-key.sh"
-
-rm -rf "$pkgs_scratch"
-mkdir -p "$pkgs_scratch/profile"
-cp -a "$pkgs_repo/pkgbuilds" "$pkgs_scratch/pkgbuilds"
-cp -a "$repo_root/profile/$profile" "$pkgs_scratch/profile/$profile" 2>/dev/null ||
-  { [[ $profile == desktop ]] || { echo "Error: no profile/$profile in this repo." >&2; exit 1; }; }
-
-# Same overlay tarball pkgs/build.sh ships as a declared makepkg source.
-for package in omarchy-server-settings omarchy-server; do
-  tar -czf "$pkgs_scratch/pkgbuilds/$package/omarchy-server-overlay.tar.gz" \
-    -C "$repo_root/profile/server" overlay addons branding
-done
-
-# Addon packages built from their own upstream get a clone under
-# <pkgs-checkout>/src/, which the patched builder/build-omarchy-packages.sh
-# marks safe for git and hands to the PKGBUILD through <NAME>_SRC. A clone
-# rather than a copy: the working tree's uncommitted state must not decide what
-# a package contains, and the PKGBUILDs consume a pinned commit anyway.
-tui_tools_dir=${TUI_TOOLS_DIR:-$repo_root/../tui-tools}
-if [[ -d $tui_tools_dir/.git ]]; then
-  echo "› cloning $tui_tools_dir into $pkgs_scratch/src/tui-tools"
-  mkdir -p "$pkgs_scratch/src"
-  git clone --quiet --no-hardlinks "$tui_tools_dir" "$pkgs_scratch/src/tui-tools"
+#
+# Desktop is the exception: its Omarchy packages are omarchy/omarchy-settings/
+# omarchy-nvim, whose PKGBUILDs live in a private upstream repository nobody
+# here has. A desktop build therefore takes them from the published [omarchy]
+# mirror, exactly as a stock `omarchy-iso-make` does, and skips --local-source
+# entirely. That is also what makes it a usable parity baseline: the only
+# difference from an upstream ISO is this repository's patches.
+if [[ $profile == "desktop" ]]; then
+  echo "› desktop profile: building against the published [omarchy] mirror"
 else
-  echo "Error: $tui_tools_dir is not a git clone; the fwall addon needs it." >&2
-  echo "       Set TUI_TOOLS_DIR to the checkout." >&2
-  exit 1
+  echo "› assembling $pkgs_scratch"
+  # The PKGBUILDs live in the omarchy-server-pkgs checkout beside this one, which
+  # is also what GitHub Actions builds the signed [omarchy-server] repository
+  # from. OMARCHY_PKGS_DIR moves it.
+  pkgs_repo=${OMARCHY_PKGS_DIR:-$repo_root/../omarchy-server-pkgs}
+  if [[ ! -d $pkgs_repo/pkgbuilds ]]; then
+    echo "Error: $pkgs_repo/pkgbuilds not found (set OMARCHY_PKGS_DIR)." >&2
+    echo "       git clone https://github.com/edimarlnx/omarchy-server-pkgs.git ../omarchy-server-pkgs" >&2
+    exit 1
+  fi
+  bash "$repo_root/pkgs/keys/gen-lab-key.sh"
+
+  rm -rf "$pkgs_scratch"
+  mkdir -p "$pkgs_scratch/profile"
+  cp -a "$pkgs_repo/pkgbuilds" "$pkgs_scratch/pkgbuilds"
+  cp -a "$repo_root/profile/$profile" "$pkgs_scratch/profile/$profile" 2>/dev/null ||
+    { [[ $profile == desktop ]] || { echo "Error: no profile/$profile in this repo." >&2; exit 1; }; }
+
+  # Same overlay tarball pkgs/build.sh ships as a declared makepkg source.
+  for package in omarchy-server-settings omarchy-server; do
+    tar -czf "$pkgs_scratch/pkgbuilds/$package/omarchy-server-overlay.tar.gz" \
+      -C "$repo_root/profile/server" overlay addons branding
+  done
+
+  # Addon packages built from their own upstream get a clone under
+  # <pkgs-checkout>/src/, which the patched builder/build-omarchy-packages.sh
+  # marks safe for git and hands to the PKGBUILD through <NAME>_SRC. A clone
+  # rather than a copy: the working tree's uncommitted state must not decide what
+  # a package contains, and the PKGBUILDs consume a pinned commit anyway.
+  tui_tools_dir=${TUI_TOOLS_DIR:-$repo_root/../tui-tools}
+  if [[ -d $tui_tools_dir/.git ]]; then
+    echo "› cloning $tui_tools_dir into $pkgs_scratch/src/tui-tools"
+    mkdir -p "$pkgs_scratch/src"
+    git clone --quiet --no-hardlinks "$tui_tools_dir" "$pkgs_scratch/src/tui-tools"
+  else
+    echo "Error: $tui_tools_dir is not a git clone; the fwall addon needs it." >&2
+    echo "       Set TUI_TOOLS_DIR to the checkout." >&2
+    exit 1
+  fi
 fi
 
 # ── 5. build ────────────────────────────────────────────────────────────────
 make_args=(--profile "$profile" --keep-pkg-cache --no-boot-offer)
 ((debug)) && make_args+=(--debug)
-make_args+=(--local-source "$upstream_omarchy" "$pkgs_scratch")
+if [[ $profile != "desktop" ]]; then
+  make_args+=(--local-source "$upstream_omarchy" "$pkgs_scratch")
+fi
 ((${#extra_args[@]})) && make_args+=("${extra_args[@]}")
 
 mkdir -p "$release"

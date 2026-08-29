@@ -1,3 +1,3 @@
-1402.44 MiB total installed
+1402.45 MiB total installed
 220 packages
 used on /1.2G

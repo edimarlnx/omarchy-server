@@ -1,7 +1,4 @@
-=== Attack surface — VM 'srv' — 2026-08-29T01:03:30-03:00 ===
-
-=== packages ===
-installed:  220
+=== Attack surface — VM 'srwarning: database file for 'core' does not exist (use 'installed:  220
 explicit:   21
 dependency: 199
 installed size (MiB): 1402
@@ -61,25 +58,21 @@ count: 13
 
 === listening sockets ===
 Netid State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
-udp   UNCONN 0      0         127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=18))
-udp   UNCONN 0      0      127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=16))
-tcp   LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=542,fd=6))
-tcp   LISTEN 0      4096      127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=19))
-tcp   LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=17))
-tcp   LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=542,fd=7))
+udp   UNCONN 0      0         127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=413,fd=18))
+udp   UNCONN 0      0      127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=413,fd=16))
+tcp   LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=413,fd=17))
+tcp   LISTEN 0      4096      127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=413,fd=19))
+tcp   LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=541,fd=6))
+tcp   LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=541,fd=7))
 listening tcp+udp: 6
 
 === setuid / setgid binaries ===
 count: 16
   -rwsr-xr-x root:root  /usr/bin/chage
   -rwsr-xr-x root:root  /usr/bin/chfn
-  -rwsr-xr-x root:root  /usr/bin/chsh
-  -rwsr-xr-x root:root  /usr/bin/gpasswd
-  -rwsr-xr-x root:root  /usr/bin/ksu
-  -rwsr-xr-x root:root  /usr/bin/mount
-  -rwsr-xr-x root:root  /usr/bin/newgrp
-  -rwsr-xr-x root:root  /usr/bin/passwd
-  -rwsr-xr-x root:root  /usr/bin/su
+  -rwsr-xr-x root:root surface: /home/edimar/Projetos/zodo/active-projects/omarchy-server/pocs/server-install/reference/surface.txt
+grep: /home/edimar/Projetos/zodo/active-projects/omarchy-server/pocs/server-install/reference/surface.txt: input file is also the output
+u
   -rwsr-xr-x root:root  /usr/bin/sudo
   -rwsr-xr-x root:root  /usr/bin/umount
   -rwsr-sr-x root:root  /usr/bin/unix_chkpwd

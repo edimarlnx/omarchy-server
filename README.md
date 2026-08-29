@@ -107,6 +107,25 @@ which `omarchy-server-settings` enables by shipping
 `/etc/pacman.d/omarchy-server.conf` and including it from every channel's
 `pacman.conf`. `docs/packaging.md` §5 is how that works.
 
+## Updating
+
+`omarchy update` asks questions, and a headless machine has nobody to answer
+them. `omarchy-server-update` is the entry point that does not: it runs the
+whole update as root, where every `sudo` inside it is already authenticated,
+with `OMARCHY_NONINTERACTIVE=1` so the steps that would prompt report and move
+on instead.
+
+```bash
+sudo omarchy-server-update           # update now, nothing to answer
+sudo omarchy-server-update enable    # daily timer, randomized, journal-only
+sudo omarchy-server-update status
+```
+
+The timer ships **disabled**. It can also be turned on at install time by an
+autoinstall drive carrying an `unattended-updates` file
+(`mkcidata.sh --unattended-updates`). `journalctl -u omarchy-server-update` is
+the record of a run. `docs/iso-server.md` §3.1 is what had to change and why.
+
 Measurements (package count, size, enabled units, listening sockets, setuid
 binaries, root services) are in `pocs/server-install/README.md`, produced by
 `pocs/server-install/surface.sh`.
