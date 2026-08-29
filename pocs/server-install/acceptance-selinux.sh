@@ -420,6 +420,58 @@ check "and the same update run the way the timer runs it" \
   '~/.lab-sudo systemctl start omarchy-server-update.service; ~/.lab-sudo systemctl show -p Result -p ExecMainStatus omarchy-server-update.service' \
   'Result=success'
 
+# ── 7b. a kernel package, under enforcing ───────────────────────────────────
+#
+# The one path §11.5 of the mandatory-access-control report left unmeasured,
+# and the one that decides whether enforcing is recommendable at all. A kernel
+# transaction is not "one more package": it runs mkinitcpio, which reads the
+# whole module tree and writes a UKI, then limine-entry-tool, which reads the
+# ESP and rewrites limine.conf. Every one of those is a domain crossing, and a
+# machine that cannot rebuild its own boot image under enforcing is a machine
+# that cannot take a security update.
+#
+# The transaction is a reinstall when Arch has not moved, which is the harder
+# case to get right and the same work either way: the files are rebuilt.
+if [[ ${ENFORCE:-0} == 1 ]]; then
+  echo "--- a kernel transaction under enforcing ---"
+
+  check "a kernel transaction completes with the initramfs and UKI rebuilt" \
+    'uki=$(ls -t /boot/EFI/Linux/*.efi 2>/dev/null | head -1);
+     before=$(~/.lab-sudo stat -c %Y "$uki" 2>/dev/null);
+     ~/.lab-sudo dmesg -C >/dev/null 2>&1;
+     timeout 1200 ~/.lab-sudo pacman -S --noconfirm linux >/tmp/kernel.log 2>&1; echo "pacman-exit=$?";
+     ~/.lab-sudo tail -25 /tmp/kernel.log;
+     after=$(~/.lab-sudo stat -c %Y "$uki" 2>/dev/null);
+     echo "uki=$uki rebuilt=$([[ $after -gt ${before:-0} ]] && echo yes || echo no)"' \
+    '^pacman-exit=0$'
+
+  # The two strings §11.5 saw. They are not fatal to pacman -- limine-entry-tool
+  # prints them and carries on -- so the exit status above cannot be the whole
+  # check, and this is the one that would have caught the reported failure.
+  check "no mkinitcpio or UKI build error appeared in that transaction" \
+    '~/.lab-sudo grep -aE "mkinitcpio failed|errors were encountered|must be readable|Permission denied" /tmp/kernel.log || echo "no-build-errors"' \
+    '^no-build-errors$'
+
+  check "and the boot entry still points at a UKI that exists" \
+    '~/.lab-sudo grep -c "EFI/Linux" /boot/limine.conf; ~/.lab-sudo ls -l /boot/EFI/Linux/' \
+    '\.efi'
+
+  # A denial the policy dontaudits is invisible here and in `ausearch`. That is
+  # exactly the shape of "it failed and nothing was logged", so the count is
+  # recorded rather than trusted -- §10 below is what looks underneath it.
+  check "the kernel transaction was denied nothing that is audited" \
+    '~/.lab-sudo ausearch -m avc -m user_avc -ts boot 2>/dev/null | grep -c "denied" || echo 0' \
+    '^0$'
+
+  check "the classifier does not ask for a reboot after a same-version rebuild" \
+    'before=$(pacman -Q linux | awk "{print \$2}");
+     ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required;
+     ~/.lab-sudo env HOME=/root omarchy-server-update-restart --no-restart 2>&1 | grep -E "^(kernel package|reboot required)";
+     ~/.lab-sudo test -f /root/.local/state/omarchy/reboot-required && m=set || m=absent;
+     echo "linux=$before marker=$m"' \
+    'marker=absent'
+fi
+
 # ── 8. the denial record ────────────────────────────────────────────────────
 
 echo "--- AVC denials accumulated by the workload above ---"
@@ -467,5 +519,73 @@ check "SELinux is still in the mode it was left in" 'getenforce' '^(Enforcing|Pe
 check "and the boot produced no new denials before login" \
   "journalctl -k --no-pager -b -g 'avc: *denied' -o cat | wc -l" \
   '^[0-9]+$'
+
+# ── 10. the disable path, and the §11.5 open question ───────────────────────
+#
+# `omarchy-server-selinux disable` removes the lsm= drop-in and rebuilds the
+# UKI through limine-update. On the previous enforcing run that rebuild printed
+# "WARNING: errors were encountered during the build" and "ERROR: mkinitcpio
+# failed for kernel …, skipping", and **no AVC was logged**, so the report
+# could not say whether SELinux was involved at all.
+#
+# "It failed and nothing was logged" has one common cause on this system, and
+# it is not "SELinux was innocent": a denial matched by a `dontaudit` rule is
+# refused and never audited. `semodule -DB` rebuilds the policy with every
+# dontaudit removed, which is the standard way to see them; `semodule -B` puts
+# them back. So this runs the rebuild twice -- once as it ships, once with the
+# dontaudits off -- and keeps both transcripts. Whichever way it comes out is
+# an answer: a denial appearing under -DB names the rule to add, and a clean
+# run under -DB says the failure was never SELinux's.
+#
+# It is last because it is destructive: after it, this machine does not
+# initialise SELinux on its next boot.
+if [[ ${ENFORCE:-0} == 1 ]]; then
+  echo "--- reproducing the disable-path UKI rebuild (§11.5) ---"
+
+  check "limine-update rebuilds the UKI under enforcing, before anything is disabled" \
+    '~/.lab-sudo limine-update >/tmp/limine-enforcing.log 2>&1; echo "limine-exit=$?";
+     ~/.lab-sudo tail -20 /tmp/limine-enforcing.log;
+     ~/.lab-sudo grep -aE "mkinitcpio failed|errors were encountered" /tmp/limine-enforcing.log || echo "no-build-errors"' \
+    '^no-build-errors$'
+
+  # The same command with every dontaudit rule removed from the loaded policy.
+  # If the rebuild only fails here, or logs denials only here, the failure was
+  # a silenced denial all along.
+  check "and again with the dontaudit rules removed, which is where a silent denial shows" \
+    '~/.lab-sudo semodule -DB >/dev/null 2>&1; echo "dontaudit-disabled-rc=$?";
+     ~/.lab-sudo ausearch -m avc -ts recent >/dev/null 2>&1;
+     start=$(date "+%H:%M:%S");
+     ~/.lab-sudo limine-update >/tmp/limine-nodontaudit.log 2>&1; echo "limine-exit=$?";
+     ~/.lab-sudo tail -20 /tmp/limine-nodontaudit.log;
+     echo "--- AVCs since $start ---";
+     ~/.lab-sudo ausearch -m avc -ts "$start" 2>&1 | grep "denied" | sed "s/.*denied/denied/" | sort | uniq -c | head -20;
+     ~/.lab-sudo semodule -B >/dev/null 2>&1; echo "dontaudit-restored-rc=$?";
+     ~/.lab-sudo grep -aE "mkinitcpio failed|errors were encountered" /tmp/limine-nodontaudit.log || echo "no-build-errors"' \
+    '^no-build-errors$'
+
+  check "omarchy-server-selinux disable completes, drop-in and sudoers role removed" \
+    '~/.lab-sudo omarchy-server-selinux disable >/tmp/selinux-disable.log 2>&1; echo "disable-exit=$?";
+     ~/.lab-sudo tail -25 /tmp/selinux-disable.log;
+     test -e /etc/limine-entry-tool.d/omarchy-lsm-selinux.conf && echo "dropin=present" || echo "dropin=removed"' \
+    '^dropin=removed$'
+
+  check "and that disable rebuilt the UKI without a build error" \
+    '~/.lab-sudo grep -aE "mkinitcpio failed|errors were encountered|must be readable" /tmp/selinux-disable.log || echo "no-build-errors"' \
+    '^no-build-errors$'
+
+  # The rebuilt command line is the thing the §11.5 failure delayed: with the
+  # rebuild broken, the drop-in removal did not reach the UKI, so the next boot
+  # would still have come up with lsm=selinux.
+  # The verdict is computed rather than pattern-matched: the assertion is the
+  # ABSENCE of a string, and grep -E has no way to say that.
+  check "the rebuilt UKI no longer carries lsm=...selinux" \
+    'uki=$(ls -t /boot/EFI/Linux/*.efi | head -1); echo "uki=$uki";
+     cmdline=$(~/.lab-sudo objcopy -O binary --only-section=.cmdline "$uki" /dev/stdout 2>/dev/null | tr -d "\0");
+     if [ -z "$cmdline" ]; then echo "cmdline=unreadable";
+     else echo "cmdline: $cmdline";
+       case "$cmdline" in *lsm=*selinux*) echo "verdict=selinux-still-in-cmdline" ;;
+       *) echo "verdict=selinux-gone-from-cmdline" ;; esac; fi' \
+    '^verdict=selinux-gone-from-cmdline$'
+fi
 
 echo "=== $pass passed, $fail failed ==="
