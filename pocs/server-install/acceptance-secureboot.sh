@@ -292,11 +292,19 @@ echo "=== kexec ==="
 # reports a firmware and a loader phase -- the values it read from the EFI
 # variables of the boot before -- so it cannot tell the two paths apart, which
 # is exactly what it looks like it is for.
+# Every ssh in this helper is wrapped in `timeout`. Without it a connect to a
+# port the firewall is currently dropping does not fail, it HANGS -- and the
+# helper then blocks indefinitely on a machine that never received the reboot
+# command in the first place. Measured: a run that sat for half an hour with a
+# single "Restarting system" in the serial log, and that one was from an
+# earlier section.
+probe() { timeout 20 "$lab" "$vm" ssh "$@" 2>/dev/null; }
+
 reboot_seconds() {
   local label=$1 command=$2 before after started elapsed downtime
-  before=$(run 'cat /proc/sys/kernel/random/boot_id')
+  before=$(probe 'cat /proc/sys/kernel/random/boot_id' | tr -d '\r')
   started=$(date +%s)
-  run "$command" >/dev/null 2>&1
+  probe "$command" >/dev/null 2>&1
   # Thirty seconds before the first probe, twenty between them, and only a
   # UUID counts as an answer. `ufw limit 22` drops the seventh connection from
   # one source inside thirty seconds; a reboot kills the ssh master, so every
@@ -308,14 +316,14 @@ reboot_seconds() {
   # Both paths come back inside ten seconds, so nothing is lost by waiting.
   sleep 30
   for _ in $(seq 1 10); do
-    after=$(run 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '\r')
+    after=$(probe 'cat /proc/sys/kernel/random/boot_id' | tr -d '\r')
     [[ $after =~ ^[0-9a-f]{8}-[0-9a-f]{4}- ]] && [[ $after != "$before" ]] && break
     after=""
     sleep 20
   done
   elapsed=$(($(date +%s) - started))
   if [[ -n ${after:-} && $after != "$before" ]]; then
-    downtime=$(run '~/.lab-sudo sh -c "
+    downtime=$(probe '~/.lab-sudo sh -c "
       last=\$(journalctl -b -1 -o short-unix --no-pager 2>/dev/null | tail -1 | cut -d. -f1)
       first=\$(journalctl -b -o short-unix --no-pager 2>/dev/null | head -1 | cut -d. -f1)
       [ -n \"\$last\" ] && [ -n \"\$first\" ] && echo \$((first - last)) || echo unknown"')
