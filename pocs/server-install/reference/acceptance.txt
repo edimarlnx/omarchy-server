@@ -1,4 +1,4 @@
-=== Server install acceptance — VM 'srv' — 2026-08-28T23:05:05-03:00 ===
+=== Server install acceptance — VM 'srv' — 2026-08-29T01:03:31-03:00 ===
 
 [PASS] default target is multi-user.target
       $ systemctl get-default
@@ -22,7 +22,7 @@
 
 [PASS] ssh with the cidata key works
       $ echo "logged in as $(id -un)@$(uname -n) from $SSH_CONNECTION"
-      logged in as omarchy@omarchy-srv from 10.0.2.2 49830 10.0.2.15 22
+      logged in as omarchy@omarchy from 10.0.2.2 59554 10.0.2.15 22
 
 [PASS] password authentication is refused
       $ ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=10 "$(id -un)@localhost" true 2>&1 | tail -2
@@ -49,15 +49,15 @@
                DNS: 10.0.2.3
                     fec0::3
       
-      Aug 28 23:04:49 omarchy-srv systemd[1]: Starting Network Management...
-      Aug 28 23:04:49 omarchy-srv systemd-networkd[423]: lo: Link UP
-      Aug 28 23:04:49 omarchy-srv systemd-networkd[423]: lo: Gained carrier
-      Aug 28 23:04:49 omarchy-srv systemd[1]: Started Network Management.
-      Aug 28 23:04:49 omarchy-srv systemd-networkd[423]: enp0s3: Configuring with /etc/systemd/network/20-wired.network.
-      Aug 28 23:04:49 omarchy-srv systemd-networkd[423]: enp0s3: Link UP
-      Aug 28 23:04:49 omarchy-srv systemd-networkd[423]: enp0s3: Gained carrier
-      Aug 28 23:04:49 omarchy-srv systemd-networkd[423]: enp0s3: DHCPv4 address 10.0.2.15/24, gateway 10.0.2.2 acquired from 10.0.2.2
-      Aug 28 23:04:51 omarchy-srv systemd-networkd[423]: enp0s3: Gained IPv6LL
+      Aug 29 01:03:09 omarchy systemd[1]: Starting Network Management...
+      Aug 29 01:03:09 omarchy systemd-networkd[424]: lo: Link UP
+      Aug 29 01:03:09 omarchy systemd-networkd[424]: lo: Gained carrier
+      Aug 29 01:03:09 omarchy systemd[1]: Started Network Management.
+      Aug 29 01:03:09 omarchy systemd-networkd[424]: enp0s3: Configuring with /etc/systemd/network/20-wired.network.
+      Aug 29 01:03:09 omarchy systemd-networkd[424]: enp0s3: Link UP
+      Aug 29 01:03:09 omarchy systemd-networkd[424]: enp0s3: Gained carrier
+      Aug 29 01:03:09 omarchy systemd-networkd[424]: enp0s3: DHCPv4 address 10.0.2.15/24, gateway 10.0.2.2 acquired from 10.0.2.2
+      Aug 29 01:03:12 omarchy systemd-networkd[424]: enp0s3: Gained IPv6LL
       enp0s3 10.0.2.15/24
 
 [PASS] resolved answers through the stub resolver
@@ -105,17 +105,17 @@
       # | Type   | Pre # | Date | User | Cleanup | Description | Userdata
       --+--------+-------+------+------+---------+-------------+---------
       0 | single |       |      | root |         | current     |
-      ID 263 gen 13 top level 5 path @factory
+      ID 263 gen 14 top level 5 path @factory
       root
 
 [PASS] /boot/limine.conf lists snapshot entries once a snapshot exists
       $ ~/.lab-sudo snapper -c root create -d acceptance >/dev/null 2>&1; ~/.lab-sudo systemctl start limine-snapper-sync.service >/dev/null 2>&1; sleep 3; ~/.lab-sudo snapper -c root list | tail -3; ~/.lab-sudo grep -iE "snapshot" /boot/limine.conf | head -6
       --+--------+-------+--------------------------+------+---------+-------------+---------
       0 | single |       |                          | root |         | current     |
-      1 | single |       | Fri Aug 28 23:05:06 2026 | root |         | acceptance  |
+      1 | single |       | Sat Aug 29 01:03:32 2026 | root |         | acceptance  |
            //Snapshots
            comment: 1 snapshots
-           cmdline: root=PARTUUID=d4f64dc2-463f-4056-8ae5-843a1151cc1a zswap.enabled=0 rootflags=subvol=/@/.snapshots/1/snapshot rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
+           cmdline: root=PARTUUID=729089c6-0789-425f-a58d-6d5219ce00e1 zswap.enabled=0 rootflags=subvol=/@/.snapshots/1/snapshot rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
 
 [PASS] pacman -Qq | wc -l in 150-260
       $ n=$(pacman -Qq | wc -l); echo "packages=$n"; [ "$n" -ge 150 ] && [ "$n" -le 260 ] && echo in-range || echo out-of-range
@@ -133,18 +133,18 @@
       warning: database file for 'multilib' does not exist (use '-Sy' to download)
       warning: database file for 'omarchy' does not exist (use '-Sy' to download)
       installed=1402 MiB
-      used=1171MiB
+      used=1172MiB
       under-3g
 
 [PASS] boot to ssh under 20 s
       $ systemd-analyze; t=$(systemd-analyze | sed -n "s/.*= \([0-9.]*\)s.*/\1/p"); awk -v t="$t" "BEGIN{print (t+0<20)?\"under-20s\":\"over-20s\"}"
-      Startup finished in 584ms (firmware) + 2.027s (loader) + 944ms (kernel) + 3.081s (userspace) = 6.638s 
-      multi-user.target reached after 3.077s in userspace.
+      Startup finished in 573ms (firmware) + 2.709s (loader) + 854ms (kernel) + 2.880s (userspace) = 7.018s 
+      multi-user.target reached after 2.876s in userspace.
       under-20s
 
 [PASS] /proc/cmdline has console=ttyS0 and no quiet/splash/resume
       $ cat /proc/cmdline; grep -q "console=ttyS0" /proc/cmdline && ! grep -qE "quiet|splash|resume=" /proc/cmdline && echo cmdline-ok || echo cmdline-bad
-      root=PARTUUID=d4f64dc2-463f-4056-8ae5-843a1151cc1a zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
+      root=PARTUUID=729089c6-0789-425f-a58d-6d5219ce00e1 zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
       cmdline-ok
 
 [PASS] zram active
@@ -161,6 +161,82 @@
 [PASS] omarchy-version is 4.0.1-1
       $ omarchy-version 2>/dev/null
       4.0.1-1
+
+[PASS] the hostname defaults to omarchy when cidata gives none
+      $ hostnamectl hostname; [ "$(hostnamectl hostname)" = omarchy ] && echo default-hostname-ok || echo wrong-hostname
+      omarchy
+      default-hostname-ok
+
+[PASS] os-release identifies the edition
+      $ grep -E "^(NAME|PRETTY_NAME|ID|ID_LIKE|ANSI_COLOR|LOGO)=" /etc/os-release
+      NAME="Omarchy Server"
+      PRETTY_NAME="Omarchy Server 4.0.1"
+      ID=omarchy-server
+      ID_LIKE="omarchy arch"
+      ANSI_COLOR="0;32"
+      LOGO=omarchy
+
+[PASS] /etc/issue carries the logo, the version and the machine fields
+      $ grep -c . /etc/issue; grep -q "Omarchy Server" /etc/issue && grep -qF "S{VERSION_ID}" /etc/issue && grep -q "███" /etc/issue && grep -qP "\x1b\[32m" /etc/issue && echo issue-ok || echo issue-bad
+      14
+      issue-ok
+
+[PASS] the serial console gets its own logo-free issue
+      $ cat /etc/issue.serial; grep -q "issue-file /etc/issue.serial" /etc/systemd/system/serial-getty@.service.d/10-omarchy-issue.conf && ! grep -q "███" /etc/issue.serial && echo serial-issue-ok || echo serial-issue-bad
+      [1;32mOmarchy Server[0m [32m\S{VERSION_ID}[0m
+      [2mhost[0m \n   [2mtty[0m \l   [2mipv4[0m \4
+      
+      serial-issue-ok
+
+[PASS] the VT palette unit ran and left the serial console alone
+      $ systemctl is-enabled omarchy-tty-palette.service; systemctl is-active omarchy-tty-palette.service; systemctl show -p ExecMainStatus --value omarchy-tty-palette.service; ! grep -v "^#" /usr/bin/omarchy-tty-palette | grep -q ttyS && echo palette-ok || echo palette-bad
+      enabled
+      active
+      0
+      palette-ok
+
+[PASS] /boot/limine.conf is branded, waits 2 s and points at the wallpaper
+      $ ~/.lab-sudo grep -E "^(timeout|interface_branding|wallpaper|wallpaper_style):" /boot/limine.conf
+      timeout: 2
+      interface_branding: Omarchy Server
+      wallpaper: boot():/limine-wallpaper.png
+      wallpaper_style: stretched
+
+[PASS] the wallpaper is on the ESP
+      $ ~/.lab-sudo ls -l /boot/limine-wallpaper.png; ~/.lab-sudo file /boot/limine-wallpaper.png 2>/dev/null || ~/.lab-sudo head -c 8 /boot/limine-wallpaper.png | od -c | head -1
+      -rwx------ 1 root root 17941 Aug 29 01:02 /boot/limine-wallpaper.png
+      /boot/limine-wallpaper.png: PNG image data, 1920 x 1080, 8-bit/color RGB, non-interlaced
+
+[PASS] the login banner prints the machine identity
+      $ bash -lc "COLUMNS=120 omarchy-server-motd" | sed "s/\x1b\[[0-9;]*m//g"
+      
+                         ▄▄▄
+         ▄█████▄    ▄███████████▄    ▄███████   ▄███████   ▄███████   ▄█   █▄    ▄█   █▄
+        ███   ███  ███   ███   ███  ███   ███  ███   ███  ███   ███  ███   ███  ███   ███
+        ███   ███  ███   ███   ███  ███   ███  ███   ███  ███   █▀   ███   ███  ███   ███
+        ███   ███  ███   ███   ███ ▄███▄▄▄███ ▄███▄▄▄██▀  ███       ▄███▄▄▄███▄ ███▄▄▄███
+        ███   ███  ███   ███   ███ ▀███▀▀▀███ ▀███▀▀▀▀    ███      ▀▀███▀▀▀███  ▀▀▀▀▀▀███
+        ███   ███  ███   ███   ███  ███   ███ ██████████  ███   █▄   ███   ███  ▄██   ███
+        ███   ███  ███   ███   ███  ███   ███  ███   ███  ███   ███  ███   ███  ███   ███
+         ▀█████▀    ▀█   ███   █▀   ███   █▀   ███   ███  ███████▀   ███   █▀    ▀█████▀
+                                               ███   █▀
+      
+        os        Omarchy Server 4.0.1
+        host      omarchy
+        kernel    7.1.11-arch1-1
+        uptime    0 minute
+        packages  220 installed
+        updates   none pending
+        memory    0.7 GiB of 7.7 GiB used
+        ip        10.0.2.15/24
+
+[PASS] the banner is wired into every login shell
+      $ test -f /etc/profile.d/omarchy-motd.sh && grep -q omarchy-server-motd /etc/profile.d/omarchy-motd.sh && echo motd-wired || echo motd-missing
+      motd-wired
+
+[PASS] fwall is not in the base
+      $ pacman -Qq fwall 2>/dev/null || echo fwall-absent
+      fwall-absent
 
 [PASS] omarchy-server-addon docker installs and runs a container
       $ ~/.lab-sudo omarchy-server-addon docker 2>&1 | tail -5; ~/.lab-sudo systemctl start docker.socket; ~/.lab-sudo docker run --rm hello-world 2>&1 | sed -n "/Hello from Docker/,+3p"
@@ -187,24 +263,24 @@
       [32m
       Prune package cache[0m
       [sudo] password for omarchy: 
-      ]3008;start=d4ccda7645db4af38f7f44013e1ddb6e;user=omarchy;hostname=omarchy-srv;machineid=3a653f46bc0d4eafb3022a7ac92c0713;bootid=28ea08ff8dad4f3c9b1a1ad8983fabe5;pid=2226;pidfdid=8638;comm=sudo;targetuser=root;type=session\[1m[32m==>[0m[1m no candidate packages found for pruning[0m
-      ]3008;end=d4ccda7645db4af38f7f44013e1ddb6e\
+      ]3008;start=486700f26d0b43d7be43162fc47ae8f5;user=omarchy;hostname=omarchy;machineid=bd8deb402c2545fb9d92cce24c35ea4b;bootid=f09e258012714617954a2db20eb7103f;pid=2529;pidfdid=4934;comm=sudo;targetuser=root;type=session\[1m[32m==>[0m[1m no candidate packages found for pruning[0m
+      ]3008;end=486700f26d0b43d7be43162fc47ae8f5\
       [32mCreate system snapshot[0m
-      ]3008;start=8026207736fd424a83dbabc231a90a15;user=omarchy;hostname=omarchy-srv;machineid=3a653f46bc0d4eafb3022a7ac92c0713;bootid=28ea08ff8dad4f3c9b1a1ad8983fabe5;pid=2259;pidfdid=8652;comm=sudo;targetuser=root;type=session\]3008;end=8026207736fd424a83dbabc231a90a15\]3008;start=570656174ada481caaf33f7d93da049e;user=omarchy;hostname=omarchy-srv;machineid=3a653f46bc0d4eafb3022a7ac92c0713;bootid=28ea08ff8dad4f3c9b1a1ad8983fabe5;pid=2274;pidfdid=4671;comm=sudo;targetuser=root;type=session\]3008;end=570656174ada481caaf33f7d93da049e\Snapshots can be selected during boot.
+      ]3008;start=b620a2d1a4704c69b9ea8df213dc14e3;user=omarchy;hostname=omarchy;machineid=bd8deb402c2545fb9d92cce24c35ea4b;bootid=f09e258012714617954a2db20eb7103f;pid=2563;pidfdid=702;comm=sudo;targetuser=root;type=session\]3008;end=b620a2d1a4704c69b9ea8df213dc14e3\]3008;start=93a4d89597304dd5b1f5bf246a62c2ff;user=omarchy;hostname=omarchy;machineid=bd8deb402c2545fb9d92cce24c35ea4b;bootid=f09e258012714617954a2db20eb7103f;pid=2578;pidfdid=12788;comm=sudo;targetuser=root;type=session\]3008;end=93a4d89597304dd5b1f5bf246a62c2ff\Snapshots can be selected during boot.
       [32m
       Update Arch signing keys[0m
-      <lab-password>
       Keys are correct
       [32m
       Update system packages[0m
-      ]3008;start=9a4165e2d6314b5abddbd5345d401ee3;user=omarchy;hostname=omarchy-srv;machineid=3a653f46bc0d4eafb3022a7ac92c0713;bootid=28ea08ff8dad4f3c9b1a1ad8983fabe5;pid=2542;pidfdid=695;comm=sudo;targetuser=root;type=session\[?25l[1;34m::[0;1m Synchronizing package databases...
+      ]3008;start=e765676c00984a5a91828e0050f73444;user=omarchy;hostname=omarchy;machineid=bd8deb402c2545fb9d92cce24c35ea4b;bootid=f09e258012714617954a2db20eb7103f;pid=2845;pidfdid=5032;comm=sudo;targetuser=root;type=session\[?25l[1;34m::[0;1m Synchronizing package databases...
       [0m core
        extra
        multilib
        omarchy
-      [1F omarchy is up to date[K[1F multilib is up to date[K[1F extra is up to date[K[1F core is up to date[K[4E[1;34m::[0;1m Starting full system upgrade...
+      [3F extra is up to date[K[1F core is up to date[K[2E multilib is up to date[K<lab-password>
+      [1E omarchy is up to date[K[1E[1;34m::[0;1m Starting full system upgrade...
       [0m there is nothing to do
-      [?25h]3008;end=9a4165e2d6314b5abddbd5345d401ee3\[32m
+      [?25h]3008;end=e765676c00984a5a91828e0050f73444\[32m
       Update AUR packages[0m
       /usr/bin/omarchy-update-aur-pkgs: line 8: yay: command not found
       
@@ -215,4 +291,4 @@
       Omarchy shell config not found: /usr/share/omarchy/shell
       rc=0
 
-=== 23 passed, 0 failed ===
+=== 33 passed, 0 failed ===

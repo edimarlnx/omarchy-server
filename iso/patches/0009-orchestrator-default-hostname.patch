@@ -1,0 +1,20 @@
+diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/context.py b/configs/airootfs/usr/share/omarchy-iso/orchestrator/context.py
+index 9b5c50f..630236d 100644
+--- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/context.py
++++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/context.py
+@@ -77,6 +77,15 @@ class InstallContext:
+         arch_configuration = dict(user_configuration)
+         arch_configuration.pop("omarchy_install", None)
+ 
++        # archinstall's ArchConfig defaults hostname to "archlinux" and only
++        # overwrites it when the JSON carries a non-empty value, so an
++        # autoinstall drive that says nothing about the hostname produces a
++        # machine called archlinux. The interactive configurator already
++        # defaults to "omarchy"; this makes the unattended path agree with it.
++        # An explicit hostname in the JSON, including "archlinux", is untouched.
++        if not arch_configuration.get("hostname"):
++            arch_configuration["hostname"] = "omarchy"
++
+         if defer_provisioning:
+             # The userless invariant covers the archinstall config too: a
+             # combined/legacy config could carry account authentication that

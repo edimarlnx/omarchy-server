@@ -19,6 +19,10 @@ run_logged "$OMARCHY_INSTALL/server/sshd-hardening-server.sh"
 # snapper root config + snapper-cleanup.timer + limine-snapper-sync
 run_logged "$OMARCHY_INSTALL/config/snapper.sh"
 
+# The Limine wallpaper onto the ESP, beside the limine.conf the installer
+# already wrote from the profile's template.
+run_logged "$OMARCHY_INSTALL/server/limine-branding-server.sh"
+
 # --- network ------------------------------------------------------------
 # systemd-networkd + systemd-resolved, in place of upstream's
 # hardware/network.sh, which exists to retire exactly that state in favour of

@@ -167,6 +167,62 @@ check "/etc/omarchy-profile is server" \
 check "omarchy-version is 4.0.1-1" \
   'omarchy-version 2>/dev/null' '4\.0\.1-1'
 
+# ── Identity ────────────────────────────────────────────────────────────────
+# The point of these: a headless install should be recognisably Omarchy from
+# the bootloader menu to the shell prompt, with no package added to do it.
+
+# The cidata drive carries no `hostname` key at all, so this is the installer's
+# own default. archinstall's is "archlinux"; the orchestrator patch makes it
+# agree with the interactive configurator instead.
+check "the hostname defaults to omarchy when cidata gives none" \
+  'hostnamectl hostname; [ "$(hostnamectl hostname)" = omarchy ] && echo default-hostname-ok || echo wrong-hostname' \
+  '^default-hostname-ok$'
+
+check "os-release identifies the edition" \
+  'grep -E "^(NAME|PRETTY_NAME|ID|ID_LIKE|ANSI_COLOR|LOGO)=" /etc/os-release' \
+  'PRETTY_NAME="Omarchy Server 4\.0\.1"'
+
+# /etc/issue is what the console shows before anyone logs in. Checked as bytes
+# here; the rendered console is pocs/server-install/reference/console.png.
+check "/etc/issue carries the logo, the version and the machine fields" \
+  'grep -c . /etc/issue; grep -q "Omarchy Server" /etc/issue && grep -qF "S{VERSION_ID}" /etc/issue && grep -q "███" /etc/issue && grep -qP "\x1b\[32m" /etc/issue && echo issue-ok || echo issue-bad' \
+  '^issue-ok$'
+
+# The serial line is 80 columns, so it gets the same fields without the
+# 83-column logo. agetty expands them the same way.
+check "the serial console gets its own logo-free issue" \
+  'cat /etc/issue.serial; grep -q "issue-file /etc/issue.serial" /etc/systemd/system/serial-getty@.service.d/10-omarchy-issue.conf && ! grep -q "███" /etc/issue.serial && echo serial-issue-ok || echo serial-issue-bad' \
+  '^serial-issue-ok$'
+
+check "the VT palette unit ran and left the serial console alone" \
+  'systemctl is-enabled omarchy-tty-palette.service; systemctl is-active omarchy-tty-palette.service; systemctl show -p ExecMainStatus --value omarchy-tty-palette.service; ! grep -v "^#" /usr/bin/omarchy-tty-palette | grep -q ttyS && echo palette-ok || echo palette-bad' \
+  '^palette-ok$'
+
+# The branding has to survive limine-entry-tool and limine-snapper-sync
+# regenerating the entries, which is why it lives in the template the installer
+# copies rather than in an edit of /boot/limine.conf.
+check "/boot/limine.conf is branded, waits 2 s and points at the wallpaper" \
+  '~/.lab-sudo grep -E "^(timeout|interface_branding|wallpaper|wallpaper_style):" /boot/limine.conf' \
+  '^interface_branding: Omarchy Server$'
+
+check "the wallpaper is on the ESP" \
+  '~/.lab-sudo ls -l /boot/limine-wallpaper.png; ~/.lab-sudo file /boot/limine-wallpaper.png 2>/dev/null || ~/.lab-sudo head -c 8 /boot/limine-wallpaper.png | od -c | head -1' \
+  'limine-wallpaper\.png'
+
+# The MOTD: fastfetch renders it when the cli-tools addon is on, and the base
+# renders the same fields without it. This is the base.
+check "the login banner prints the machine identity" \
+  'bash -lc "COLUMNS=120 omarchy-server-motd" | sed "s/\x1b\[[0-9;]*m//g"' \
+  'Omarchy Server 4\.0\.1'
+
+check "the banner is wired into every login shell" \
+  'test -f /etc/profile.d/omarchy-motd.sh && grep -q omarchy-server-motd /etc/profile.d/omarchy-motd.sh && echo motd-wired || echo motd-missing' \
+  '^motd-wired$'
+
+check "fwall is not in the base" \
+  'pacman -Qq fwall 2>/dev/null || echo fwall-absent' \
+  '^fwall-absent$'
+
 # The addon mechanism, end to end: install the docker addon from the ISO's
 # offline mirror and run a container with it. On a VM installed with
 # `mkcidata.sh --addons docker` the packages are already there and this only

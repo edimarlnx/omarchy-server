@@ -39,6 +39,11 @@ systemctl enable systemd-oomd.service
 # cmdline from etc/limine-entry-tool.d/omarchy-defaults.conf.
 systemctl enable serial-getty@ttyS0.service
 
+# Tokyo Night on the virtual consoles, so the machine looks the same after the
+# bootloader hands over as it did in the menu. Oneshot, ordered before getty,
+# skipped where there is no /dev/tty1.
+systemctl enable omarchy-tty-palette.service
+
 # Never block boot on DHCP; see also the networkd mask in network-server.sh.
 systemctl mask NetworkManager-wait-online.service 2>/dev/null || true
 

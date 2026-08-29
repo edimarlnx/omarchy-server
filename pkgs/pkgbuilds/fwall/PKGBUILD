@@ -1,0 +1,90 @@
+# Maintainer: Zodo <edimar@quave.com.br>
+#
+# fwall — a terminal UI for the system firewall, from the tui-tools monorepo
+# (https://github.com/edimarlnx/tui-tools). It reads the live ufw state and
+# previews the exact command line of every change before running it.
+#
+# This is an ADDON package: it is bundled in the ISO's offline mirror and
+# installed by `omarchy-server-addon fwall`, never by the base profile. The
+# server core is what a headless machine needs to boot, update, snapshot, be
+# reached and be firewalled — a TUI over the firewall is a convenience for the
+# machines somebody works on, and convenience is what addons are for.
+
+pkgname=fwall
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Terminal UI for the system firewall (ufw)"
+arch=('x86_64')
+url="https://github.com/edimarlnx/tui-tools"
+license=('MIT')
+# Nothing: CGO_ENABLED=0 makes the binary fully static, and fwall shells out to
+# ufw rather than linking anything. A tool that says "no backend found" is the
+# right behaviour on a machine where ufw was removed.
+depends=()
+optdepends=('ufw: the firewall backend the default configuration drives'
+            'sudo: privilege escalation, unless fwall is started as root')
+makedepends=('git' 'go')
+backup=('etc/fwall/config.toml')
+# The ldflags above already drop the symbol and DWARF tables, so makepkg's
+# debug package would be an empty shell and its strip pass has nothing to do.
+options=('!debug' '!strip')
+
+# Pinned upstream commit, consumed the same way the omarchy-server packages
+# consume theirs: a git+file:// source pointing at a checkout the builder
+# mounts read-only. FWALL_SRC is the mount point — /src/tui-tools for
+# pkgs/build.sh, /omarchy-pkgs/src/tui-tools inside the ISO builder — and
+# FWALL_GIT_URL replaces the whole thing once the repository is public.
+_commit=f512fc449a018b1f997a9ec8a0d533baa96a55a2
+: "${FWALL_GIT_URL:=file://${FWALL_SRC:-/src/tui-tools}}"
+
+source=("tui-tools::git+${FWALL_GIT_URL}#commit=${_commit}")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$srcdir/tui-tools"
+  # Modules are fetched here rather than in build() so the compile step itself
+  # is offline, and go.sum makes the download reproducible.
+  export GOPATH="$srcdir/gopath"
+  go mod download
+}
+
+build() {
+  cd "$srcdir/tui-tools"
+  export GOPATH="$srcdir/gopath"
+  export CGO_ENABLED=0
+  export GOFLAGS="-mod=readonly -modcacherw"
+  # -trimpath strips the build directory out of the binary so two builds of the
+  # same commit produce the same bytes. -s -w drop the symbol and DWARF tables:
+  # this is a TUI, not something anybody profiles on the target.
+  go build -trimpath -ldflags "-s -w -X main.version=${pkgver}" \
+    -o "$srcdir/fwall" ./cmd/fwall
+}
+
+check() {
+  cd "$srcdir/tui-tools"
+  export GOPATH="$srcdir/gopath"
+  export CGO_ENABLED=0
+  export GOFLAGS="-mod=readonly -modcacherw"
+  go test ./...
+}
+
+package() {
+  local src="$srcdir/tui-tools"
+
+  install -Dm755 "$srcdir/fwall" "$pkgdir/usr/bin/fwall"
+
+  # The machine-wide configuration fwall reads first (internal/config:
+  # /etc/fwall/config.toml, then ~/.config/fwall/config.toml). The shipped
+  # example says backend = "auto"; this profile pins it to ufw, which is the
+  # firewall install/server/firewall-server.sh configures and the only one the
+  # server package list can produce.
+  sed -e 's/^backend = "auto"$/backend = "ufw"/' \
+    "$src/examples/config.toml" >"$srcdir/config.toml"
+  grep -q '^backend = "ufw"$' "$srcdir/config.toml" ||
+    { echo "config.toml: backend was not pinned to ufw" >&2; return 1; }
+  install -Dm644 "$srcdir/config.toml" "$pkgdir/etc/fwall/config.toml"
+
+  install -Dm644 "$src/cmd/fwall/README.md" \
+    "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 "$src/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

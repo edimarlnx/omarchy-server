@@ -1,7 +1,8 @@
 # Packaging the server profile
 
-The three packages (`omarchy-server-keyring`, `omarchy-server-settings`,
-`omarchy-server`) are built, signed and tested in a clean Arch container.
+The three profile packages (`omarchy-server-keyring`, `omarchy-server-settings`,
+`omarchy-server`) plus the addon packages built from source (`fwall`) are built,
+signed and tested in a clean Arch container.
 
 ---
 
@@ -106,9 +107,10 @@ revokes what is listed in `<name>-revoked`. All three files must exist.
 
 ---
 
-## 2. The three server packages
+## 2. The packages
 
-PKGBUILDs in `pkgs/pkgbuilds/`. Common source: the upstream checkout
+PKGBUILDs in `pkgs/pkgbuilds/`. Three of them build the profile; `fwall` (§2.4)
+is an addon package built from its own upstream. Common source: the upstream checkout
 **pinned** at commit `468b511249b1a341311c46f5a7cf81aa5bc5af92`, consumed as
 `git+file:///src/omarchy#commit=...` (read-only bind mount in the container),
 plus `profile/server/overlay/` packed as a source tarball by `build.sh`. Once a
@@ -127,7 +129,7 @@ PKGBUILD directory. Current fingerprint:
 replace the three files, bump `pkgver` (a date) and rebuild. Nothing else in
 the repository references the key material.
 
-### 2.2 `omarchy-server-settings` (52 KB compressed, 124 KB installed)
+### 2.2 `omarchy-server-settings` (65 KB compressed, 145 KB installed)
 
 `provides=(omarchy-settings=4.0.1)`, `conflicts=(omarchy-settings omarchy-settings-dev)`,
 `depends=(bash curl)`; `plymouth` and `hicolor-icon-theme` are gone, and `gum`
@@ -152,6 +154,9 @@ why in its own header:
 | `etc/fastfetch/config.jsonc` | MOTD without gpu/display/wm/de/terminal/theme; with shell and local ip |
 | `etc/profile.d/omarchy-path.sh` | explicit `OMARCHY_PATH` export |
 | `etc/omarchy-profile` | `server` marker read by `omarchy-apply-system` |
+| `etc/profile.d/omarchy-motd.sh` | prints the login banner once per login shell |
+| `etc/issue.net` | two plain lines, for an admin who wants an ssh `Banner` |
+| `etc/systemd/system/serial-getty@.service.d/10-omarchy-issue.conf` | points agetty at `/etc/issue.serial` on the serial line |
 
 The three Docker configuration files upstream installs into `/etc`
 (`docker/daemon.json`, `systemd/resolved.conf.d/20-docker-dns.conf`,
@@ -162,8 +167,8 @@ makes systemd-resolved open a second DNS listener on a bridge address that does
 not exist. `install/server/addons/docker.sh` copies all three into `/etc` when
 the addon goes on.
 
-Also generated in `package()`: `etc-overrides/os-release` with
-`ID=omarchy-server`, `ID_LIKE="omarchy arch"`.
+Also generated in `package()`: `etc-overrides/os-release` and
+`etc-overrides/issue` (see §2.5), plus `etc/issue.serial`.
 
 Dropped entirely: `default/{hypr,plymouth,sddm,uwsm,themed,fonts,chromium,
 firefox,audio,wireplumber,applications,omarchy,tensaku,voxtype,xcompose,
@@ -181,7 +186,7 @@ alacritty,foot,ghostty,fontconfig}`, the 11 user units, the 3
 > network panel toggle; on a server it is unused surface. Trivial to bring
 > back if the ISO's `configure_dns_resolver` phase turns out to need it.
 
-### 2.3 `omarchy-server` (435 KB compressed, 1.24 MB installed)
+### 2.3 `omarchy-server` (448 KB compressed, 1.21 MB installed)
 
 `provides=(omarchy)`, `conflicts=(omarchy omarchy-dev)`,
 `depends=(omarchy-server-keyring omarchy-server-settings=4.0.1 limine
@@ -209,10 +214,18 @@ either: the only shipped consumer is `omarchy-debug`, which belongs to the
 desktop settings package. The lab scripts that used it to add up installed
 sizes now read them out of `pacman -Qi`.
 
-Ships: `bin/` (440), `install/` (including `install/server/`), `migrations/`
-(92), `version` (rewritten with `pkgver`, unlike upstream), 440 symlinks in
-`/usr/bin`, 92 migration stubs in `/etc/skel`, and only
-`00-omarchy-update-guard.hook`.
+Ships: `bin/` (442), `install/` (including `install/server/`), `migrations/`
+(92), `version` (rewritten with `pkgver`, unlike upstream), 442 symlinks in
+`/usr/bin`, 92 migration stubs in `/etc/skel`, only
+`00-omarchy-update-guard.hook`, and one system unit,
+`/usr/lib/systemd/system/omarchy-tty-palette.service`.
+
+Three commands are this profile's own, added to `bin/` before the `/usr/bin`
+symlink loop so they are linked like any other: `omarchy-server-addon`,
+`omarchy-tty-palette` and `omarchy-server-motd` (all three in §2.5). The unit
+lives in this package rather than in the settings one because the command it
+runs is here, and a unit whose `ExecStart` belongs to another package is a
+dependency waiting to be forgotten.
 
 Not shipped: `themes/` (120 MB), `shell/` (Quickshell), `applications/`,
 `manual/`, `docs/`, `plans/`, `test/`, `agents/` (the relevant
@@ -278,9 +291,15 @@ server.
   inside the ISO's install chroot (`arch-chroot` bind-mounts the live
   environment's file so the chroot has DNS); the ISO writes the symlink from
   outside in its `configure_dns_resolver` phase.
+- `limine-branding-server.sh`: copies the Limine wallpaper from
+  `default/limine/limine-wallpaper.png` to the ESP, whose mount point it reads
+  out of `ESP_PATH` in `/etc/default/limine`. Best-effort: Limine skips a
+  wallpaper it cannot read instead of panicking, so a machine whose ESP is full
+  boots without the image rather than not at all.
 - `enable-services-server.sh`: `set-default multi-user.target`, enables
   `sshd`, `systemd-networkd`, `systemd-resolved`, `systemd-timesyncd`,
-  `linux-modules-cleanup`, `systemd-oomd`, `serial-getty@ttyS0`; masks the
+  `linux-modules-cleanup`, `systemd-oomd`, `serial-getty@ttyS0`,
+  `omarchy-tty-palette`; masks the
   plymouth, sddm, cups, avahi, bluetooth and power-profiles units and disables
   `snapper-timeline.timer`. No `NetworkManager` and no `docker.socket` — the
   `docker` addon enables the latter.
@@ -326,17 +345,203 @@ an unrefreshed system is the partial upgrade Arch warns about.
 | `dev` | base-devel, git, yay, mise-bin | — |
 | `editor` | omarchy-nvim | seeds `~/.config/nvim` for existing users |
 | `net-tools` | inotify-tools, rsync, socat, unzip, whois | — |
+| `fwall` | fwall | — |
 | `vm` | qemu-guest-agent | enables `qemu-guest-agent.service` |
+
+`fwall` is the one addon whose package is not in any public repository: it is
+built from source by `pkgs/build.sh` and by the ISO builder, and reaches a
+machine either through the ISO's offline mirror (`mkcidata.sh --addons fwall`,
+or `omarchy-server-addon fwall` during the install) or from the
+`[omarchy-server]` repository once that is published. On an installed machine
+with only the Arch and `[omarchy]` mirrors configured, `omarchy-server-addon
+fwall` has nowhere to fetch it from and says so.
+
+---
+
+### 2.4 `fwall` (1.5 MB compressed, 3.7 MB installed)
+
+A terminal UI for the firewall this profile already configures, from the
+`tui-tools` monorepo (`github.com/edimarlnx/tui-tools`). It reads the live ufw
+state and previews the exact command line of every change before running it.
+Not in the core: a headless machine does not need a TUI to boot, and the core
+list is what it needs to boot.
+
+`pkgs/pkgbuilds/fwall/PKGBUILD` follows the same contract as the others — a
+pinned commit consumed through `git+file://`, with the checkout's location
+supplied by an environment variable (`FWALL_SRC`, `OMARCHY_SRC`'s counterpart;
+`FWALL_GIT_URL` replaces the whole URL once the repository is public).
+
+| Aspect | Choice |
+|---|---|
+| Build | `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$pkgver"` — one static binary, same bytes from the same commit |
+| Modules | `go mod download` in `prepare()`, so `build()` and `check()` are offline; `go.sum` pins what is fetched |
+| `depends` | none: the binary is static and shells out to `ufw` rather than linking anything |
+| `optdepends` | `ufw` (the backend), `sudo` (unless started as root) |
+| `options` | `!debug !strip` — the ldflags already dropped the symbol and DWARF tables |
+| Files | `/usr/bin/fwall`, `/etc/fwall/config.toml` (`backup=`), the README and the MIT licence |
+| Tests | `check()` runs `go test ./...`; the build fails if they do |
+
+`/etc/fwall/config.toml` is the shipped `examples/config.toml` with
+`backend = "auto"` rewritten to `backend = "ufw"`, and `package()` fails if that
+rewrite did not take. `ufw` is the firewall `install/server/firewall-server.sh`
+configures and the only one the server package list can produce, so leaving the
+autodetection on would only add a way for it to guess wrong.
+
+Both builders need a Go toolchain. Rather than adding one unconditionally,
+`pkgs/build.sh` installs `go` only when `fwall` is among the packages of that
+run, and the ISO builder reads each PKGBUILD's `makedepends` out of
+`makepkg --printsrcinfo` and installs exactly those — a general mechanism, since
+`makepkg --nodeps` (deliberate, see §3) otherwise installs nothing at all.
+
+---
+
+### 2.5 Identity, at zero new packages
+
+A stock Arch install with `omarchy-server` on it looks like a stock Arch
+install: Limine's default menu, `Arch Linux \r (\l)` on the console, no MOTD.
+The owner's constraint was that fixing that must not add a package, because a
+package is attack surface. Everything below is configuration, one 30-line
+command, one 40-line renderer and a 17 KB image.
+
+| Where | What | Shipped by |
+|---|---|---|
+| Bootloader | `interface_branding: Omarchy Server`, `timeout: 2`, Tokyo Night palette, `wallpaper: boot():/limine-wallpaper.png` | `default/limine/limine.conf` + `limine-branding-server.sh` |
+| Console, before login | `/etc/issue`: the logo in Tokyo Night green, the version, hostname, tty, IPv4 | `etc-overrides/issue` (scriptlet) |
+| Serial console | the same fields without the logo | `etc/issue.serial` + a `serial-getty@.service.d` drop-in |
+| Every VT | the Tokyo Night palette, applied before getty | `omarchy-tty-palette` + its oneshot unit |
+| After login | the MOTD | `etc/profile.d/omarchy-motd.sh` → `omarchy-server-motd` |
+| Everywhere | `NAME`, `PRETTY_NAME`, `ID`, `ANSI_COLOR`, `LOGO` | `etc-overrides/os-release` |
+
+### The bootloader
+
+`/boot/limine.conf` is a copy of `default/limine/limine.conf`: the ISO
+installer writes it (`_write_limine_defaults` reads the template out of the
+target) and `omarchy-refresh-limine` rewrites it from the same file.
+`limine-entry-tool` and `limine-snapper-sync` only add and remove entries below
+it, so everything above the first entry survives every regeneration — which is
+why the branding belongs in the template and not in an edit of the ESP's copy.
+The acceptance list checks that after `limine-snapper-sync` has run.
+
+`timeout` went from 0 to 2: at 0 the menu is only reachable by holding a key
+during the loader's startup, which is not a thing anyone does on a machine they
+are not standing in front of. Two seconds costs exactly two seconds of boot
+(measured: loader 0.67 s → 2.6-2.8 s, total 4.8 → 6.7-7.0 s).
+
+Two things about the wallpaper were found by looking at the screen rather than
+by reading the documentation, and both fail **silently**:
+
+1. **`term_background` is `TTRRGGBB`, and a six-digit value means opaque.**
+   `term_background: 1a1b26` paints an opaque panel over the whole terminal
+   area and the wallpaper never appears, with no error anywhere. `80000000`
+   lets it through at half strength, which keeps the menu text as legible as it
+   is on a flat background.
+2. **`wallpaper_style: centered` crops an image larger than the framebuffer.**
+   The artwork is 1920x1080 and a VM console is commonly 1280x800. `stretched`
+   (the default) is right for a wordmark on a flat field.
+
+The image itself is an 8-bit truecolor PNG. Limine reads BMP, PNG, JPEG and
+QOI, and skips a wallpaper it cannot read instead of panicking — which is what
+makes `limine-branding-server.sh` safe to be best-effort, and also what makes
+every mistake above look identical from the outside.
+
+### The console
+
+`/etc/issue` is owned by the `filesystem` package, so it travels through
+`etc-overrides/` and the install scriptlet, the same route `os-release` takes.
+It is generated in `package()` from the upstream `logo.txt`, with **literal ESC
+bytes**: agetty copies an issue file out verbatim except for its own backslash
+sequences, and `\e` is not one of them. `\S{VERSION_ID}`, `\n`, `\l` and `\4`
+are, and agetty expands them into the version, the hostname, the tty and the
+first IPv4 address.
+
+The logo is 81 columns, 83 with the two-column indent. That is right for a
+video console (an installed machine comes up well past 128 columns) and wrong
+for a serial line, where 80 columns is the contract and every row of the logo
+would wrap by one character. So the serial console gets `/etc/issue.serial` —
+the same fields, no art — through a `serial-getty@.service.d` drop-in that adds
+`--issue-file` to agetty's command line. Evidence for both:
+`pocs/server-install/reference/console.png` and `.../serial-issue.txt`.
+
+`/etc/issue.net` ships as two plain lines with no escapes, and nothing enables
+it: an ssh `Banner` is an owner's decision, not a default. Adding
+`Banner /etc/issue.net` to `/etc/ssh/sshd_config.d/` is the whole of it.
+
+### The palette
+
+`omarchy-tty-palette` writes the sixteen `\e]P<n><rrggbb>` sequences the Linux
+console uses to redefine its colour table, to `/dev/tty1` through `/dev/tty6`.
+The values are upstream's, lifted from `omarchy-provision-owner`'s
+`set_tokyo_night_colors`, which is what the desktop's first-boot form uses; the
+palette matches the bootloader's `term_palette`.
+
+`omarchy-tty-palette.service` is a oneshot, `After=systemd-vconsole-setup` so
+its font and keymap work is not undone, `Before=getty.target` so the login
+banner is drawn in the palette rather than repainted a moment later, and
+`ConditionPathExists=/dev/tty1` so a machine with no video console skips it
+instead of failing. It deliberately never touches `/dev/ttyS0`: on a serial
+line the terminal at the other end owns its own colours, and the escape would
+be printed as garbage into whatever is logging the port.
+
+### The MOTD
+
+Upstream wires no MOTD at all — on the desktop the identity comes from the
+session, and fastfetch is something the user runs by hand. `/etc/profile.d/
+omarchy-motd.sh` runs `omarchy-server-motd` once per interactive login shell
+(guarded on `$-`, on `[ -t 1 ]` and on a marker variable, so `sudo -i` inside a
+login shell does not print it twice, and `ssh host command`, scp and sftp never
+reach it).
+
+`omarchy-server-motd` execs `fastfetch` when it is installed — that is what
+`/etc/fastfetch/config.jsonc` is written for, and the `cli-tools` addon brings
+it in. fastfetch is **not** in the core, and a base install that shows nothing
+at login is exactly the problem this is here to fix, so the same fields are
+rendered from what `base` already has: bash, coreutils, procps-ng, iproute2 and
+pacman. OS (`PRETTY_NAME`), host, kernel, uptime, packages, pending updates,
+memory and the first global IPv4 address.
+
+Pending updates come from `pacman -Qu`, a query against the sync database
+already on disk. `checkupdates` would be more current and would download a
+database to say so, which is not something to do on every login of a machine
+that may be on a metered link. The fastfetch config asks the same question the
+same way.
+
+The terminal width comes from `stty size </dev/tty`, not from `$COLUMNS` or
+`tput cols`: this runs out of `/etc/profile`, before bash has necessarily set
+the variable, and on a fresh VT `$TERM` may not be set either. Below 83 columns
+the logo is dropped for the wordmark alone.
+
+### `os-release`
+
+```
+NAME="Omarchy Server"
+PRETTY_NAME="Omarchy Server 4.0.1"
+ID=omarchy-server
+ID_LIKE="omarchy arch"
+ANSI_COLOR="0;32"
+LOGO=omarchy
+```
+
+`PRETTY_NAME` carries the version because it is what every tool that greets a
+human prints: the MOTD, `hostnamectl`, ssh banners, monitoring agents.
+`ANSI_COLOR` is the plain `0;32` rather than a 24-bit green, because it is read
+by consoles that may have no truecolor — and slot 32 is the one
+`omarchy-tty-palette` paints Tokyo Night green into anyway.
 
 ---
 
 ## 3. Build and test
 
 ```bash
-./pkgs/build.sh                 # all three packages
+./pkgs/build.sh                 # every package
 ./pkgs/build.sh omarchy-server  # just one
 ./pkgs/test.sh                  # install in a clean Arch container and verify
 ```
+
+`fwall` needs a second checkout, `../tui-tools` by default (`TUI_TOOLS_DIR`
+moves it). It is bind mounted read-only at `/src/tui-tools`, the way
+`upstream/omarchy` is mounted at `/src/omarchy`, and reached through
+`FWALL_SRC`. Building only the Omarchy packages does not need it and does not
+install a Go toolchain.
 
 `build.sh` runs everything in an `archlinux:latest` container as user
 `builder` (the same design as a future GitHub Actions workflow), with
@@ -366,13 +571,14 @@ equivalent step is the ISO's offline mirror, which pacman reads with
 
 ### Results (2026-08-29)
 
-42 assertions, all PASS. Measured in the container:
+61 assertions, all PASS. Measured in the container:
 
 | Item | Value |
 |---|---|
-| `omarchy-server` | 442 KB compressed / **1.25 MiB** installed (upstream `omarchy`: 120 MB / 126 MB) |
-| `omarchy-server-settings` | 52 KB / **124 KiB** (upstream: 724 KB / 1.3 MB) |
+| `omarchy-server` | 448 KB compressed / **1.21 MiB** installed (upstream `omarchy`: 120 MB / 126 MB) |
+| `omarchy-server-settings` | 65 KB / **145 KiB** (upstream: 724 KB / 1.3 MB) |
 | `omarchy-server-keyring` | 3.7 KB / 295 B |
+| `fwall` (addon, not installed by the base) | 1.5 MB / **3.7 MiB** |
 | Dependency closure | **193 packages**, **739 MiB** installed |
 | Graphical packages present | none (`hyprland sddm pipewire quickshell plymouth wireplumber uwsm gnome-keyring xdg-desktop-portal-hyprland`) |
 
@@ -389,6 +595,16 @@ docker, no tailscale, no NetworkManager, no compiler, the Docker drop-ins under
 `/usr/share` rather than `/etc` — that the sshd hardening and the `ufw limit`
 rule are in the shipped scripts, and that every addon list and
 `omarchy-server-addon` itself are packaged and behave.
+
+An `== identity ==` block covers §2.5 as bytes on disk: the `os-release` values,
+the branding and `wallpaper` lines in `limine.conf`, the wallpaper file and the
+install leaf that copies it, `/etc/issue` (logo, `\S{VERSION_ID}`, an ESC byte)
+against `/etc/issue.serial` (no logo) and the drop-in that points agetty at it,
+`/etc/issue.net` carrying no escapes, the palette unit and command with the
+serial console explicitly untouched, and the login banner both wired and
+rendering. An `== fwall ==` block installs the addon package in the container
+and checks the static binary, `--version`, the ufw-pinned configuration and the
+licence.
 
 What **cannot** be verified in a container and is checked in the VM install:
 `systemctl enable/mask`, `ufw`, `ufw-docker install`, `mkinitcpio`/UKI,

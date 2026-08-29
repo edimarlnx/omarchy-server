@@ -1,4 +1,4 @@
-=== Attack surface — VM 'srv' — 2026-08-28T23:05:04-03:00 ===
+=== Attack surface — VM 'srv' — 2026-08-29T01:03:30-03:00 ===
 
 === packages ===
 installed:  220
@@ -20,10 +20,11 @@ linux-firmware (MiB): 408
       39.5 MiB  systemd
 
 === enabled units ===
-count: 20
+count: 21
   getty@.service
   limine-snapper-sync.service
   linux-modules-cleanup.service
+  omarchy-tty-palette.service
   sshd.service
   systemd-network-generator.service
   systemd-networkd.service
@@ -60,12 +61,12 @@ count: 13
 
 === listening sockets ===
 Netid State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
-udp   UNCONN 0      0         127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=413,fd=18))
-udp   UNCONN 0      0      127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=413,fd=16))
-tcp   LISTEN 0      4096      127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=413,fd=19))
-tcp   LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=413,fd=17))
-tcp   LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=541,fd=6))
-tcp   LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=541,fd=7))
+udp   UNCONN 0      0         127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=18))
+udp   UNCONN 0      0      127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=16))
+tcp   LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=542,fd=6))
+tcp   LISTEN 0      4096      127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=19))
+tcp   LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=414,fd=17))
+tcp   LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=542,fd=7))
 listening tcp+udp: 6
 
 === setuid / setgid binaries ===

@@ -1,0 +1,9 @@
+The banner agetty writes to the serial console, byte for byte from the VM's
+serial line (pocs/lab/out-server/vm/srv/serial.log). Escape sequences are
+shown as ^[ ; \S{VERSION_ID}, \n, \l and \4 have already been expanded by
+agetty into the version, the hostname, the tty and the IPv4 address.
+
+^[[1;32mOmarchy Server^[[0m ^[[32m4.0.1^[[0m
+^[[2mhost^[[0m omarchy   ^[[2mtty^[[0m ttyS0   ^[[2mipv4^[[0m 10.0.2.15
+
+omarchy login:

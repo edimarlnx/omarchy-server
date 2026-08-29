@@ -1,0 +1,54 @@
+diff --git a/builder/build-omarchy-packages.sh b/builder/build-omarchy-packages.sh
+index acbcd0d..22e572f 100755
+--- a/builder/build-omarchy-packages.sh
++++ b/builder/build-omarchy-packages.sh
+@@ -38,6 +38,23 @@ pacman -Sy --noconfirm
+ git config --system --add safe.directory /omarchy-source
+ git config --system --add safe.directory /omarchy-pkgs
+ 
++# Not every package is built from the Omarchy checkout. A profile may carry
++# addon packages with their own upstream, cloned into the pkgs checkout at
++# /omarchy-pkgs/src/<name> by the caller. Each gets its own safe.directory (the
++# setting matches an exact path, not a prefix) and its own *_SRC variable, the
++# same contract OMARCHY_SRC gives the Omarchy PKGBUILDs.
++extra_source_env=()
++if [[ -d /omarchy-pkgs/src ]]; then
++  for extra_source_dir in /omarchy-pkgs/src/*; do
++    [[ -d $extra_source_dir ]] || continue
++    git config --system --add safe.directory "$extra_source_dir"
++  done
++fi
++# One line per addon package that builds from its own tree.
++if [[ -d /omarchy-pkgs/src/tui-tools ]]; then
++  extra_source_env+=("FWALL_SRC=/omarchy-pkgs/src/tui-tools")
++fi
++
+ # Unset-only defaults (`=`, not `:=`): build-iso.sh exports all four, and a
+ # profile may deliberately export an EMPTY name to say "this profile ships no
+ # such package". `:=` would quietly resurrect the default for it.
+@@ -73,10 +90,25 @@ for pkg in "${packages[@]}"; do
+   cp -a "/omarchy-pkgs/pkgbuilds/$pkg" "$pkg_work"
+   chown -R builder:builder "$pkg_work"
+ 
++  # --nodeps is deliberate (the Omarchy packages depend on each other and on
++  # packages that only exist in the [omarchy] repo), so makepkg installs
++  # nothing at all -- including makedepends a package genuinely needs to
++  # compile. Read them out of the PKGBUILD and install those, and only those.
++  makedeps=$(
++    su builder -c "cd '$pkg_work' && makepkg --printsrcinfo" |
++      sed -n 's/^[[:space:]]*makedepends = //p'
++  )
++  if [[ -n $makedeps ]]; then
++    echo "Installing makedepends for $pkg: $makedeps"
++    # shellcheck disable=SC2086
++    pacman -S --needed --noconfirm $makedeps
++  fi
++
+   su builder -c "
+     cd '$pkg_work' &&
+     PKGDEST='$work_dir' \
+     OMARCHY_SRC=/omarchy-source \
++    ${extra_source_env[*]} \
+     makepkg --noconfirm --skippgpcheck --skipchecksums --nodeps -f
+   "
+ done

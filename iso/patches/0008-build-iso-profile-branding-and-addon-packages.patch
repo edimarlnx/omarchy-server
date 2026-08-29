@@ -1,0 +1,51 @@
+diff --git a/builder/build-iso.sh b/builder/build-iso.sh
+index c7ad72b..1945986 100755
+--- a/builder/build-iso.sh
++++ b/builder/build-iso.sh
+@@ -58,9 +58,14 @@ case "$OMARCHY_PROFILE" in
+     OMARCHY_SETTINGS_PACKAGE=omarchy-server-settings
+     # No editor package: `nano` comes from the profile's archinstall.packages.
+     OMARCHY_NVIM_PACKAGE=""
+-    # Signs the future [omarchy-server] repository; a hard dependency of the
+-    # runtime package, so the offline mirror has to carry it.
+-    OMARCHY_EXTRA_PACKAGES="omarchy-server-keyring"
++    # Packages built from the local checkouts that are not the runtime or the
++    # settings. omarchy-server-keyring signs the future [omarchy-server]
++    # repository and is a hard dependency of the runtime, so the offline mirror
++    # has to carry it. fwall is an addon package built from its own source tree
++    # (see EXTRA_SOURCE_DIRS in build-omarchy-packages.sh): it is bundled in
++    # the mirror and installed only by `omarchy-server-addon fwall`, never by
++    # the base profile.
++    OMARCHY_EXTRA_PACKAGES="omarchy-server-keyring fwall"
+     ;;
+   *)
+     echo "ERROR: unknown profile: $OMARCHY_PROFILE" >&2
+@@ -120,6 +125,28 @@ rm -rf "$build_cache_dir/airootfs/etc/xdg/reflector"
+ 
+ # Bring in our archiso profile additions.
+ cp -r /configs/* "$build_cache_dir/"
++
++# ─────────────────────────────────────────────────────────────────────────────
++# Profile branding on the live medium. The boot menus and the ISO metadata all
++# say "Omarchy"; on a profile ISO they should say which edition is about to be
++# installed, because that choice is made when the medium is written and there
++# is nothing on the screen afterwards that says so.
++#
++# This is a rename of the menu labels only. The entry ids, the kernel command
++# lines and the installer itself are untouched: an ISO that boots differently
++# from the desktop one is a different problem from an ISO that is labelled
++# differently.
++# ─────────────────────────────────────────────────────────────────────────────
++if [[ $OMARCHY_PROFILE != "desktop" ]]; then
++  profile_title="Omarchy ${OMARCHY_PROFILE^}"
++  for menu_config in "$build_cache_dir/grub/grub.cfg" "$build_cache_dir/grub/loopback.cfg" \
++    "$build_cache_dir/syslinux/"*.cfg; do
++    [[ -f $menu_config ]] || continue
++    sed -i "s/\bOmarchy\b/$profile_title/g" "$menu_config"
++  done
++  sed -i -E "s/^iso_application=.*/iso_application=\"$profile_title Installer\"/" \
++    "$build_cache_dir/profiledef.sh"
++fi
+ mkdir -p "$build_cache_dir/airootfs/usr/share/omarchy-iso"
+ echo "$OMARCHY_MIRROR" > "$build_cache_dir/airootfs/root/omarchy_mirror"
+ echo "$OMARCHY_ISO_REF" > "$build_cache_dir/airootfs/root/omarchy_iso_ref"

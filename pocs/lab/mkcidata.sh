@@ -12,7 +12,11 @@
 set -euo pipefail
 
 profile=desktop
-hostname=omarchy-ref
+# Empty on purpose: the JSON key is then omitted and the installer picks the
+# default. archinstall's own fallback is "archlinux"; the orchestrator patch
+# turns that into "omarchy", which is what the interactive configurator offers
+# too. Leaving it unset here is what exercises that path.
+hostname=""
 username=omarchy
 disk=/dev/vda
 disk_size_gb=40
@@ -53,6 +57,14 @@ if [[ ! -f $password_file ]]; then
 fi
 password=$(<"$password_file")
 password_hash=$(openssl passwd -6 "$password")
+
+# An omitted key, not an empty string: archinstall only overrides its default
+# when the value is non-empty, and an explicit "" would read the same as absent
+# to it but not to a human reading the file.
+hostname_field=""
+if [[ -n $hostname ]]; then
+  hostname_field="\"hostname\": \"$hostname\","
+fi
 
 # ---- disk layout (same arithmetic as the configurator) --------------------
 mib=$((1024 * 1024))
@@ -149,7 +161,7 @@ cat >"$dir/user_configuration.json" <<EOF
             }
         ]
     },
-    "hostname": "$hostname",
+    $hostname_field
     "kernels": [ "linux" ],
     "network_config": { "type": "iso" },
     "ntp": true,
@@ -209,5 +221,5 @@ done
 jq . "$dir/user_configuration.json" >/dev/null # validate
 
 xorriso -as mkisofs -quiet -V cidata -J -r -o "$out/cidata.iso" "$dir" 2>/dev/null
-echo "cidata: $out/cidata.iso (profile=$profile host=$hostname user=$username disk=$disk ${disk_size_gb}G addons=${addons:-none})"
+echo "cidata: $out/cidata.iso (profile=$profile host=${hostname:-<installer default>} user=$username disk=$disk ${disk_size_gb}G addons=${addons:-none})"
 echo "password: $password_file"

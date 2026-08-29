@@ -1,28 +1,28 @@
-Startup finished in 584ms (firmware) + 2.027s (loader) + 944ms (kernel) + 3.081s (userspace) = 6.638s 
-multi-user.target reached after 3.077s in userspace.
+Startup finished in 573ms (firmware) + 2.709s (loader) + 854ms (kernel) + 2.880s (userspace) = 7.018s 
+multi-user.target reached after 2.876s in userspace.
 
-1.197s dev-vda2.device
-1.025s systemd-tmpfiles-setup-dev-early.service
-1.005s systemd-userdbd.service
- 243ms sshdgenkeys.service
- 160ms ldconfig.service
- 136ms ufw.service
-  93ms user@1000.service
-  84ms systemd-networkd.service
-  50ms systemd-vconsole-setup.service
-  47ms systemd-udev-trigger.service
-  35ms systemd-remount-fs.service
-  34ms dev-zram0.swap
-  34ms systemd-tmpfiles-setup.service
-  31ms systemd-journal-flush.service
-  26ms systemd-resolved.service
+1.174s dev-vda2.device
+1.018s systemd-tmpfiles-setup-dev-early.service
+ 998ms systemd-userdbd.service
+ 129ms ldconfig.service
+ 121ms ufw.service
+ 120ms sshdgenkeys.service
+  77ms systemd-networkd.service
+  57ms user@1000.service
+  44ms systemd-udev-trigger.service
+  38ms systemd-vconsole-setup.service
+  37ms systemd-remount-fs.service
+  32ms systemd-boot-random-seed.service
+  29ms dev-zram0.swap
+  27ms systemd-tmpfiles-setup.service
+  26ms systemd-logind.service
   25ms user-runtime-dir@1000.service
-  22ms systemd-boot-random-seed.service
-  21ms systemd-oomd.service
-  20ms boot.mount
-  20ms systemd-sysusers.service
-  20ms systemd-logind.service
-  20ms systemd-journald.service
-  20ms systemd-journal-catalog-update.service
-  19ms systemd-udevd.service
-  18ms systemd-zram-setup@zram0.service
+  25ms systemd-resolved.service
+  25ms systemd-oomd.service
+  25ms systemd-journal-flush.service
+  23ms systemd-journald.service
+  22ms systemd-udevd.service
+  17ms systemd-journal-catalog-update.service
+  17ms systemd-timesyncd.service
+  17ms systemd-sysusers.service
+  16ms sys-kernel-config.mount

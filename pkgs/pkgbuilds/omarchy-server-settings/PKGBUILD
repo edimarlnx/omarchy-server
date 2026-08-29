@@ -55,6 +55,9 @@ backup=('etc/fastfetch/config.jsonc'
         'etc/systemd/system/user@.service.d/10-faster-shutdown.conf'
         'etc/systemd/system/system.slice.d/10-oomd.conf'
         'etc/systemd/oomd.conf.d/10-omarchy.conf'
+        'etc/systemd/system/serial-getty@.service.d/10-omarchy-issue.conf'
+        'etc/issue.net'
+        'etc/issue.serial'
         'etc/omarchy-profile')
 
 package() {
@@ -85,9 +88,14 @@ package() {
   install -Dm644 "$src/default/libalpm/hooks/00-omarchy-update-guard.hook" \
     "$share/default/libalpm/hooks/00-omarchy-update-guard.hook"
 
-  # limine: upstream default.conf, server limine.conf (timeout 0, branding).
+  # limine: upstream default.conf, server limine.conf (timeout 2, branding,
+  # wallpaper). The wallpaper itself travels with the package and is copied to
+  # the ESP by install/server/limine-branding-server.sh, because the ESP is a
+  # FAT volume nothing here can own.
   install -Dm644 "$src/default/limine/default.conf" "$share/default/limine/default.conf"
   install -Dm644 "$overlay/default/limine/limine.conf" "$share/default/limine/limine.conf"
+  install -Dm644 "$srcdir/branding/limine-wallpaper.png" \
+    "$share/default/limine/limine-wallpaper.png"
 
   # systemd: only the two faster-shutdown drop-ins and the zram config.
   # The eight user units and the three system-sleep hooks are session and
@@ -149,15 +157,20 @@ package() {
   install -Dm644 "$overlay/etc-overrides/nsswitch.conf" \
     "$share/etc-overrides/nsswitch.conf"
   install -Dm644 "$src/default/bashrc" "$share/etc-overrides/dot.bashrc"
+  # PRETTY_NAME carries the version because it is what every tool that greets a
+  # human prints: the fastfetch MOTD, `hostnamectl`, ssh banners, monitoring
+  # agents. ANSI_COLOR is plain "0;32" rather than a 24-bit green: it is read
+  # by consoles that may have no truecolor, and 32 is the palette slot
+  # omarchy-tty-palette paints Tokyo Night green into anyway.
   cat >"$share/etc-overrides/os-release" <<EOF
 NAME="Omarchy Server"
-PRETTY_NAME="Omarchy Server"
+PRETTY_NAME="Omarchy Server ${pkgver}"
 ID=omarchy-server
 ID_LIKE="omarchy arch"
 BUILD_ID="${pkgver}"
 VERSION_ID="${pkgver}"
-ANSI_COLOR="38;2;158;206;106"
-HOME_URL="https://omarchy.org/"
+ANSI_COLOR="0;32"
+HOME_URL="https://omarchy.org"
 DOCUMENTATION_URL="https://learn.omacom.io/2/the-omarchy-manual"
 SUPPORT_URL="https://discord.gg/tXFUdasqhY"
 BUG_REPORT_URL="https://github.com/basecamp/omarchy/issues"
@@ -165,12 +178,52 @@ LOGO=omarchy
 EOF
   chmod 0644 "$share/etc-overrides/os-release"
 
+  # /etc/issue: what the console shows before anybody logs in, and the only
+  # place the edition can identify itself between the bootloader and the login
+  # prompt. Owned by the `filesystem` package, so it travels through
+  # etc-overrides like os-release does.
+  #
+  # The colour escapes are literal ESC bytes. agetty copies an issue file out
+  # verbatim except for its own backslash sequences, and `\e` is not one of
+  # them; `\n` (hostname), `\l` (tty) and `\4` (first IPv4 address) are, and so
+  # is `\S{VERSION_ID}`, which agetty reads from /etc/os-release.
+  local esc=$'\033'
+  local green="${esc}[32m" bold="${esc}[1;32m" dim="${esc}[2m" reset="${esc}[0m"
+  # The logo is indented two columns so it lines up with the fields under it
+  # and does not sit flush against the left edge of the console. That makes it
+  # 83 columns wide, which is why the serial console below gets its own file.
+  {
+    printf '%s\n' "$green"
+    sed 's/^/  /' "$src/logo.txt"
+    cat <<ISSUE
+${reset}
+${bold}  Omarchy Server${reset} ${green}\\S{VERSION_ID}${reset}
+${dim}  host${reset} \\n   ${dim}tty${reset} \\l   ${dim}ipv4${reset} \\4
+
+ISSUE
+  } >"$share/etc-overrides/issue"
+  chmod 0644 "$share/etc-overrides/issue"
+
+  # The serial console gets the same information without the ASCII art: the
+  # logo is 81 columns and a serial line is 80, so every one of its rows would
+  # wrap. serial-getty@.service.d/10-omarchy-issue.conf points agetty here.
+  # Unlike /etc/issue this path is owned by no package, so the package owns it.
+  install -d "$pkgdir/etc"
+  {
+    cat <<ISSUE
+${bold}Omarchy Server${reset} ${green}\\S{VERSION_ID}${reset}
+${dim}host${reset} \\n   ${dim}tty${reset} \\l   ${dim}ipv4${reset} \\4
+
+ISSUE
+  } >"$pkgdir/etc/issue.serial"
+  chmod 0644 "$pkgdir/etc/issue.serial"
+
   install -Dm644 "$src/logo.txt" "$share/logo.txt"
   install -Dm644 "$src/logo.svg" "$share/logo.svg"
   install -Dm644 "$src/icon.txt" "$share/icon.txt"
 
   # --- /etc ---------------------------------------------------------------
-  # Inventory D.3. Straight copies from the source tree.
+  # Straight copies from the source tree.
   local etc_files=(
     gnupg/dirmngr.conf
     limine-entry-tool.d/omarchy-uki.conf
@@ -211,6 +264,12 @@ EOF
     "$pkgdir/etc/fastfetch/config.jsonc"
   install -Dm644 "$overlay/etc/profile.d/omarchy-path.sh" \
     "$pkgdir/etc/profile.d/omarchy-path.sh"
+  # The login banner hook and the plain-text banner ssh can be pointed at.
+  install -Dm644 "$overlay/etc/profile.d/omarchy-motd.sh" \
+    "$pkgdir/etc/profile.d/omarchy-motd.sh"
+  install -Dm644 "$overlay/etc/issue.net" "$pkgdir/etc/issue.net"
+  install -Dm644 "$overlay/etc/systemd/system/serial-getty@.service.d/10-omarchy-issue.conf" \
+    "$pkgdir/etc/systemd/system/serial-getty@.service.d/10-omarchy-issue.conf"
 
   # The profile marker omarchy-apply-system reads when OMARCHY_PROFILE is not
   # in the environment (see the apply-system patch in omarchy-server).

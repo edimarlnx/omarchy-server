@@ -1,23 +1,23 @@
-=== reboot survival — VM 'srv' — 2026-08-28T23:05:36-03:00 ===
+=== reboot survival — VM 'srv' — 2026-08-29T01:03:57-03:00 ===
 
 before:
-2026-08-28 23:04:47
+2026-08-29 01:03:08
 7.1.11-arch1-1
 4.0.1-1
 
 rebooting...
-rebooted: boot time moved from 2026-08-28 23:04:47 to 2026-08-28 23:05:40
+rebooted: boot time moved from 2026-08-29 01:03:08 to 2026-08-29 01:04:01
 ssh answered 0s after the reboot request
 
 after:
-2026-08-28 23:05:40
+2026-08-29 01:04:01
 7.1.11-arch1-1
 profile: server
 version: 4.0.1-1
 default target: multi-user.target
-cmdline: root=PARTUUID=d4f64dc2-463f-4056-8ae5-843a1151cc1a zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
-Startup finished in 553ms (firmware) + 1.937s (loader) + 910ms (kernel) + 2.689s (userspace) = 6.089s 
-multi-user.target reached after 2.689s in userspace.
+cmdline: root=PARTUUID=729089c6-0789-425f-a58d-6d5219ce00e1 zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
+Startup finished in 554ms (firmware) + 2.611s (loader) + 850ms (kernel) + 2.672s (userspace) = 6.688s 
+multi-user.target reached after 2.671s in userspace.
 --- failed units ---
   UNIT LOAD ACTIVE SUB DESCRIPTION
 

@@ -103,8 +103,8 @@ EOF
     # they dropped, so a naive grep would match the explanation.
     check "limine cmdline has no quiet splash" bash -c \
       "! grep -v \"^#\" /etc/limine-entry-tool.d/omarchy-defaults.conf | grep -q \"quiet splash\""
-    check "limine timeout is 0" bash -c \
-      "grep -qx \"timeout: 0\" /usr/share/omarchy/default/limine/limine.conf"
+    check "limine timeout is 2" bash -c \
+      "grep -qx \"timeout: 2\" /usr/share/omarchy/default/limine/limine.conf"
     check "mkinitcpio hooks have no plymouth" bash -c \
       "! grep -v \"^#\" /etc/mkinitcpio.conf.d/omarchy_hooks.conf | grep -q plymouth"
     check "zram-size is ram / 2" bash -c \
@@ -113,6 +113,37 @@ EOF
       "! grep -v \"^#\" /etc/nsswitch.conf | grep -q mdns"
     check "os-release is the server one" bash -c \
       "grep -qx \"ID=omarchy-server\" /etc/os-release"
+
+    echo
+    echo "== identity =="
+    check "os-release names the edition and the version" bash -c \
+      "grep -qx \"NAME=\\\"Omarchy Server\\\"\" /etc/os-release && grep -qx \"PRETTY_NAME=\\\"Omarchy Server 4.0.1\\\"\" /etc/os-release && grep -qx \"ANSI_COLOR=\\\"0;32\\\"\" /etc/os-release && grep -qx \"LOGO=omarchy\" /etc/os-release"
+    check "limine.conf brands the menu" bash -c \
+      "grep -qx \"interface_branding: Omarchy Server\" /usr/share/omarchy/default/limine/limine.conf"
+    check "limine.conf points at the wallpaper on the ESP" bash -c \
+      "grep -qx \"wallpaper: boot():/limine-wallpaper.png\" /usr/share/omarchy/default/limine/limine.conf"
+    check "the wallpaper ships with the settings package" bash -c \
+      "test -s /usr/share/omarchy/default/limine/limine-wallpaper.png"
+    check "install/server copies the wallpaper to the ESP" bash -c \
+      "grep -q limine-wallpaper.png /usr/share/omarchy/install/server/limine-branding-server.sh && grep -q \"server/limine-branding-server.sh\" /usr/share/omarchy/install/server/all.sh"
+    check "/etc/issue carries the logo and the agetty fields" bash -c \
+      "grep -q \"Omarchy Server\" /etc/issue && grep -qF \"S{VERSION_ID}\" /etc/issue && grep -qF \"ipv4\" /etc/issue && grep -qP \"\\x1b\\[32m\" /etc/issue && grep -q \"███\" /etc/issue"
+    check "the serial console gets a logo-free issue" bash -c \
+      "test -s /etc/issue.serial && ! grep -q \"███\" /etc/issue.serial && grep -q \"issue-file /etc/issue.serial\" \"/etc/systemd/system/serial-getty@.service.d/10-omarchy-issue.conf\""
+    check "issue.net ships plain, with no escapes" bash -c \
+      "test -s /etc/issue.net && ! grep -qP \"\\x1b\" /etc/issue.net"
+    check "the VT palette unit and its command are installed" bash -c \
+      "test -f /usr/lib/systemd/system/omarchy-tty-palette.service && test -L /usr/bin/omarchy-tty-palette && bash -n /usr/share/omarchy/bin/omarchy-tty-palette"
+    check "the palette unit is enabled by the install" bash -c \
+      "grep -q \"systemctl enable omarchy-tty-palette.service\" /usr/share/omarchy/install/server/enable-services-server.sh"
+    check "the palette leaves the serial console alone" bash -c \
+      "! grep -v \"^#\" /usr/share/omarchy/bin/omarchy-tty-palette | grep -q ttyS"
+    check "the login banner is wired and renders" bash -c \
+      "test -f /etc/profile.d/omarchy-motd.sh && test -L /usr/bin/omarchy-server-motd && omarchy-server-motd | grep -q \"Omarchy Server\""
+    check "the banner reports the fields a server login needs" bash -c \
+      "out=\$(omarchy-server-motd); for f in os host kernel uptime packages memory; do grep -q \"\$f\" <<<\"\$out\" || exit 1; done"
+    check "fastfetch reads the logo from the runtime package" bash -c \
+      "grep -q \"/usr/share/omarchy/logo.txt\" /etc/fastfetch/config.jsonc && test -s /usr/share/omarchy/logo.txt"
     check "agent skills shipped" test -d /usr/share/omarchy/default/agents/skills
     check "themes and shell are NOT shipped" bash -c \
       "! test -e /usr/share/omarchy/themes && ! test -e /usr/share/omarchy/shell"
@@ -159,7 +190,7 @@ EOF
     check "omarchy-server-addon is linked into /usr/bin" bash -c \
       "test -L /usr/bin/omarchy-server-addon"
     check "omarchy-server-addon --list names every addon" bash -c \
-      "for a in cli-tools dev docker editor net-tools tailscale vm; do omarchy-server-addon --list | grep -qx \"\$a\" || exit 1; done"
+      "for a in cli-tools dev docker editor fwall net-tools tailscale vm; do omarchy-server-addon --list | grep -qx \"\$a\" || exit 1; done"
     check "omarchy-server-addon --help does not touch the system" \
       omarchy-server-addon --help
     check "an unknown addon fails" bash -c \
@@ -168,6 +199,25 @@ EOF
       "grep -qx docker /usr/share/omarchy/install/server/addons/docker.packages && grep -qx ufw-docker /usr/share/omarchy/install/server/addons/docker.packages"
     check "docker addon setup leaf ships with it" \
       test -f /usr/share/omarchy/install/server/addons/docker.sh
+    check "fwall is an addon, not part of the base" bash -c \
+      "grep -qx fwall /usr/share/omarchy/install/server/addons/fwall.packages && ! pacman -Qq fwall >/dev/null 2>&1"
+
+    echo
+    echo "== fwall =="
+    # Installed here rather than through omarchy-server-addon, which would need
+    # sudo and a real firewall; what is being checked is the package.
+    pacman -S --noconfirm fwall >/dev/null
+    check "fwall installs a static binary" bash -c \
+      "test -x /usr/bin/fwall && ! ldd /usr/bin/fwall 2>&1 | grep -q libc.so"
+    check "fwall --version reports the packaged version" bash -c \
+      "fwall --version | grep -q 0.1.0"
+    check "fwall ships a ufw-pinned configuration" bash -c \
+      "grep -qx \"backend = \\\"ufw\\\"\" /etc/fwall/config.toml"
+    # The README is read out of the package file, not the filesystem: the
+    # archlinux container image carries NoExtract = usr/share/doc/* .
+    check "fwall ships its licence and README" bash -c \
+      "test -s /usr/share/licenses/fwall/LICENSE && bsdtar -tf /repo/fwall-*.pkg.tar.zst | grep -qx usr/share/doc/fwall/README.md"
+    pacman -Rns --noconfirm fwall >/dev/null
 
     echo
     echo "== measurements =="

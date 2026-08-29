@@ -11,4 +11,4 @@ private
 snapper.log
 wtmp
 --- errors this boot ---
-Aug 28 23:04:48 omarchy-srv kernel: virt/tdx: TDX not supported by the host platform
+Aug 29 01:03:08 omarchy kernel: virt/tdx: TDX not supported by the host platform

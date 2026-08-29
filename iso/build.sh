@@ -111,8 +111,24 @@ cp -a "$repo_root/profile/$profile" "$pkgs_scratch/profile/$profile" 2>/dev/null
 # Same overlay tarball pkgs/build.sh ships as a declared makepkg source.
 for package in omarchy-server-settings omarchy-server; do
   tar -czf "$pkgs_scratch/pkgbuilds/$package/omarchy-server-overlay.tar.gz" \
-    -C "$repo_root/profile/server" overlay addons
+    -C "$repo_root/profile/server" overlay addons branding
 done
+
+# Addon packages built from their own upstream get a clone under
+# <pkgs-checkout>/src/, which the patched builder/build-omarchy-packages.sh
+# marks safe for git and hands to the PKGBUILD through <NAME>_SRC. A clone
+# rather than a copy: the working tree's uncommitted state must not decide what
+# a package contains, and the PKGBUILDs consume a pinned commit anyway.
+tui_tools_dir=${TUI_TOOLS_DIR:-$repo_root/../tui-tools}
+if [[ -d $tui_tools_dir/.git ]]; then
+  echo "› cloning $tui_tools_dir into $pkgs_scratch/src/tui-tools"
+  mkdir -p "$pkgs_scratch/src"
+  git clone --quiet --no-hardlinks "$tui_tools_dir" "$pkgs_scratch/src/tui-tools"
+else
+  echo "Error: $tui_tools_dir is not a git clone; the fwall addon needs it." >&2
+  echo "       Set TUI_TOOLS_DIR to the checkout." >&2
+  exit 1
+fi
 
 # ── 5. build ────────────────────────────────────────────────────────────────
 make_args=(--profile "$profile" --keep-pkg-cache --no-boot-offer)

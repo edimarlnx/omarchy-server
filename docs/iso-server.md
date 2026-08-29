@@ -29,8 +29,9 @@ there. The script:
 3. overlays `iso/overlay/` (whole files; empty today) and applies
    `iso/patches/*.patch` (changes to upstream files);
 4. assembles `iso/scratch/pkgs/` = `pkgs/pkgbuilds/` + `profile/<profile>/` +
-   the overlay tarballs that `pkgs/build.sh` also generates. That directory is
-   the second argument of `--local-source`;
+   the overlay tarballs that `pkgs/build.sh` also generates + `src/tui-tools`,
+   a clone of the checkout the `fwall` addon package builds from. That
+   directory is the second argument of `--local-source`;
 5. runs `bin/omarchy-iso-make` **from the copy** with
    `--profile server --local-source upstream/omarchy iso/scratch/pkgs`.
 
@@ -58,6 +59,14 @@ That is why the PKGBUILDs honor `OMARCHY_SRC`:
 container the same checkout is at `/omarchy-source`. No other PKGBUILD change
 was needed.
 
+Addon packages built from their own upstream follow the same shape. `fwall`
+reads `FWALL_SRC`, and its checkout travels inside the pkgs directory
+(`<pkgs-checkout>/src/tui-tools`) rather than on a mount of its own, because
+`--local-source` takes exactly two paths and adding a third would mean patching
+`bin/omarchy-iso-make`. It is a clone, not a copy: the working tree's
+uncommitted state must not decide what a package contains, and the PKGBUILD
+consumes a pinned commit anyway.
+
 ---
 
 ## 2. ISO patches (`iso/patches/`)
@@ -70,6 +79,9 @@ was needed.
 | `0004-orchestrator-server-profile.patch` | `orchestrator/phases_impl.py` | Reads the profile (`OMARCHY_PROFILE` → `/root/profile` from cidata → `/usr/share/omarchy-iso/profile`). With `server`: skips `configure_hibernation` (no swapfile, no `resume=`) and `configure_login` (no display manager); drops `base-devel` and `git` from the early bootstrap packages, which is where a compiler would otherwise enter the install regardless of the package lists; writes `/etc/omarchy-profile` into the target **before** `run_system_finalizer`; exports `OMARCHY_PROFILE` into the `arch-chroot` env; does not install nvim/luarocks when the nvim target is empty; prefers `install/<profile>/omarchy-provision-owner.service` over the stock unit; runs `ufw limit 22/tcp` instead of `ufw allow ssh` in `configure_ssh_access`; and adds the `install_addons` phase. |
 | `0005-cidata-profile-and-addons.patch` | `usr/local/bin/omarchy-cidata-load` | Accepts `profile` and `addons` files on the `cidata` drive, next to the other optional inputs, so one ISO can install another profile without a rebuild and an autoinstall can name the optional package sets to apply. |
 | `0006-orchestrator-addons-phase.patch` | `orchestrator/main.py` | Registers `install_addons` in the phase list, right after `Configuring system`. |
+| `0007-build-packages-makedepends-and-extra-sources.patch` | `builder/build-omarchy-packages.sh` | `makepkg --nodeps` installs nothing at all, including makedepends a package genuinely needs to compile, so each PKGBUILD's `makedepends` are read out of `makepkg --printsrcinfo` and installed — and only those. Also picks up addon packages built from their own upstream: a checkout at `/omarchy-pkgs/src/<name>` gets a `safe.directory` entry and its `<NAME>_SRC` variable (`FWALL_SRC` for `tui-tools`), the same contract `OMARCHY_SRC` gives the Omarchy PKGBUILDs. |
+| `0008-build-iso-profile-branding-and-addon-packages.patch` | `builder/build-iso.sh` | Adds `fwall` to the server profile's locally built packages, so it lands in the offline mirror and is never looked up on the network mirror. **Brands the live medium**: on a named profile the grub, syslinux and `profiledef.sh` labels become `Omarchy <Profile>` — a rename of the menu labels only, leaving the entry ids, the kernel command lines and the installer itself alone. |
+| `0009-orchestrator-default-hostname.patch` | `orchestrator/context.py` | archinstall defaults `hostname` to `archlinux` and only overrides it when the JSON carries a non-empty value, so an autoinstall drive that says nothing about the hostname produces a machine called `archlinux`. Defaults it to `omarchy` instead — the same default the interactive configurator offers — while leaving an explicit hostname, including `archlinux`, untouched. |
 
 ### `ufw limit` instead of `ufw allow`
 
@@ -151,8 +163,13 @@ The server cmdline comes from the `omarchy-defaults.conf` shipped by
   `omarchy_linux.efi` UKI exist and are non-empty, and there is a `Limine`
   entry in `efibootmgr`. There is **no** assertion about `resume=`, `quiet` or
   swap, so the absence of a swapfile passes cleanly.
-- `timeout: 0` in the server `limine.conf`: the menu is still reachable by
-  holding a key.
+- `timeout: 2` in the server `limine.conf` (it was `0` until the branding
+  work): at `0` the menu is only reachable by holding a key during the loader's
+  startup, which is not something anyone does on a machine they are not
+  standing in front of. The cost is exactly two seconds of boot — the loader
+  goes from 0.67 s to 2.6-2.8 s, the whole boot from 4.8 s to 6.7-7.0 s.
+  `interface_branding` is now `Omarchy Server`, which still satisfies
+  `validate_boot`'s search for the string `Omarchy`.
 
 ---
 
@@ -160,12 +177,13 @@ The server cmdline comes from the `omarchy-defaults.conf` shipped by
 
 | Item | Value |
 |---|---|
-| ISO size | **2.9 GiB** (3,010,494,464 bytes), against 6.2 GiB for the desktop ISO |
+| ISO size | **2.9 GiB** (3,012,608,000 bytes), against 6.2 GiB for the desktop ISO |
 | Cold build (empty package cache) | ~13 min, dominated by downloading the offline mirror |
 | Warm build (cached mirror) | **3m20s** |
 | Offline mirror | **1.5 GiB**, 1156 package files |
 | Packages the target install resolves to | ~220 (shipped in the ISO as the install dashboard's denominator) |
-| Packages built inside the ISO builder | `omarchy-server`, `omarchy-server-settings`, `omarchy-server-keyring` |
+| Packages built inside the ISO builder | `omarchy-server`, `omarchy-server-settings`, `omarchy-server-keyring`, `fwall` |
+| Warm build after adding `fwall` | 3m36s-4m01s (the Go toolchain is installed in the throwaway builder container, ~250 MiB, and the compile itself is seconds) |
 
 The ISO grew by ~70 MiB while the *install* shrank by 100 packages and 940 MiB.
 That is the addon trade: the base install no longer carries docker, a compiler,
@@ -186,6 +204,24 @@ Two bugs were found by building and installing, not by reading:
    `omarchy-nvim`'s dependency closure, so with no nvim target the phase died
    with `error: target not found: lua51`.
 
+### Branding on the live medium
+
+`--profile server` also renames what the live medium calls itself: the grub
+entries, the syslinux labels and `iso_application` in `profiledef.sh` read
+`Omarchy Server` instead of `Omarchy`. It is a `sed` over the copies in the
+build cache, applied for any profile that is not `desktop`, so a desktop build
+is byte-identical to upstream. The choice of edition is made when the medium is
+written and nothing on screen says so afterwards, which is the whole reason.
+
+The installer dashboard is deliberately untouched: restyling it is a different
+job from labelling the ISO, and its rotating tips are still desktop tips.
+
+![The branded Limine menu of an installed server](screenshots/limine-menu.png)
+
+The installed machine's own branding — the menu above, `/etc/issue`, the VT
+palette, the MOTD and `os-release` — is `docs/packaging.md` §2.5, because it is
+the packages that carry it, not the ISO.
+
 ### Known cosmetic issues
 
 - The live ISO inherits `cloud-init` from the archiso releng profile. It runs
@@ -202,8 +238,14 @@ Two bugs were found by building and installing, not by reading:
 ## 7. Status and what is left
 
 Done and verified end to end: `iso/build.sh` builds a server ISO from this
-repository's sources, and that ISO installs a headless machine from a `cidata`
-drive that passes the whole acceptance list (`pocs/server-install/README.md`).
+repository's sources, and that ISO installs a headless machine that looks like
+Omarchy from the bootloader to the shell prompt and passes the whole acceptance
+list (`pocs/server-install/README.md`).
+
+The ISO also carries the `fwall` addon package, built inside its own builder
+from the `tui-tools` checkout. It is bundled in the offline mirror and installed
+only on request, so the base install is byte-for-byte the same 220 packages it
+was before.
 
 Left over, in rough order of how much they hurt:
 
@@ -227,7 +269,11 @@ Left over, in rough order of how much they hurt:
    `--profile desktop` every added branch takes its `desktop` arm and the
    package lists resolve exactly as upstream, but a desktop ISO build has not
    been run against the patched tree.
-6. **The `[omarchy]` mirror is still `Optional TrustAll`** and the offline
+6. **`omarchy-server-addon fwall` has no source on an installed machine.**
+   Every other addon installs from the Arch or `[omarchy]` mirrors; `fwall` is
+   built here, so until `[omarchy-server]` is published (item 7) it can only be
+   applied during the install, from the ISO's offline mirror.
+7. **The `[omarchy]` mirror is still `Optional TrustAll`** and the offline
    mirror `Never`. A signed repository of our own, with
    `/etc/pacman.d/omarchy-server.conf` shipped by the profile, is the next
    packaging step; `omarchy-server-keyring` is already built and installed by

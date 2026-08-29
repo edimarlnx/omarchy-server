@@ -10,8 +10,10 @@ that drive it, the artifacts collected from the installed machine
 ```bash
 ./iso/build.sh                                   # builds iso/release/*.iso
 
-./pocs/lab/mkcidata.sh --profile server \
-  --hostname omarchy-srv --out pocs/lab/out-server
+# No --hostname: the cidata drive then carries no `hostname` key at all and the
+# installed machine gets the profile default, `omarchy`. Pass --hostname NAME
+# to name it.
+./pocs/lab/mkcidata.sh --profile server --out pocs/lab/out-server
 
 export LAB_OUT=$PWD/pocs/lab/out-server
 ./pocs/lab/vm.sh srv create --disk-gb 40
@@ -40,6 +42,20 @@ orchestrator applies it in the chroot from the ISO's offline mirror:
 ./pocs/lab/mkcidata.sh --profile server --addons docker \
   --hostname omarchy-srv-docker --out pocs/lab/out-server-docker
 ```
+
+The `fwall` addon is verified this way rather than through
+`omarchy-server-addon` on a running machine, because it is the one addon whose
+package exists only in the ISO's offline mirror until the `[omarchy-server]`
+repository is published:
+
+```bash
+./pocs/lab/mkcidata.sh --profile server --addons fwall --out pocs/lab/out-server-fwall
+LAB_OUT=$PWD/pocs/lab/out-server-fwall ./pocs/lab/vm.sh srvf create --disk-gb 40
+```
+
+Note `--disk-gb 40`: the cidata JSON carries an absolute partition layout for a
+40 GiB disk, and a smaller VM disk fails the install at the first phase with
+`Partition overlaps backup GPT header`.
 
 `mkcidata.sh --profile server` differs from the desktop one in four places: the
 runtime/settings package names, `audio_config: null` (no PipeWire), a shorter
@@ -78,8 +94,16 @@ That path found every install-time bug recorded in `docs/iso-server.md`.
 `services-masked.txt`, `user-services-enabled.txt`, `surface.txt`,
 `boot-time.txt`, `boot.txt`, `storage.txt`, `firewall.txt`, `system.txt`,
 `logs.txt`, `install-timing.json`, `omarchy-install.log`, plus `serial.log`
-(the VM's serial console), `console.png` (the console after boot) and
+(the VM's serial console), `console.png` (the console after boot),
+`serial-issue.txt` (the login banner as agetty wrote it to the serial line) and
 `acceptance.txt` (the raw evidence behind the table below).
+
+The three screenshots the README shows — the branded Limine menu, the console
+banner and the MOTD — live in `docs/screenshots/`. They were taken from this
+VM: the console and MOTD with `vm.sh srv screenshot`, the menu by holding it
+open with `sendkey down` through the QEMU monitor (any keypress cancels
+Limine's two-second countdown) and screenshotting at leisure. The MOTD is a
+real login shell on tty3, opened with `openvt -c 3 -f -s -- su - omarchy`.
 
 ---
 
@@ -96,7 +120,7 @@ disk, user-mode networking with ssh forwarded to localhost.
 | Packages (`pacman -Qq`) | **220** (21 explicit, 199 dependencies) | 942 |
 | Installed size | **1402 MiB** | 8079 MiB |
 | Used on `/` | **1.2 GiB** | 14 GiB |
-| Boot | **4.8-6.6 s** (firmware 0.55 + loader 1.3-2.0 + kernel 0.9-1.1 + userspace 1.9-3.1) | 12.2 s |
+| Boot | **5.9-7.0 s** (firmware 0.55 + loader 2.6-2.8 + kernel 0.8-0.9 + userspace 1.8-2.8) | 12.2 s |
 | Default target | `multi-user.target` | `graphical.target` |
 | Biggest packages | linux 148 MiB, linux-firmware-intel 132, linux-firmware-nvidia 104, python 74 | libreoffice 421, chromium 416, electron43 333 |
 
@@ -114,7 +138,7 @@ same VM shape, from an install of the ISO that produced them.
 | Explicitly installed | 57 | **21** | −36 |
 | Installed size | 2344 MiB | **1402 MiB** | −942 MiB (−40%) |
 | Used on `/` | 1.7 GiB | **1.2 GiB** | −0.5 GiB |
-| Enabled unit files | 17 | **20** | +3 |
+| Enabled unit files | 17 | **21** | +4 |
 | Masked unit files | 5 | **13** | +8 |
 | Listening sockets (`ss -ltnup`) | 8 | **6** | −2 |
 | Reachable off the machine | 22 + 172.17.0.1:53 | **22 only** | −1 |
@@ -136,8 +160,9 @@ Reading the table:
 - **The enabled-unit count went up, not down.** Swapping NetworkManager for
   systemd-networkd trades two services (`NetworkManager`, its `dispatcher`) for
   one service plus four sockets that systemd ships as separate units
-  (`systemd-networkd.socket`, two varlink sockets, the resolve hook), and
-  `docker.socket` left. Counting unit *files* flatters NetworkManager here; the
+  (`systemd-networkd.socket`, two varlink sockets, the resolve hook),
+  `docker.socket` left, and `omarchy-tty-palette.service` — a oneshot that runs
+  once before getty and exits — arrived. Counting unit *files* flatters NetworkManager here; the
   honest comparison is the services-as-root row, which is what an exploit
   actually gets. That fell from 12 to 9: `NetworkManager`,
   `NetworkManager-dispatcher` and `systemd-hostnamed` are gone.
@@ -164,14 +189,12 @@ Reading the table:
   worth it for a VM or a fleet with known hardware. It stays in for now because
   a server ISO that will not bring up a NIC on unknown hardware is worse than a
   large one.
-- **Boot got slower**, 3.9 s → 4.8-6.6 s, and most of the difference is in the
-  loader (0.67 s → 1.3-2.0 s), which has nothing in it that this change
-  touched: `timeout: 0` is unchanged and the loader runs before a single
-  package matters. The measurements were taken with two other VMs on the same
-  host, and the spread within a single machine (4.8 s and 6.6 s on consecutive
-  boots) is as large as the difference from the baseline, so this is host noise
-  until it is measured on a quiet machine. Worth re-measuring, not worth a
-  conclusion.
+- **Boot got slower**, 3.9 s → 5.9-7.0 s, and all of the difference is in the
+  loader (0.67 s → 2.6-2.8 s). Two of those seconds are bought deliberately:
+  `timeout` went from 0 to 2 so the branded menu is on screen and reachable
+  without holding a key. The rest is host noise — the spread within a single
+  machine, on consecutive boots, is as large as it — and the loader runs before
+  a single package matters, so nothing in the package set is implicated.
 
 ### Acceptance
 
@@ -182,7 +205,7 @@ Full evidence in `reference/acceptance.txt`.
 | 1 | `systemctl get-default` = `multi-user.target` | **PASS** | `multi-user.target` |
 | 2 | no sddm/hyprland/pipewire/plymouth installed | **PASS** | `graphical=0` |
 | 3 | docker absent from the base | **PASS** | none of docker, docker-compose, docker-buildx, ufw-docker, lazydocker, networkmanager, base-devel, gcc, git, tailscale is installed |
-| 4 | ssh with the cidata key works | **PASS** | `logged in as omarchy@omarchy-srv` |
+| 4 | ssh with the cidata key works | **PASS** | `logged in as omarchy@omarchy` |
 | 5 | password authentication is refused | **PASS** | `Permission denied (publickey)` with `PubkeyAuthentication=no` |
 | 6 | root cannot log in over ssh | **PASS** | `sshd -T`: `permitrootlogin no`, `passwordauthentication no`, `kbdinteractiveauthentication no`, `permitemptypasswords no` |
 | 7 | networkd brought the link up by DHCP | **PASS** | `networkctl` reports the link `routable`, address from DHCP |
@@ -194,16 +217,26 @@ Full evidence in `reference/acceptance.txt`.
 | 13 | `/boot/limine.conf` lists snapshot entries | **PASS** | after `snapper create`, a `//Snapshots` section appears |
 | 14 | `pacman -Qq \| wc -l` in 150-260 | **PASS** | 220 |
 | 15 | installed size and disk used < 3 GB | **PASS** | 1402 MiB installed, 1.2 GiB used |
-| 16 | boot to ssh < 20 s | **PASS** | `systemd-analyze` = 4.8 s |
+| 16 | boot to ssh < 20 s | **PASS** | `systemd-analyze` = 5.9 s |
 | 17 | `/proc/cmdline` has `console=ttyS0`, no quiet/splash/resume | **PASS** | `… rootfstype=btrfs console=ttyS0,115200 console=tty0` |
 | 18 | zram active | **PASS** | `/dev/zram0`, zstd, 3.9 GiB (RAM/2), priority 100, no swapfile |
 | 19 | `/etc/omarchy-profile` = `server` | **PASS** | `server` |
 | 20 | `omarchy-version` = `4.0.1-1` | **PASS** | `4.0.1-1` |
-| 21 | `omarchy-server-addon docker` installs and runs a container | **PASS** | `Hello from Docker!` |
-| 22 | the docker addon opens only the container DNS stub | **PASS** | new listener is `172.17.0.1:53`, gated by the two `allow-docker-dns` rules |
-| 23 | `omarchy-update` runs to completion | **PASS** (with a caveat, below) | `rc=0` |
+| 21 | hostname defaults to `omarchy` when cidata gives none | **PASS** | `hostnamectl hostname` = `omarchy` |
+| 22 | `os-release` identifies the edition | **PASS** | `NAME`/`PRETTY_NAME` = `Omarchy Server`/`Omarchy Server 4.0.1`, `ID=omarchy-server`, `ANSI_COLOR="0;32"`, `LOGO=omarchy` |
+| 23 | `/etc/issue` carries the logo, the version and the machine fields | **PASS** | the ESC-green logo, `\S{VERSION_ID}`, `host`/`tty`/`ipv4`; rendered in `reference/console.png` |
+| 24 | the serial console gets its own logo-free issue | **PASS** | `/etc/issue.serial` has no art, the `serial-getty@.service.d` drop-in points agetty at it; rendered in `reference/serial-issue.txt` |
+| 25 | the VT palette unit ran, and left the serial console alone | **PASS** | `omarchy-tty-palette.service` enabled + active, exit status 0, no `ttyS` in the command |
+| 26 | `/boot/limine.conf` is branded, waits 2 s, points at the wallpaper | **PASS** | `timeout: 2`, `interface_branding: Omarchy Server`, `wallpaper: boot():/limine-wallpaper.png`, `wallpaper_style: stretched` — checked **after** `limine-snapper-sync` regenerated the entries (item 13) |
+| 27 | the wallpaper is on the ESP | **PASS** | `/boot/limine-wallpaper.png`, 17941 B, `PNG image data, 1920 x 1080, 8-bit/color RGB` |
+| 28 | the login banner prints the machine identity | **PASS** | `Omarchy Server 4.0.1` plus host, kernel, uptime, packages, updates, memory, ip |
+| 29 | the banner is wired into every login shell | **PASS** | `/etc/profile.d/omarchy-motd.sh` calls `omarchy-server-motd` |
+| 30 | `fwall` is not in the base | **PASS** | not installed |
+| 31 | `omarchy-server-addon docker` installs and runs a container | **PASS** | `Hello from Docker!` |
+| 32 | the docker addon opens only the container DNS stub | **PASS** | new listener is `172.17.0.1:53`, gated by the two `allow-docker-dns` rules |
+| 33 | `omarchy-update` runs to completion | **PASS** (with a caveat, below) | `rc=0` |
 
-**23 of 23 checks pass**, plus the reboot check
+**33 of 33 checks pass**, plus the reboot check
 (`reboot-check.sh`): the machine comes back, 0 failed units, the profile marker,
 default target, cmdline, `ufw` rules and listener set all survive.
 
@@ -212,6 +245,22 @@ The addon path was also verified the other way round, on a second VM
 `Installing addons` phase applies it in the chroot against the ISO's offline
 mirror, and the machine comes up with docker installed, `docker.socket` enabled
 and the three drop-ins in `/etc`, without ever reaching the network.
+
+The `fwall` addon was verified the same way, on a VM (`srvf`) installed with
+`mkcidata.sh --addons fwall`. It is the case that needs this route rather than
+`omarchy-server-addon` on a running machine: the package is built by the ISO
+builder and exists only in the offline mirror until the `[omarchy-server]`
+repository is published.
+
+| Check | Result |
+|---|---|
+| package installed by the `Installing addons` phase | `fwall 0.1.0-1`, 3.69 MiB, MIT |
+| package count against the base | 221, one more than the 220 of the lean base |
+| `fwall --version` | `fwall 0.1.0` |
+| `/etc/fwall/config.toml` | `backend = "ufw"` |
+| `fwall --demo` on the console | renders, in the same palette the rest of the machine uses |
+
+![fwall running on the console of a server installed with the addon](../../docs/screenshots/fwall.png)
 
 ### The `omarchy-update` caveat
 

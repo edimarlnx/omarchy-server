@@ -1,0 +1,20 @@
+[Unit]
+Description=Tokyo Night palette for the virtual consoles
+Documentation=man:console_codes(4)
+# systemd-vconsole-setup owns the font and keymap of the VTs; run after it so
+# its work is not undone. Before getty.target so the login banner in /etc/issue
+# is drawn with the palette already in place rather than repainted a moment
+# later.
+After=systemd-vconsole-setup.service
+Before=getty.target
+# A machine with no video console (a container, a serial-only board) has
+# nothing to colour and the unit is skipped rather than failing.
+ConditionPathExists=/dev/tty1
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/omarchy-tty-palette
+
+[Install]
+WantedBy=multi-user.target

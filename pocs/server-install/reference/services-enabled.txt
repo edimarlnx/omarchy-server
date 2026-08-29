@@ -2,6 +2,7 @@ UNIT FILE                               STATE   PRESET
 getty@.service                          enabled enabled
 limine-snapper-sync.service             enabled disabled
 linux-modules-cleanup.service           enabled disabled
+omarchy-tty-palette.service             enabled disabled
 sshd.service                            enabled disabled
 systemd-network-generator.service       enabled enabled
 systemd-networkd.service                enabled enabled
@@ -20,4 +21,4 @@ systemd-userdbd.socket                  enabled enabled
 remote-fs.target                        enabled enabled
 snapper-cleanup.timer                   enabled disabled
 
-20 unit files listed.
+21 unit files listed.

@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# omarchy:summary=Apply the Tokyo Night colour palette to the virtual consoles.
+# omarchy:requires-sudo=true
+
+# The bootloader draws its menu in Tokyo Night and the login banner is written
+# in that green, but the Linux VT starts on the kernel's own 16 colours, so
+# everything between the loader handing over and the first `ls` was a different
+# palette. This closes that gap with the same escape sequences the desktop
+# edition's first-boot provisioning uses (omarchy-provision-owner,
+# set_tokyo_night_colors) -- OSC "P" sets one entry of the console colour
+# table, and the console redraws with it immediately.
+#
+# Run once per boot by omarchy-tty-palette.service, before getty.
+#
+# Deliberately only /dev/ttyN. The palette escapes mean nothing on a serial
+# line: a real terminal on the other end owns its own colours, and the "escape"
+# would be printed as garbage into whatever is logging the port.
+
+set -euo pipefail
+
+# Tokyo Night, in the order the Linux console expects: 0-7 normal, 8-F bright.
+palette=(
+  1a1b26 f7768e 9ece6a e0af68 7aa2f7 bb9af7 7dcfff a9b1d6
+  414868 f7768e 9ece6a e0af68 7aa2f7 bb9af7 7dcfff c0caf5
+)
+
+apply_to() { # apply_to <tty device>
+  local tty="$1" index part sequence=""
+  for index in "${!palette[@]}"; do
+    # The index is a single uppercase hex digit: \e]P<index><rrggbb>. The Linux
+    # console consumes exactly those seven characters, with no terminator.
+    printf -v part '\033]P%X%s' "$index" "${palette[index]}"
+    sequence+="$part"
+  done
+  # A final SGR reset so a console that was left mid-attribute starts clean.
+  printf '%s\033[0m' "$sequence" >"$tty"
+}
+
+# tty1..tty6 are the consoles getty runs on (getty@tty1 plus the five
+# autovt@ instances logind allocates on demand).
+for n in 1 2 3 4 5 6; do
+  device="/dev/tty$n"
+  [[ -w $device ]] || continue
+  apply_to "$device" || true
+done

@@ -1,0 +1,95 @@
+#!/bin/bash
+
+# omarchy:summary=Print the Omarchy Server login banner.
+# omarchy:examples=omarchy-server-motd
+
+# Called by /etc/profile.d/omarchy-motd.sh on every interactive login shell.
+#
+# fastfetch renders it when it is installed -- it is what /etc/fastfetch/
+# config.jsonc is written for, and the `cli-tools` addon brings it in. But
+# fastfetch is not part of the lean base, and a server that shows nothing at
+# login is exactly the "this looks like plain Arch" problem this file exists to
+# fix, so the same fields are rendered here from the tools `base` already has:
+# bash, coreutils, procps-ng, iproute2 and pacman. No package is added for the
+# banner.
+
+set -uo pipefail
+
+OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
+LOGO="$OMARCHY_PATH/logo.txt"
+
+if command -v fastfetch >/dev/null 2>&1; then
+  exec fastfetch
+fi
+
+esc=$'\033'
+green="${esc}[32m"
+bold="${esc}[1;32m"
+dim="${esc}[2m"
+reset="${esc}[0m"
+
+# The logo is 81 columns, 83 with the indent below. On anything narrower it
+# would wrap into nonsense, so a narrow terminal gets the wordmark alone.
+#
+# The width comes from the terminal itself rather than from $COLUMNS: this runs
+# out of /etc/profile, before bash has necessarily set that variable, and `tput
+# cols` needs a $TERM that a login shell on a fresh VT may not have yet.
+# The redirect is inside the group so that a shell with no controlling
+# terminal -- `ssh host omarchy-server-motd`, a cron job -- falls through to the
+# default quietly instead of reporting /dev/tty on stderr.
+columns=$({ stty size </dev/tty; } 2>/dev/null | awk '{ print $2 }')
+[[ $columns =~ ^[0-9]+$ ]] || columns=${COLUMNS:-80}
+
+echo
+if ((columns >= 83)) && [[ -r $LOGO ]]; then
+  printf '%s' "$green"
+  sed 's/^/  /' "$LOGO"
+  printf '%s\n' "$reset"
+else
+  printf '%s  Omarchy Server%s\n\n' "$bold" "$reset"
+fi
+
+field() { # field <label> <value>
+  [[ -n ${2:-} ]] || return 0
+  printf '  %s%-9s%s %s\n' "$dim" "$1" "$reset" "$2"
+}
+
+pretty_name=""
+[[ -r /etc/os-release ]] && pretty_name=$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-$NAME}")
+
+# `uptime -p` is procps-ng, which `base` installs; the /proc fallback keeps the
+# banner honest on a system where it is not.
+uptime_text=$(uptime -p 2>/dev/null | sed 's/^up //')
+[[ -n $uptime_text ]] || uptime_text=$(awk '{printf "%d days, %d hours", $1/86400, ($1%86400)/3600}' /proc/uptime 2>/dev/null)
+
+memory=$(awk '
+  /^MemTotal:/ { total = $2 }
+  /^MemAvailable:/ { available = $2 }
+  END { if (total) printf "%.1f GiB of %.1f GiB used", (total - available)/1048576, total/1048576 }
+' /proc/meminfo 2>/dev/null)
+
+# The first global IPv4 address, which on a server is the one somebody needs.
+address=$(ip -4 -oneline address show scope global 2>/dev/null | awk '{print $4; exit}')
+
+packages=$(pacman -Qq 2>/dev/null | wc -l)
+[[ $packages == 0 ]] && packages=""
+
+# Cheap because it reads pacman's own log rather than asking a mirror: no
+# network call on the login path, ever.
+last_upgrade=$(awk -F'[][]' '/upgraded/ { stamp = $2 } END { if (stamp) print substr(stamp, 1, 10) }' \
+  /var/log/pacman.log 2>/dev/null)
+
+# `pacman -Qu` compares the installed set against the sync database already on
+# disk. checkupdates would be more current and would download a database to say
+# so, which is not something to do on every login.
+pending=$(pacman -Qu 2>/dev/null | wc -l)
+
+field "os" "${pretty_name:-Omarchy Server}"
+field "host" "$(uname -n)"
+field "kernel" "$(uname -r)"
+field "uptime" "$uptime_text"
+field "packages" "${packages:+$packages installed${last_upgrade:+, last upgrade $last_upgrade}}"
+field "updates" "$( ((pending > 0)) && echo "$pending pending" || echo "none pending" )"
+field "memory" "$memory"
+field "ip" "$address"
+echo
