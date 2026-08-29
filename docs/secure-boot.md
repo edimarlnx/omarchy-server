@@ -349,17 +349,38 @@ Not held:
 ## 8. Out-of-tree modules
 
 `module.sig_enforce=1` refuses any module whose signature the kernel cannot
-verify against its built-in or platform keyring. Arch's in-tree modules are
-signed at build time with an ephemeral key compiled into that kernel, so they
-load. A DKMS module — ZFS being the case this profile will meet first — is built
-locally and is unsigned, so it will not.
+verify against its built-in or secondary trusted keyring. Arch's in-tree modules
+are signed at build time with an ephemeral key compiled into that kernel, so they
+load. A module built locally — ZFS being the case this profile will meet first —
+is unsigned, so it will not.
 
-The fix is to sign it with the same `db` key the firmware already trusts, by
-pointing DKMS's `sign_tool` at `/var/lib/sbctl/keys/db/db.{key,pem}` so every
-rebuild signs its output, and enrolling that certificate into the kernel's
-`machine` keyring (Arch builds `CONFIG_INTEGRITY_MACHINE_KEYRING`, which accepts
-`db` certificates from the firmware). That is **not implemented here** — see the
-handover note in the ZFS work.
+**Signing it with this machine's `db` key does not help.** That was measured on
+`srvsb` and the result is unambiguous: a certificate enrolled in the firmware's
+`db` is loaded by the kernel into the **`.platform`** keyring, which exists for
+kexec images and dm-verity roothashes and is never consulted for module
+signatures. The keyring that is consulted, `.machine`, is fed only from shim's
+`MokListRT`; on a machine with no shim it is initialised and stays empty. A
+`dummy.ko` re-signed with `/var/lib/sbctl/keys/db/db.{key,pem}` is refused with
+`Loading of module with unavailable key is rejected`, while the same module
+unmodified loads. No certificate can be added to a module-trusted keyring at
+runtime either: `.machine`, `.platform` and `.builtin_trusted_keys` answer
+`Permission denied`, and `.secondary_trusted_keys` answers `Required key not
+available` because it would need a certificate signed by Arch's build-time key,
+whose private half does not survive the Arch build.
+
+`CONFIG_INTEGRITY_MACHINE_KEYRING=y` in Arch's config does not contradict any of
+this — it enables the keyring, not a route from `db` into it.
+
+So an out-of-tree module under `lockdown=integrity` needs one of: a **shim
+carrying our certificate as its vendor certificate** (which would reach
+`.machine` through `MokListRT` with no MokManager screen, and which we could sign
+with our own `db` key since we own the firmware), **our own kernel package** with
+the certificate in `CONFIG_SYSTEM_TRUSTED_KEYS`, or **dropping
+`module.sig_enforce=1` and `lockdown=integrity`** from §4's drop-in on the
+machines that need it. None is implemented.
+
+Evidence: `pocs/server-install/reference/module-signing-keyrings.txt`.
+Write-up: `reports/2026-08-29-zfs-signed-module.md`.
 
 ---
 
