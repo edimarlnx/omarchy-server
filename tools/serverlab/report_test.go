@@ -109,6 +109,59 @@ func TestRenderReportSections(t *testing.T) {
 	}
 }
 
+// TestReportLinksPreferPublishedEvidence is the contract of `lab test`
+// publishing by default: a report links to the committed copy under
+// pocs/server-install/reference/ when that copy is the file the report was
+// written from, and falls back to the lab's private directory when it is not —
+// so a link never points at somebody else's run.
+func TestReportLinksPreferPublishedEvidence(t *testing.T) {
+	root := t.TempDir()
+	cfg := defaultConfig(root)
+	lab := &Lab{Name: "srv", Profile: "server", ISO: "/repo/x.iso", Out: filepath.Join(root, "pocs", "lab", "out-srv")}
+
+	evidence := lab.evidenceDir()
+	reference := filepath.Join(root, "pocs", "server-install", "reference", "srv")
+	for _, dir := range []string{evidence, reference} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	acceptance, err := os.ReadFile(filepath.Join("testdata", "acceptance.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(dir, name string, data []byte) {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(evidence, "acceptance.txt", acceptance)
+	write(reference, "acceptance.txt", acceptance)
+
+	surface, err := os.ReadFile(filepath.Join("testdata", "surface.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(evidence, "surface.txt", surface)
+	// A reference copy left over from a different lab must not be linked.
+	write(reference, "surface.txt", append(surface, []byte("\nfrom another run\n")...))
+
+	input, err := buildReportInput(cfg, lab, "", "", "2026-08-29")
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]string{}
+	for _, link := range input.EvidenceLinks {
+		links[filepath.Base(link[1])] = link[1]
+	}
+	if want := "../pocs/server-install/reference/srv/acceptance.txt"; links["acceptance.txt"] != want {
+		t.Errorf("acceptance link = %q, want %q", links["acceptance.txt"], want)
+	}
+	if want := "../pocs/lab/out-srv/evidence/surface.txt"; links["surface.txt"] != want {
+		t.Errorf("surface link = %q, want %q (a stale published copy is not the record)", links["surface.txt"], want)
+	}
+}
+
 func TestAppendIndexRow(t *testing.T) {
 	root := t.TempDir()
 	reports := filepath.Join(root, "reports")

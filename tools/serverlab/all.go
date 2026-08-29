@@ -33,6 +33,7 @@ func cmdAll(args []string) error {
 	skipISO := fs.Bool("skip-iso", false, "do not build the ISO (implied by --iso)")
 	skipReport := fs.Bool("skip-report", false, "do not write a report at the end")
 	enforce := fs.Bool("enforce", false, "MAC suites: also run the ENFORCE=1 pass")
+	noPublish := fs.Bool("no-publish", false, "keep the evidence private to the lab instead of copying it into pocs/server-install/reference/")
 	fresh := fs.Bool("fresh", false, "iso build: discard the scratch tree first")
 	if err := fs.Parse(args); err != nil {
 		return errHandled
@@ -59,7 +60,7 @@ func cmdAll(args []string) error {
 		addons: *addons, mac: *mac, secboot: *secboot, unattended: *unattended,
 		hostname: *hostname, diskGB: *diskGB, dataDiskGB: *dataDiskGB,
 		skipPkgs: *skipPkgs, skipISO: *skipISO, skipReport: *skipReport,
-		enforce: *enforce, fresh: *fresh,
+		enforce: *enforce, noPublish: *noPublish, fresh: *fresh,
 	})
 
 	if cfg.DryRun {
@@ -99,6 +100,7 @@ type planOptions struct {
 	diskGB, dataDiskGB            int
 	skipPkgs, skipISO, skipReport bool
 	enforce, fresh                bool
+	noPublish                     bool
 }
 
 // planStep is one stage of `all`: a label, a human description used by
@@ -181,7 +183,7 @@ func buildPlan(cfg *Config, opts planOptions) []planStep {
 		if err != nil {
 			return err
 		}
-		return runLabTest(s, lab, resolved, false, false, opts.enforce, false)
+		return runLabTest(s, lab, resolved, false, false, opts.enforce, !opts.noPublish)
 	}})
 
 	if !opts.skipReport {

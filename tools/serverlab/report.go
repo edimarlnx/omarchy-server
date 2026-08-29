@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -374,12 +375,22 @@ func buildReportInput(cfg *Config, lab *Lab, title, subject, date string) (*Repo
 		input.ISO = ISOInfo{Name: filepath.Base(lab.ISO)}
 	}
 
-	// Evidence lives in the lab's own (gitignored) directory; a report links
-	// to it relative to reports/, which is where the file will sit.
+	// A report links to its evidence relative to reports/, which is where the
+	// file will sit. The run writes into the lab's own (gitignored) directory,
+	// and `lab test` publishes a copy into
+	// pocs/server-install/reference/<lab>/, which is committed. Link to the
+	// published copy whenever it is byte for byte the file this report was
+	// written from: that is the link a reader of the repository can follow. A
+	// run made with --no-publish, or one whose copy has since been rewritten,
+	// keeps the private path, so a stale link is never presented as the record.
 	rel := func(name string) string {
-		relative, err := filepath.Rel(filepath.Join(cfg.Root, "reports"), filepath.Join(evidence, name))
+		path := filepath.Join(evidence, name)
+		if published := filepath.Join(referenceDir(cfg, lab.Name), name); sameFile(path, published) {
+			path = published
+		}
+		relative, err := filepath.Rel(filepath.Join(cfg.Root, "reports"), path)
 		if err != nil {
-			return filepath.Join(evidence, name)
+			return path
 		}
 		return relative
 	}
@@ -510,6 +521,29 @@ func reportMethods(lab *Lab) []string {
 		"#   pocs/lab/vm.sh " + lab.Name + " create|start|wait-ssh",
 		"#   pocs/server-install/collect.sh|surface.sh|acceptance*.sh|reboot-check.sh " + lab.Name,
 	}
+}
+
+// sameFile answers whether two paths hold the same bytes. It is what decides
+// that a published copy is still the evidence a report was written from, rather
+// than a file another lab has since written over.
+func sameFile(a, b string) bool {
+	infoA, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	infoB, err := os.Stat(b)
+	if err != nil || infoA.Size() != infoB.Size() {
+		return false
+	}
+	dataA, err := os.ReadFile(a)
+	if err != nil {
+		return false
+	}
+	dataB, err := os.ReadFile(b)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(dataA, dataB)
 }
 
 // appendIndexRow adds this report to the table in reports/README.md, newest

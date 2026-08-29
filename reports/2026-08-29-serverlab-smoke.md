@@ -46,7 +46,7 @@ runs last, because it takes the VM down.
 
 ### Acceptance — the base install
 
-**36 passed, 1 failed.** Full evidence in [`acceptance.txt`](../pocs/lab/out-srvlab/evidence/acceptance.txt).
+**36 passed, 1 failed.** Full evidence in [`acceptance.txt`](../pocs/server-install/reference/srvlab/acceptance.txt).
 
 | # | Item | Verdict | Evidence |
 |---|---|---|---|
@@ -116,18 +116,35 @@ The machine came back over ssh after `systemctl reboot`.
 
 ## Evidence
 
-- [`acceptance.txt`](../pocs/lab/out-srvlab/evidence/acceptance.txt) — the acceptance run, raw
-- [`surface.txt`](../pocs/lab/out-srvlab/evidence/surface.txt) — the attack-surface measurements, raw
-- [`reboot-check.txt`](../pocs/lab/out-srvlab/evidence/reboot-check.txt) — the reboot survival check
-- [`packages-all.txt`](../pocs/lab/out-srvlab/evidence/packages-all.txt) — the package list of the installed machine
-- [`boot-time.txt`](../pocs/lab/out-srvlab/evidence/boot-time.txt) — boot timing
-- [`omarchy-install.log`](../pocs/lab/out-srvlab/evidence/omarchy-install.log) — the install log of the orchestrator
+- [`acceptance.txt`](../pocs/server-install/reference/srvlab/acceptance.txt) — the acceptance run, raw
+- [`surface.txt`](../pocs/server-install/reference/srvlab/surface.txt) — the attack-surface measurements, raw
+- [`reboot-check.txt`](../pocs/server-install/reference/srvlab/reboot-check.txt) — the reboot survival check
+- [`packages-all.txt`](../pocs/server-install/reference/srvlab/packages-all.txt) — the package list of the installed machine
+- [`boot-time.txt`](../pocs/server-install/reference/srvlab/boot-time.txt) — boot timing
+- [`omarchy-install.log`](../pocs/server-install/reference/srvlab/omarchy-install.log) — the install log of the orchestrator
 
 ## Limitations
 
-_Written by `serverlab report` from the evidence files listed above._ The tables are the
-run; what the run does **not** prove is not in them, and belongs here:
+The tables were written by `serverlab report` from the evidence files listed
+above. What the run does **not** prove is not in them, and belongs here:
 
-- TODO: what this environment does not cover (hardware, firmware, network).
-- TODO: which numbers are host noise rather than a conclusion.
-- TODO: the bugs this run found, and what changed because of them.
+- **The one failure was the test, not the machine.** Item 20 expected
+  `omarchy-version` to read `4.0.1-1` and got `4.0.1-5`: the acceptance list
+  pinned a `pkgrel` that moves every time the profile package is rebuilt, so it
+  was guaranteed to fail on the fifth build of a package whose *version* was
+  correct. Fixed in `fceb474` — the check now accepts any `pkgrel` of the
+  expected release — and the base run in
+  [`2026-08-29-update-without-reboot.md`](2026-08-29-update-without-reboot.md)
+  is the same list passing whole.
+- **The environment is one QEMU/OVMF virtual machine on one host.** No physical
+  firmware, no real NIC, no disk that can be slow. Boot timing (item 16, and the
+  6.1 s in the reboot table) is therefore an upper bound on a machine with no
+  device probing to do, not a number to carry to hardware.
+- **The surface numbers are a snapshot of one moment of the run.** `collect.sh`
+  and `surface.sh` deliberately run *before* the acceptance workload, which
+  installs the `docker` addon and then updates: the 220 packages and 1403 MiB
+  are the base install, not what the machine looked like when the last check
+  passed.
+- **Nothing here exercises the update classifier or the MAC addons.** This
+  machine was installed with no `--mac` and no Secure Boot, and its update
+  (items 35–37) ran the pre-classifier `omarchy-server-update`.

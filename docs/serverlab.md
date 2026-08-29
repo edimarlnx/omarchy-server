@@ -31,7 +31,7 @@ the first failure, and appends to a run log.
 | `serverlab pkgs publish --yes` | in `omarchy-server-pkgs`: `scripts/publish.sh` — uploads the assets. Refuses to run without `--yes` |
 | `serverlab iso build [--profile P] [--fresh] [--debug]` | `iso/build.sh` |
 | `serverlab lab up NAME [flags]` | `pocs/lab/mkcidata.sh` → `vm.sh create` → `vm.sh start` → `vm.sh wait-ssh` |
-| `serverlab lab test NAME [--suite S]` | `collect.sh` → `surface.sh` → `acceptance*.sh` → `reboot-check.sh` |
+| `serverlab lab test NAME [--suite S]` | `collect.sh` → `surface.sh` → `acceptance*.sh` → `reboot-check.sh`, then publishes the evidence into `pocs/server-install/reference/<name>/` unless `--no-publish` |
 | `serverlab lab down\|status\|ssh\|screenshot NAME` | the matching `vm.sh` command |
 | `serverlab report NAME` | no script: writes `reports/YYYY-MM-DD-<name>.md` from the evidence files |
 | `serverlab all` | all of the above, in order, with a summary table |
@@ -89,10 +89,40 @@ serverlab report srvsel
 ```
 
 Evidence goes to `pocs/lab/out-<name>/evidence/`, one directory per machine, so
-two labs never overwrite each other's record. `--publish-evidence` additionally
-copies it over the committed artifacts in `pocs/server-install/reference/`; it
-is opt-in, because an automated run must not silently overwrite the files an
-earlier report was written from.
+two labs never overwrite each other's record.
+
+## Evidence that a reader can open
+
+`pocs/lab/out-<name>/` is gitignored, which makes it the wrong place for a
+report to point at: the report is committed, the file it cites is not, and a
+link in `reports/` resolves to nothing in a fresh clone. So `lab test`
+**publishes** by default — it copies every file it produced (the `acceptance*.txt`
+of each suite, `surface.txt`, `reboot-check.txt` and everything `collect.sh`
+gathered) into `pocs/server-install/reference/<name>/`, which is committed.
+That directory is the record; the lab's own directory is the working copy.
+
+The **`<name>`** matters. The flat files at the top of `reference/` predate this
+and are cited by the hand-written reports — the `packages-all.txt` there is the
+*desktop* reference install, not a server one — so a run that published on top
+of them would rewrite the evidence behind a report nobody touched. One
+subdirectory per lab means publishing grows the record instead of overwriting
+it, and two labs never collide.
+
+```bash
+serverlab lab test srv --suite base                # publishes, and the report links resolve
+serverlab lab test scratch --suite base --no-publish   # a throwaway run, kept out of the record
+```
+
+`--no-publish` (also on `serverlab all`) is for a run that should not become the
+record: a debugging pass, a machine deliberately broken to see what fails, a
+second lab whose evidence would sit on top of the first one's.
+
+`serverlab report` follows the same rule per file rather than per run: a link
+points at `../pocs/server-install/reference/<name>/<file>` when the published copy is
+**byte for byte** the file the report was written from, and at the lab's private
+path when it is not. A `--no-publish` run therefore keeps its private links, and
+so does a file another lab has since overwritten — a stale link is never
+presented as the record.
 
 ## How the report is generated
 

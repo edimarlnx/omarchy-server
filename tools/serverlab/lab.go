@@ -279,7 +279,7 @@ func labTest(args []string) error {
 	noCollect := fs.Bool("no-collect", false, "skip collect.sh and surface.sh")
 	noReboot := fs.Bool("no-reboot", false, "skip reboot-check.sh, which takes the VM down and up")
 	enforce := fs.Bool("enforce", false, "MAC suites: also run the ENFORCE=1 pass")
-	publish := fs.Bool("publish-evidence", false, "copy the evidence into pocs/server-install/reference/ as well")
+	noPublish := fs.Bool("no-publish", false, "keep the evidence private to the lab instead of copying it into pocs/server-install/reference/")
 	name, rest := splitName(args)
 	if err := fs.Parse(rest); err != nil {
 		return errHandled
@@ -308,7 +308,7 @@ func labTest(args []string) error {
 	}
 	defer session.Close()
 
-	err = runLabTest(session, lab, suites, *noCollect, *noReboot, *enforce, *publish)
+	err = runLabTest(session, lab, suites, *noCollect, *noReboot, *enforce, !*noPublish)
 	session.Summary()
 	return err
 }
@@ -390,7 +390,7 @@ func runLabTest(s *Session, lab *Lab, suites []string, noCollect, noReboot, enfo
 	}
 
 	if publish {
-		if err := publishEvidence(s, evidence); err != nil {
+		if err := publishEvidence(s, lab, evidence); err != nil {
 			return err
 		}
 	}
@@ -442,15 +442,32 @@ func runCaptured(s *Session, step Step, target string) error {
 	return nil
 }
 
-// publishEvidence copies a run's artifacts over the committed record in
-// pocs/server-install/reference/. It is opt-in: an automated run must not
-// silently overwrite the artifacts an earlier report was written from.
-func publishEvidence(s *Session, evidence string) error {
-	target := s.Config.Script("pocs", "server-install", "reference")
+// referenceDir is the committed record: the evidence a report links to, under
+// version control, so a claim in reports/ resolves to a file a reader can open
+// from a checkout rather than to a gitignored directory only the operator has.
+//
+// A run publishes into its own subdirectory, named after the lab. The flat
+// files at the top of reference/ predate this and are cited by the
+// hand-written reports — a `packages-all.txt` there is the *desktop* reference
+// install — so a server lab publishing by default must not land on top of them.
+func referenceDir(cfg *Config, lab string) string {
+	return cfg.Script("pocs", "server-install", "reference", lab)
+}
+
+// publishEvidence copies a run's artifacts into the committed record under
+// pocs/server-install/reference/<lab>/. It is the default, because evidence
+// nobody can read is not evidence; `lab test --no-publish` keeps a throwaway
+// run out of the record.
+func publishEvidence(s *Session, lab *Lab, evidence string) error {
+	target := referenceDir(s.Config, lab.Name)
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(evidence)
 	if err != nil {
 		return err
 	}
+	published := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -462,8 +479,9 @@ func publishEvidence(s *Session, evidence string) error {
 		if err := os.WriteFile(filepath.Join(target, entry.Name()), data, 0o644); err != nil {
 			return err
 		}
+		published++
 	}
-	s.Printf("evidence published into %s", target)
+	s.Printf("evidence published into %s (%d files)", target, published)
 	return nil
 }
 

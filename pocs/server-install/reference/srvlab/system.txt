@@ -1,0 +1,46 @@
+7.1.11-arch1-1
+NAME="Omarchy Server"
+PRETTY_NAME="Omarchy Server 4.0.1"
+ID=omarchy-server
+profile: server
+omarchy-version: 4.0.1-5
+--- /usr/share/omarchy ---
+bin
+config
+default
+etc-overrides
+icon.txt
+install
+logo.svg
+logo.txt
+migrations
+version
+--- /home/omarchy ---
+.
+..
+.agents
+.bash_logout
+.bash_profile
+.bashrc
+.claude
+.codex
+.config
+.gemini
+.lab-pw
+.lab-sudo
+.local
+.pi
+.ssh
+--- /proc/cmdline ---
+root=PARTUUID=af197de0-c207-4c8f-8ee3-467e9b74ee6f zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
+--- default target ---
+multi-user.target
+--- zram/swap ---
+NAME       ALGORITHM DISKSIZE DATA COMPR TOTAL STREAMS MOUNTPOINT
+/dev/zram0 zstd          3.9G   4K   64B   20K         [SWAP]
+NAME       TYPE      SIZE USED PRIO
+/dev/zram0 partition 3.9G   0B  100
+--- failed units ---
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+
+0 loaded units listed.
