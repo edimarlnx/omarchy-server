@@ -1,0 +1,37 @@
+=== reboot survival — VM 'srvsel' — 2026-08-29T14:25:22-03:00 ===
+
+before:
+2026-08-29 14:25:02
+7.1.11-arch1-1
+4.0.1-7
+
+rebooting...
+rebooted: boot time moved from 2026-08-29 14:25:02 to 2026-08-29 14:25:27
+ssh answered 1s after the reboot request
+
+after:
+2026-08-29 14:25:27
+7.1.11-arch1-1
+profile: server
+version: 4.0.1-7
+default target: multi-user.target
+cmdline: root=PARTUUID=1033843d-b630-4dac-a6b9-3dd3e771dad8 zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs  console=ttyS0,115200 console=tty0
+Startup finished in 795ms (firmware) + 2.618s (loader) + 910ms (kernel) + 2.740s (userspace) = 7.065s 
+multi-user.target reached after 2.740s in userspace.
+--- failed units ---
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+
+0 loaded units listed.
+--- firewall ---
+Status: active
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     LIMIT       Anywhere                  
+172.17.0.1 53/udp          ALLOW       172.16.0.0/12              # allow-docker-dns
+--- listening ---
+0.0.0.0:22
+127.0.0.53%lo:53
+127.0.0.54:53
+172.17.0.1:53
+[::]:22

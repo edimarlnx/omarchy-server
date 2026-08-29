@@ -1,0 +1,416 @@
+=== SELinux acceptance — VM 'srvsel' — 2026-08-29T14:23:58-03:00 ===
+mode under test: permissive
+
+[PASS] the kernel initialised SELinux
+      $ ls -d /sys/fs/selinux 2>&1; grep -o "lsm=[^ ]*" /proc/cmdline
+      /sys/fs/selinux
+      lsm=landlock,lockdown,yama,integrity,selinux,bpf
+
+[PASS] lsm= names selinux, with lockdown ahead of it and bpf last
+      $ grep -o "lsm=[^ ]*" /proc/cmdline
+      lsm=landlock,lockdown,yama,integrity,selinux,bpf
+
+[PASS] the cmdline came from inside the UKI, not from limine.conf
+      $ ~/.lab-sudo grep -c "lsm=" /boot/limine.conf 2>/dev/null; echo "in-cmdline=$(grep -c "lsm=landlock" /proc/cmdline)"
+      1
+      in-cmdline=1
+
+[PASS] the refpolicy-arch policy is loaded
+      $ sestatus
+      SELinux status:                 enabled
+      SELinuxfs mount:                /sys/fs/selinux
+      SELinux root directory:         /etc/selinux
+      Loaded policy name:             refpolicy-arch
+      Current mode:                   permissive
+      Mode from config file:          permissive
+      Policy MLS status:              disabled
+      Policy deny_unknown status:     denied
+      Memory protection checking:     actual (secure)
+      Max kernel policy version:      35
+
+[PASS] /etc/selinux/config says what the addon wrote
+      $ grep -E "^(SELINUX|SELINUXTYPE)=" /etc/selinux/config; readlink -f /etc/selinux/config
+      SELINUX=permissive
+      SELINUXTYPE=refpolicy-arch
+      /etc/selinux/config.refpolicy-arch
+
+[PASS] the profile's own file contexts are in the policy store
+      $ ~/.lab-sudo cat /etc/selinux/refpolicy-arch/contexts/files/file_contexts.local
+      # Written by install/server/selinux-server.sh from
+      # install/server/mac/selinux/local-fcontexts. Do not edit by hand:
+      # the addon rewrites this file whole on every run.
+      /usr/share/omarchy/bin(/.*)?	system_u:object_r:bin_t
+      /var/lib/lastlog(/.*)?	system_u:object_r:lastlog_t
+      /etc/pacman\.d/gnupg(/.*)?	system_u:object_r:gpg_secret_t
+      /opt/containerd(/.*)?	system_u:object_r:container_var_lib_t
+
+[PASS] and they are what the profile's commands actually carry
+      $ ls -Z /usr/share/omarchy/bin/omarchy-server-update
+      system_u:object_r:bin_t /usr/share/omarchy/bin/omarchy-server-update
+
+[PASS] the base selinux addon did NOT pull setools or selinux-python in
+      $ pacman -Qq setools selinux-python python-networkx python-scipy python-pandas 2>&1 | sort -u
+      error: package 'python-networkx' was not found
+      error: package 'python-pandas' was not found
+      error: package 'python-scipy' was not found
+      error: package 'selinux-python' was not found
+      error: package 'setools' was not found
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+
+[PASS] and the policy tools are offered as their own addon
+      $ omarchy-server-addon --list | grep -E "^selinux"
+      selinux-tools
+      selinux
+
+[PASS] every binary that needs libselinux reaches it
+      /usr/lib/systemd/systemd                 dlopen
+      /usr/bin/ls                              linked
+      /usr/bin/id                              linked
+      /usr/bin/sudo                            linked
+      /usr/lib/ssh/sshd-session                linked
+      /usr/bin/useradd                         linked
+      /usr/bin/mount                           linked
+      /usr/lib/security/pam_selinux.so         linked
+
+[PASS] the stock packages were replaced, not installed alongside
+      $ pacman -Qq | grep -E "^(systemd|coreutils|util-linux|shadow|sudo|openssh|pam|pambase)(-selinux)?$" | sort
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+      coreutils-selinux
+      openssh-selinux
+      pam-selinux
+      pambase-selinux
+      shadow-selinux
+      sudo-selinux
+      systemd-selinux
+      util-linux-selinux
+
+[PASS] openssh was not downgraded by the rebuild
+      $ pacman -Q openssh-selinux; sshd -V 2>&1 | head -1
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+      openssh-selinux 10.5p1-1
+      OpenSSH_10.5p1, OpenSSL 3.6.4 25 Aug 2026
+
+[FAIL] init runs in a domain of its own
+      $ ~/.lab-sudo sh -c "tr -d \"\\0\" </proc/1/attr/current"
+      system_u:system_r:kernel_t
+
+[PASS] sshd runs in a domain of its own
+      $ ~/.lab-sudo sh -c "for p in \$(pgrep -x sshd); do tr -d \"\\0\" </proc/\$p/attr/current; echo; done | sort -u"
+      system_u:system_r:sshd_t
+
+[PASS] the ssh session is not simply sshd's own context
+      $ id -Z; echo "---"; tr -d "\0" </proc/$$/attr/current
+      staff_u:staff_r:staff_t
+      ---
+      staff_u:staff_r:staff_t
+
+[PASS] the profile's pam_faillock settings survived the pambase replacement
+      $ grep -n "pam_faillock" /etc/pam.d/system-auth; ls /etc/pam.d/*.pacnew 2>/dev/null
+      3:auth       required                    pam_faillock.so preauth silent deny=10 unlock_time=120
+      8:auth       [default=die]               pam_faillock.so authfail deny=10 unlock_time=120
+      11:auth       required                    pam_faillock.so      authsucc
+      12:# If you drop the above call to pam_faillock.so the lock will be done also
+
+[PASS] the transition is pam_selinux's, and it is in the sshd stack
+      $ grep -rn selinux /etc/pam.d/sshd /etc/pam.d/system-login 2>/dev/null
+      /etc/pam.d/system-login:13:# pam_selinux.so close should be the first session rule
+      /etc/pam.d/system-login:14:session    required   pam_selinux.so close
+      /etc/pam.d/system-login:19:# pam_selinux.so open should only be followed by sessions to be executed in the user context
+      /etc/pam.d/system-login:20:session    required   pam_selinux.so open
+
+[PASS] the operator logs in as staff_t, not as the default user_t
+      $ id -Z
+      staff_u:staff_r:staff_t
+
+[PASS] and sudo lands in sysadm_t, which is the whole point
+      $ ~/.lab-sudo id -Z
+      staff_u:sysadm_r:sysadm_t
+
+[PASS] the login domain is confined: sysadm_t is reached by sudo, not by ssh
+      $ id -Z; ~/.lab-sudo getsebool ssh_sysadm_login allow_ptrace
+      staff_u:staff_r:staff_t
+      ssh_sysadm_login --> off
+      allow_ptrace --> off
+
+[PASS] the mapping is %wheel -> staff_u in the policy store's seusers
+      $ grep -Ev "^#|^$" /etc/selinux/refpolicy-arch/seusers
+      root:root
+      __default__:user_u
+      %wheel:staff_u
+
+[PASS] and sudoers carries the role transition for that same group
+      $ ~/.lab-sudo cat /etc/sudoers.d/omarchy-selinux-role
+      # Written by omarchy-server-selinux admin-role.
+      #
+      # sudo changes the SELinux role as well as the Unix identity: a member
+      # of 'wheel' logs in as staff_u:staff_r:staff_t and runs sudo as
+      # staff_u:sysadm_r:sysadm_t. Without this line sudo gives Unix root and
+      # leaves the confined user context in place, which in enforcing means
+      # pacman, ufw, systemctl and setenforce are all refused.
+      Defaults:%wheel role=sysadm_r, type=sysadm_t
+
+[PASS] omarchy-server-selinux status reports both halves
+      $ omarchy-server-selinux status | sed -n "/administrative role/,/^$/p"
+      == administrative role ==
+      seusers:    root:root
+      seusers:    __default__:user_u
+      seusers:    %wheel:staff_u
+      sudoers:    (not readable without root)
+
+[PASS] /etc and /usr carry real labels, not unlabeled_t
+      $ ls -Zd /etc /usr /usr/bin/sshd /etc/shadow
+            system_u:object_r:etc_t /etc
+         system_u:object_r:shadow_t /etc/shadow
+            system_u:object_r:usr_t /usr
+      system_u:object_r:sshd_exec_t /usr/bin/sshd
+
+[PASS] findutils here cannot do the sweep, which is why the check below does not use it
+      $ find /etc -maxdepth 0 -context "*" 2>&1 | head -1; echo "exit=$?"
+      find: invalid predicate -context: SELinux is not enabled.
+      exit=0
+
+[PASS] no file under /etc /usr /var has a label the policy disagrees with
+      $ ~/.lab-sudo restorecon -nvR -e /var/lib/docker -e /var/lib/containerd /etc /usr /var 2>&1 | head -20; echo "wrong=$(~/.lab-sudo restorecon -nvR -e /var/lib/docker -e /var/lib/containerd /etc /usr /var 2>/dev/null | wc -l)"
+      Can't stat exclude path "/var/lib/docker", No such file or directory - ignoring.
+      Can't stat exclude path "/var/lib/containerd", No such file or directory - ignoring.
+      wrong=0
+
+[PASS] /home/<user> is labelled user_home_dir_t, not unlabeled
+      $ ls -Zd /home /home/*
+         system_u:object_r:home_root_t /home
+      staff_u:object_r:user_home_dir_t /home/omarchy
+
+[PASS] and nothing under /home has a label the policy disagrees with
+      $ ~/.lab-sudo restorecon -nvR /home /root 2>&1 | head -10; echo "wrong=$(~/.lab-sudo restorecon -nvR /home /root 2>/dev/null | wc -l)"
+      wrong=0
+
+[PASS] the relabel flag was cleared, so the next boot does not repeat it
+      $ ls -l /.autorelabel 2>&1
+      ls: cannot access '/.autorelabel': No such file or directory
+
+[PASS] the first-boot relabel unit ran and succeeded
+      $ systemctl is-enabled omarchy-server-selinux-relabel.service; ~/.lab-sudo journalctl -u omarchy-server-selinux-relabel.service --no-pager -o cat | tail -5
+      enabled
+      Done. A reboot is not required, but is the cleanest way to pick up the
+      new labels in every already-running process.
+      omarchy-server-selinux-relabel.service: Deactivated successfully.
+      Finished Relabel the filesystem for SELinux (one-shot).
+      omarchy-server-selinux-relabel.service: Consumed 804ms CPU time over 1.161s wall clock time, 87.7M memory peak.
+
+[PASS] sudo still works
+      $ ~/.lab-sudo id -un
+      root
+
+[PASS] a snapper snapshot can be taken
+      $ ~/.lab-sudo snapper -c root create -d selinux-acceptance --print-number && ~/.lab-sudo snapper -c root list | tail -3
+      1
+      --+--------+-------+--------------------------+------+---------+--------------------+---------
+      0 | single |       |                          | root |         | current            |
+      1 | single |       | Sat Aug 29 14:24:00 2026 | root |         | selinux-acceptance |
+
+[PASS] pacman can run a transaction
+      $ ~/.lab-sudo pacman -Sy --noconfirm >/dev/null 2>&1; ~/.lab-sudo pacman -Q pacman-contrib && echo pacman-ok
+      pacman-contrib 1.13.1-1
+      pacman-ok
+
+[PASS] the docker addon installs and runs a container
+      $ ~/.lab-sudo omarchy-server-addon docker >/tmp/addon-docker.log 2>&1; echo "addon-exit=$?"; tail -3 /tmp/addon-docker.log; ~/.lab-sudo docker run --rm hello-world >/tmp/hello.log 2>&1; echo "run-exit=$?"; grep -c "Hello from Docker" /tmp/hello.log
+      addon-exit=0
+      Created symlink '/etc/systemd/system/sockets.target.wants/docker.socket' → '/usr/lib/systemd/system/docker.socket'.
+      Firewall reloaded
+      Addon 'docker' installed.
+      run-exit=0
+      1
+
+[PASS] nothing in the container runtime tree is unlabeled or non-container
+      $ ~/.lab-sudo sh -c "ls -RZ /var/lib/docker /var/lib/containerd 2>/dev/null | grep -oE \"[a-z_]+_t \" | sort -u"; echo "bad=$(~/.lab-sudo sh -c "ls -RZ /var/lib/docker /var/lib/containerd 2>/dev/null | grep -cE \"unlabeled_t|:etc_t |:usr_t \"")"
+      container_file_t 
+      container_var_lib_t 
+      bad=0
+
+[PASS] the size of that disagreement is recorded, not repaired
+      $ echo "differs-from-static-policy=$(~/.lab-sudo restorecon -nvR /var/lib/docker /var/lib/containerd 2>/dev/null | wc -l)"
+      differs-from-static-policy=10
+
+[PASS] the fwall addon installs
+      $ ~/.lab-sudo omarchy-server-addon fwall 2>&1 | tail -3; command -v fwall
+      Relabeling package files...
+      Relabeling generated directories...
+      Addon 'fwall' installed.
+      /usr/bin/fwall
+
+[PASS] the firewall still answers
+      $ ~/.lab-sudo ufw status verbose | head -8
+      Status: active
+      Logging: on (low)
+      Default: deny (incoming), allow (outgoing), deny (routed)
+      New profiles: skip
+      
+      To                         Action      From
+      --                         ------      ----
+      22/tcp                     LIMIT IN    Anywhere                  
+
+[PASS] a login on the serial console reaches a shell in a user domain
+      $ ~/.lab-sudo systemctl is-active serial-getty@ttyS0.service
+      active
+
+[PASS] omarchy-server-update completes
+      $ ~/.lab-sudo omarchy-server-update >/tmp/update.log 2>&1; echo "update-exit=$?"; tail -8 /tmp/update.log
+      update-exit=0
+      [32m
+      Restarting shell[0m
+      All plugins have been reloaded
+      Omarchy shell config not found: /usr/share/omarchy/shell
+      
+      restarted: none
+      deferred: none
+      reboot required: no
+
+[PASS] and the same update run the way the timer runs it
+      $ ~/.lab-sudo systemctl start omarchy-server-update.service; ~/.lab-sudo systemctl show -p Result -p ExecMainStatus omarchy-server-update.service
+      Result=success
+      ExecMainStatus=0
+
+--- AVC denials accumulated by the workload above ---
+== AVC denials since boot ==
+      audit: type=1400 audit(1788024147.288:3): avc:  denied  { module_load } for  pid=1 comm="systemd" path="/usr/lib/modules/7.1.11-arch1-1/kernel/net/vmw_vsock/vsock.ko.zst" dev="vda2" ino=45020 scontext=system_u:system_r:kernel_t tcontext=system_u:object_r:unlabeled_t tclass=system permissive=1
+      audit: type=1107 audit(1788024149.055:4): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { start } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/systemd-vconsole-setup.service" cmdline="" function="bus_unit_method_start_generic" scontext=system_u:system_r:kernel_t tcontext=system_u:object_r:unlabeled_t tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1107 audit(1788024149.056:5): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { status } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/systemd-vconsole-setup.service" cmdline="" function="reply_unit_path" scontext=system_u:system_r:kernel_t tcontext=system_u:object_r:unlabeled_t tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1400 audit(1788024151.385:6): avc:  denied  { search } for  pid=549 comm="systemd-user-se" name="1" dev="proc" ino=374 scontext=system_u:system_r:systemd_sessions_t tcontext=system_u:system_r:kernel_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024151.385:7): avc:  denied  { read } for  pid=549 comm="systemd-user-se" name="environ" dev="proc" ino=375 scontext=system_u:system_r:systemd_sessions_t tcontext=system_u:system_r:kernel_t tclass=file permissive=1
+      audit: type=1400 audit(1788024151.385:8): avc:  denied  { open } for  pid=549 comm="systemd-user-se" path="/proc/1/environ" dev="proc" ino=375 scontext=system_u:system_r:systemd_sessions_t tcontext=system_u:system_r:kernel_t tclass=file permissive=1
+      audit: type=1400 audit(1788024151.385:9): avc:  denied  { getattr } for  pid=549 comm="systemd-user-se" path="/proc/1/environ" dev="proc" ino=375 scontext=system_u:system_r:systemd_sessions_t tcontext=system_u:system_r:kernel_t tclass=file permissive=1
+      audit: type=1400 audit(1788024151.385:10): avc:  denied  { ioctl } for  pid=549 comm="systemd-user-se" path="/proc/1/environ" dev="proc" ino=375 ioctlcmd=0x542a scontext=system_u:system_r:systemd_sessions_t tcontext=system_u:system_r:kernel_t tclass=file permissive=1
+      audit: type=1400 audit(1788024159.445:11): avc:  denied  { read } for  pid=555 comm="sshd-session" name="io.systemd.DropIn" dev="tmpfs" ino=642 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:init_runtime_t tclass=lnk_file permissive=1
+      audit: type=1107 audit(1788024159.533:12): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { start } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user-runtime-dir@.service" cmdline="/usr/lib/systemd/systemd-logind" function="bus_unit_method_start_generic" scontext=system_u:system_r:kernel_t tcontext=system_u:object_r:systemd_unit_t tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1107 audit(1788024159.535:13): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { start } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/user@.service" cmdline="/usr/lib/systemd/systemd-logind" function="bus_unit_method_start_generic" scontext=system_u:system_r:kernel_t tcontext=system_u:object_r:systemd_user_manager_unit_t tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1400 audit(1788024159.575:14): avc:  denied  { search } for  pid=558 comm="systemd-user-ru" name="1" dev="proc" ino=374 scontext=system_u:system_r:systemd_user_runtime_dir_t tcontext=system_u:system_r:kernel_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024159.575:15): avc:  denied  { read } for  pid=558 comm="systemd-user-ru" name="environ" dev="proc" ino=375 scontext=system_u:system_r:systemd_user_runtime_dir_t tcontext=system_u:system_r:kernel_t tclass=file permissive=1
+      audit: type=1400 audit(1788024159.575:16): avc:  denied  { open } for  pid=558 comm="systemd-user-ru" path="/proc/1/environ" dev="proc" ino=375 scontext=system_u:system_r:systemd_user_runtime_dir_t tcontext=system_u:system_r:kernel_t tclass=file permissive=1
+      audit: type=1400 audit(1788024159.575:17): avc:  denied  { getattr } for  pid=558 comm="systemd-user-ru" path="/proc/1/environ" dev="proc" ino=375 scontext=system_u:system_r:systemd_user_runtime_dir_t tcontext=system_u:system_r:kernel_t tclass=file permissive=1
+      audit: type=1400 audit(1788024159.575:18): avc:  denied  { ioctl } for  pid=558 comm="systemd-user-ru" path="/proc/1/environ" dev="proc" ino=375 ioctlcmd=0x542a scontext=system_u:system_r:systemd_user_runtime_dir_t tcontext=system_u:system_r:kernel_t tclass=file permissive=1
+      audit: type=1400 audit(1788024159.605:19): avc:  denied  { search } for  pid=561 comm="systemd" name="1" dev="proc" ino=374 scontext=staff_u:staff_r:staff_systemd_t tcontext=system_u:system_r:kernel_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024159.606:20): avc:  denied  { read } for  pid=561 comm="systemd" name="cgroup" dev="proc" ino=378 scontext=staff_u:staff_r:staff_systemd_t tcontext=system_u:system_r:kernel_t tclass=file permissive=1
+      audit: type=1107 audit(1788024235.647:24): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { status } for auid=1000 uid=1000 gid=1000 cmdline="systemctl get-default" function="method_get_default_target" scontext=staff_u:staff_r:staff_t tcontext=system_u:system_r:kernel_t tclass=system permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1107 audit(1788024235.650:25): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { status } for auid=1000 uid=1000 gid=1000 path="/usr/lib/systemd/system/systemd-udevd-varlink.socket" cmdline="systemctl --failed --no-pager" function="list_units_filtered" scontext=staff_u:staff_r:staff_t tcontext=system_u:object_r:unlabeled_t tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1107 audit(1788024235.652:26): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { status } for auid=1000 uid=1000 gid=1000 path="/usr/lib/systemd/system/systemd-pcrlogin@.service" cmdline="systemctl --failed --no-pager" function="list_units_filtered" scontext=staff_u:staff_r:staff_t tcontext=system_u:object_r:systemd_unit_t tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1107 audit(1788024235.654:27): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { status } for auid=1000 uid=1000 gid=1000 path="/usr/lib/systemd/system/user@.service" cmdline="systemctl --failed --no-pager" function="list_units_filtered" scontext=staff_u:staff_r:staff_t tcontext=system_u:object_r:systemd_user_manager_unit_t tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1107 audit(1788024235.654:28): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { status } for auid=1000 uid=1000 gid=1000 path="/run/systemd/generator/dev-zram0.swap" cmdline="systemctl --failed --no-pager" function="list_units_filtered" scontext=staff_u:staff_r:staff_t tcontext=system_u:object_r:init_runtime_t tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1400 audit(1788024235.975:29): avc:  denied  { read } for  pid=622 comm="systemctl" name="90-systemd.preset" dev="vda2" ino=67691 scontext=staff_u:staff_r:staff_t tcontext=system_u:object_r:systemd_unit_t tclass=file permissive=1
+      audit: type=1400 audit(1788024235.975:30): avc:  denied  { open } for  pid=622 comm="systemctl" path="/usr/lib/systemd/system-preset/90-systemd.preset" dev="vda2" ino=67691 scontext=staff_u:staff_r:staff_t tcontext=system_u:object_r:systemd_unit_t tclass=file permissive=1
+      audit: type=1400 audit(1788024235.975:31): avc:  denied  { ioctl } for  pid=622 comm="systemctl" path="/usr/lib/systemd/system-preset/90-systemd.preset" dev="vda2" ino=67691 ioctlcmd=0x542a scontext=staff_u:staff_r:staff_t tcontext=system_u:object_r:systemd_unit_t tclass=file permissive=1
+      audit: type=1400 audit(1788024236.476:32): avc:  denied  { read } for  pid=631 comm="sudo" name="userdb" dev="tmpfs" ino=595 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024236.476:33): avc:  denied  { read } for  pid=631 comm="sudo" path="/run/systemd/userdb" dev="tmpfs" ino=595 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=dir permissive=1
+      audit: type=1107 audit(1788024241.641:53): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { status } for auid=n/a uid=0 gid=0 path="/usr/lib/systemd/system/limine-snapper-sync.service" cmdline="" function="mac_selinux_filter" scontext=system_u:system_r:initrc_t tcontext=system_u:object_r:unlabeled_t tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1400 audit(1788024246.844:54): avc:  denied  { read } for  pid=1565 comm="systemd-sysuser" name="io.systemd.DropIn" dev="tmpfs" ino=642 scontext=staff_u:sysadm_r:systemd_sysusers_t tcontext=system_u:object_r:init_runtime_t tclass=lnk_file permissive=1
+      audit: type=1107 audit(1788024247.395:55): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { reload } for auid=n/a uid=0 gid=0 cmdline="" function="method_reload" scontext=staff_u:sysadm_r:sysadm_t tcontext=system_u:system_r:kernel_t tclass=system permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1400 audit(1788024248.225:56): avc:  denied  { use } for  pid=1858 comm="systemd-resolve" path="socket:[4141]" dev="sockfs" ino=4141 scontext=system_u:system_r:systemd_resolved_t tcontext=system_u:system_r:kernel_t tclass=fd permissive=1
+      audit: type=1400 audit(1788024248.225:57): avc:  denied  { read write } for  pid=1858 comm="systemd-resolve" path="socket:[4141]" dev="sockfs" ino=4141 scontext=system_u:system_r:systemd_resolved_t tcontext=system_u:system_r:kernel_t tclass=unix_stream_socket permissive=1
+      audit: type=1400 audit(1788024248.225:58): avc:  denied  { search } for  pid=1858 comm="systemd-resolve" name="1" dev="proc" ino=18846 scontext=system_u:system_r:systemd_resolved_t tcontext=system_u:system_r:kernel_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024249.466:59): avc:  denied  { read } for  pid=2314 comm="sudo" name="io.systemd.DropIn" dev="tmpfs" ino=642 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=lnk_file permissive=1
+      audit: type=1400 audit(1788024249.467:60): avc:  denied  { write } for  pid=2314 comm="sudo" name="io.systemd.DynamicUser" dev="tmpfs" ino=596 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=sock_file permissive=1
+      audit: type=1400 audit(1788024249.490:61): avc:  denied  { connectto } for  pid=2320 comm="docker" path="/run/docker.sock" scontext=staff_u:sysadm_r:dockerc_t tcontext=system_u:system_r:kernel_t tclass=unix_stream_socket permissive=1
+      audit: type=1400 audit(1788024249.559:62): avc:  denied  { use } for  pid=2354 comm="dockerd" path="socket:[19471]" dev="sockfs" ino=19471 scontext=system_u:system_r:dockerd_t tcontext=system_u:system_r:kernel_t tclass=fd permissive=1
+      audit: type=1400 audit(1788024249.559:63): avc:  denied  { read write } for  pid=2354 comm="dockerd" path="socket:[19471]" dev="sockfs" ino=19471 scontext=system_u:system_r:dockerd_t tcontext=system_u:system_r:kernel_t tclass=unix_stream_socket permissive=1
+      audit: type=1107 audit(1788024254.254:70): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { start } for auid=n/a uid=0 gid=0 cmdline="runc --root /var/run/docker/runtime-runc/moby --log /run/containerd/io.containerd.runtime.v2.task/moby/432e00d306ffef2cf0480e6e04522573993989880ae706bc30924383cc0f5989/log.json --log-format json --systemd-cgroup create --bundle /run/containerd/io.containerd.runtime.v2.task/moby/432e00d306ffef2cf0480e6e04522573993989880ae706bc30924383cc0f5989 --pid-file /run/containerd/io.containerd.runtime.v2.task/moby/432e00d306ffef2cf0480e6e04522573993989880ae706bc30924383cc0f5989/init.pid 432e00d306ffef2cf0480e6e04522573993989880ae706bc30924383cc0f5989" function="method_start_transient_unit" scontext=system_u:system_r:dockerd_t tcontext=system_u:system_r:kernel_t tclass=system permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1107 audit(1788024254.268:71): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { status } for auid=n/a uid=0 gid=0 cmdline="runc --root /var/run/docker/runtime-runc/moby --log /run/containerd/io.containerd.runtime.v2.task/moby/432e00d306ffef2cf0480e6e04522573993989880ae706bc30924383cc0f5989/log.json --log-format json --systemd-cgroup create --bundle /run/containerd/io.containerd.runtime.v2.task/moby/432e00d306ffef2cf0480e6e04522573993989880ae706bc30924383cc0f5989 --pid-file /run/containerd/io.containerd.runtime.v2.task/moby/432e00d306ffef2cf0480e6e04522573993989880ae706bc30924383cc0f5989/init.pid 432e00d306ffef2cf0480e6e04522573993989880ae706bc30924383cc0f5989" function="mac_selinux_filter" scontext=system_u:system_r:dockerd_t tcontext=system_u:system_r:kernel_t tclass=system permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1400 audit(1788024254.270:72): avc:  denied  { prog_run } for  pid=2544 comm="runc" scontext=system_u:system_r:dockerd_t tcontext=system_u:system_r:kernel_t tclass=bpf permissive=1
+      audit: type=1107 audit(1788024254.349:73): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:kernel_t msg='avc:  denied  { stop } for auid=n/a uid=0 gid=0 cmdline="runc --root /var/run/docker/runtime-runc/moby --log /run/containerd/io.containerd.runtime.v2.task/moby/432e00d306ffef2cf0480e6e04522573993989880ae706bc30924383cc0f5989/log.json --log-format json --systemd-cgroup delete 432e00d306ffef2cf0480e6e04522573993989880ae706bc30924383cc0f5989" function="bus_unit_method_start_generic" scontext=system_u:system_r:dockerd_t tcontext=system_u:system_r:kernel_t tclass=system permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+      audit: type=1400 audit(1788024254.527:74): avc:  denied  { read } for  pid=2608 comm="sudo" name="userdb" dev="tmpfs" ino=595 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024254.527:75): avc:  denied  { read } for  pid=2608 comm="sudo" path="/run/systemd/userdb" dev="tmpfs" ino=595 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024254.527:76): avc:  denied  { read } for  pid=2608 comm="sudo" name="io.systemd.DropIn" dev="tmpfs" ino=642 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=lnk_file permissive=1
+      audit: type=1400 audit(1788024254.527:77): avc:  denied  { write } for  pid=2608 comm="sudo" name="io.systemd.DynamicUser" dev="tmpfs" ino=596 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=sock_file permissive=1
+      audit: type=1400 audit(1788024256.168:78): avc:  denied  { read } for  pid=2776 comm="sudo" name="userdb" dev="tmpfs" ino=595 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024256.168:79): avc:  denied  { read } for  pid=2776 comm="sudo" path="/run/systemd/userdb" dev="tmpfs" ino=595 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024260.455:93): avc:  denied  { read } for  pid=4035 comm="sudo" name="userdb" dev="tmpfs" ino=595 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024260.455:94): avc:  denied  { read } for  pid=4035 comm="sudo" path="/run/systemd/userdb" dev="tmpfs" ino=595 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024260.455:95): avc:  denied  { read } for  pid=4035 comm="sudo" name="io.systemd.DropIn" dev="tmpfs" ino=642 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=lnk_file permissive=1
+      audit: type=1400 audit(1788024260.456:96): avc:  denied  { write } for  pid=4035 comm="sudo" name="io.systemd.DynamicUser" dev="tmpfs" ino=596 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=sock_file permissive=1
+      audit: type=1400 audit(1788024262.459:97): avc:  denied  { getattr } for  pid=1858 comm="systemd-resolve" path="socket:[25700]" dev="sockfs" ino=25700 scontext=system_u:system_r:systemd_resolved_t tcontext=system_u:system_r:kernel_t tclass=unix_stream_socket permissive=1
+      audit: type=1400 audit(1788024264.136:98): avc:  denied  { read } for  pid=5268 comm="sudo" name="userdb" dev="tmpfs" ino=595 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024264.136:99): avc:  denied  { read } for  pid=5268 comm="sudo" path="/run/systemd/userdb" dev="tmpfs" ino=595 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=dir permissive=1
+      audit: type=1400 audit(1788024264.136:100): avc:  denied  { read } for  pid=5268 comm="sudo" name="io.systemd.DropIn" dev="tmpfs" ino=642 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=lnk_file permissive=1
+      audit: type=1400 audit(1788024264.136:101): avc:  denied  { write } for  pid=5268 comm="sudo" name="io.systemd.DynamicUser" dev="tmpfs" ino=596 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:object_r:init_runtime_t tclass=sock_file permissive=1
+      
+      == summary: count, source domain, target context, class, permissions ==
+          10  staff_u:staff_r:staff_sudo_t -> system_u:object_r:init_runtime_t : dir { read }
+           4  staff_u:staff_r:staff_sudo_t -> system_u:object_r:init_runtime_t : sock_file { write }
+           4  staff_u:staff_r:staff_sudo_t -> system_u:object_r:init_runtime_t : lnk_file { read }
+           1  system_u:system_r:systemd_user_runtime_dir_t -> system_u:system_r:kernel_t : file { read }
+           1  system_u:system_r:systemd_user_runtime_dir_t -> system_u:system_r:kernel_t : file { open }
+           1  system_u:system_r:systemd_user_runtime_dir_t -> system_u:system_r:kernel_t : file { ioctl }
+           1  system_u:system_r:systemd_user_runtime_dir_t -> system_u:system_r:kernel_t : file { getattr }
+           1  system_u:system_r:systemd_user_runtime_dir_t -> system_u:system_r:kernel_t : dir { search }
+           1  system_u:system_r:systemd_sessions_t -> system_u:system_r:kernel_t : file { read }
+           1  system_u:system_r:systemd_sessions_t -> system_u:system_r:kernel_t : file { open }
+           1  system_u:system_r:systemd_sessions_t -> system_u:system_r:kernel_t : file { ioctl }
+           1  system_u:system_r:systemd_sessions_t -> system_u:system_r:kernel_t : file { getattr }
+           1  system_u:system_r:systemd_sessions_t -> system_u:system_r:kernel_t : dir { search }
+           1  system_u:system_r:systemd_resolved_t -> system_u:system_r:kernel_t : unix_stream_socket { read write }
+           1  system_u:system_r:systemd_resolved_t -> system_u:system_r:kernel_t : unix_stream_socket { getattr }
+           1  system_u:system_r:systemd_resolved_t -> system_u:system_r:kernel_t : fd { use }
+           1  system_u:system_r:systemd_resolved_t -> system_u:system_r:kernel_t : dir { search }
+           1  system_u:system_r:sshd_t -> system_u:object_r:init_runtime_t : lnk_file { read }
+           1  system_u:system_r:kernel_t -> system_u:object_r:unlabeled_t : system { module_load }
+           1  system_u:system_r:kernel_t -> system_u:object_r:unlabeled_t : service { status }
+           1  system_u:system_r:kernel_t -> system_u:object_r:unlabeled_t : service { start }
+           1  system_u:system_r:kernel_t -> system_u:object_r:systemd_user_manager_unit_t : service { start }
+           1  system_u:system_r:kernel_t -> system_u:object_r:systemd_unit_t : service { start }
+           1  system_u:system_r:initrc_t -> system_u:object_r:unlabeled_t : service { status }
+           1  system_u:system_r:dockerd_t -> system_u:system_r:kernel_t : unix_stream_socket { read write }
+           1  system_u:system_r:dockerd_t -> system_u:system_r:kernel_t : system { stop }
+           1  system_u:system_r:dockerd_t -> system_u:system_r:kernel_t : system { status }
+           1  system_u:system_r:dockerd_t -> system_u:system_r:kernel_t : system { start }
+           1  system_u:system_r:dockerd_t -> system_u:system_r:kernel_t : fd { use }
+           1  system_u:system_r:dockerd_t -> system_u:system_r:kernel_t : bpf { prog_run }
+           1  staff_u:sysadm_r:systemd_sysusers_t -> system_u:object_r:init_runtime_t : lnk_file { read }
+           1  staff_u:sysadm_r:sysadm_t -> system_u:system_r:kernel_t : system { reload }
+           1  staff_u:sysadm_r:dockerc_t -> system_u:system_r:kernel_t : unix_stream_socket { connectto }
+           1  staff_u:staff_r:staff_t -> system_u:system_r:kernel_t : system { status }
+           1  staff_u:staff_r:staff_t -> system_u:object_r:unlabeled_t : service { status }
+           1  staff_u:staff_r:staff_t -> system_u:object_r:systemd_user_manager_unit_t : service { status }
+           1  staff_u:staff_r:staff_t -> system_u:object_r:systemd_unit_t : service { status }
+           1  staff_u:staff_r:staff_t -> system_u:object_r:systemd_unit_t : file { read }
+           1  staff_u:staff_r:staff_t -> system_u:object_r:systemd_unit_t : file { open }
+           1  staff_u:staff_r:staff_t -> system_u:object_r:systemd_unit_t : file { ioctl }
+           1  staff_u:staff_r:staff_t -> system_u:object_r:init_runtime_t : service { status }
+           1  staff_u:staff_r:staff_systemd_t -> system_u:system_r:kernel_t : file { read }
+           1  staff_u:staff_r:staff_systemd_t -> system_u:system_r:kernel_t : dir { search }
+      
+      To turn these into a policy module (audit2allow is in the
+      `selinux-tools` addon, and does not have to be on this machine):
+          journalctl -k -b -g 'avc: *denied' -o cat | audit2allow -m omarchy_server_local
+      Read what it produces before installing it. A rule that allows a denial
+      the machine should not have made is a hole, not a fix.
+
+[PASS] permissive: the denial count was measured
+      58 AVC records this boot
+
+--- rebooting ---
+boot id before: 366a0134-67d1-4f5f-8f17-7fdd61a7d93b
+boot id after:  5ca9aa28-46c2-4048-895c-5ac8d2bd73a7
+
+[PASS] the machine came back over ssh after a reboot
+      boot_id 366a0134-67d1-4f5f-8f17-7fdd61a7d93b -> 5ca9aa28-46c2-4048-895c-5ac8d2bd73a7
+
+[PASS] SELinux is still in the mode it was left in
+      $ getenforce
+      Permissive
+
+[PASS] and the boot produced no new denials before login
+      $ journalctl -k --no-pager -b -g 'avc: *denied' -o cat | wc -l
+      0
+
+=== 44 passed, 1 failed ===

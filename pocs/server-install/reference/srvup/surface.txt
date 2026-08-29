@@ -1,0 +1,101 @@
+=== Attack surface — VM 'srvup' — 2026-08-29T14:16:44-03:00 ===
+
+=== packages ===
+installed:  220
+explicit:   21
+dependency: 199
+installed size (MiB): 1403
+linux-firmware (MiB): 408
+
+--- ten biggest packages ---
+     147.8 MiB  linux
+     132.5 MiB  linux-firmware-intel
+     103.5 MiB  linux-firmware-nvidia
+      73.6 MiB  python
+      51.3 MiB  linux-firmware-atheros
+      51.1 MiB  boost-libs
+      50.7 MiB  glibc
+      43.8 MiB  binutils
+      43.2 MiB  icu
+      39.5 MiB  systemd
+
+=== enabled units ===
+count: 21
+  getty@.service
+  limine-snapper-sync.service
+  linux-modules-cleanup.service
+  omarchy-tty-palette.service
+  sshd.service
+  systemd-network-generator.service
+  systemd-networkd.service
+  systemd-oomd.service
+  systemd-resolved.service
+  systemd-timesyncd.service
+  ufw.service
+  systemd-networkd-resolve-hook.socket
+  systemd-networkd-varlink-metrics.socket
+  systemd-networkd-varlink.socket
+  systemd-networkd.socket
+  systemd-oomd.socket
+  systemd-resolved-monitor.socket
+  systemd-resolved-varlink.socket
+  systemd-userdbd.socket
+  remote-fs.target
+  snapper-cleanup.timer
+
+=== masked units ===
+count: 13
+  avahi-daemon.service
+  bluetooth.service
+  cups-browsed.service
+  cups.service
+  NetworkManager-wait-online.service
+  plymouth-quit-wait.service
+  plymouth-quit.service
+  plymouth-start.service
+  power-profiles-daemon.service
+  sddm.service
+  systemd-networkd-wait-online.service
+  avahi-daemon.socket
+  cups.socket
+
+=== listening sockets ===
+Netid State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+udp   UNCONN 0      0         127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=413,fd=18))
+udp   UNCONN 0      0      127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=413,fd=16))
+tcp   LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=413,fd=17))
+tcp   LISTEN 0      4096      127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=413,fd=19))
+tcp   LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=544,fd=6))
+tcp   LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=544,fd=7))
+listening tcp+udp: 6
+
+=== setuid / setgid binaries ===
+count: 16
+  -rwsr-xr-x root:root  /usr/bin/chage
+  -rwsr-xr-x root:root  /usr/bin/chfn
+  -rwsr-xr-x root:root  /usr/bin/chsh
+  -rwsr-xr-x root:root  /usr/bin/gpasswd
+  -rwsr-xr-x root:root  /usr/bin/ksu
+  -rwsr-xr-x root:root  /usr/bin/mount
+  -rwsr-xr-x root:root  /usr/bin/newgrp
+  -rwsr-xr-x root:root  /usr/bin/passwd
+  -rwsr-xr-x root:root  /usr/bin/su
+  -rwsr-xr-x root:root  /usr/bin/sudo
+  -rwsr-xr-x root:root  /usr/bin/umount
+  -rwsr-sr-x root:root  /usr/bin/unix_chkpwd
+  -rwxr-sr-x root:tty  /usr/bin/wall
+  -rwxr-sr-x root:tty  /usr/bin/write
+  ---s--x--- root:dbus  /usr/lib/dbus-daemon-launch-helper
+  -rws--x--x root:root  /usr/lib/ssh/ssh-keysign
+
+=== services running as root ===
+  dbus-broker.service
+  getty@tty1.service
+  serial-getty@ttyS0.service
+  snapperd.service
+  sshd.service
+  systemd-journald.service
+  systemd-logind.service
+  systemd-udevd.service
+  systemd-userdbd.service
+count: 9

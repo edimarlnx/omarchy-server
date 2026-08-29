@@ -1,0 +1,93 @@
+{
+  "started_at": 1788023678.8227372,
+  "target": "/mnt",
+  "total_phases": 16,
+  "current_index": 15,
+  "current_phase": "Installation complete",
+  "phases": [
+    {
+      "name": "Preparing live environment",
+      "status": "ok",
+      "elapsed": 0.051589250564575195
+    },
+    {
+      "name": "Preparing install target",
+      "status": "ok",
+      "elapsed": 4.5299530029296875e-06
+    },
+    {
+      "name": "Installing Arch + Omarchy",
+      "status": "ok",
+      "elapsed": 17.002751350402832
+    },
+    {
+      "name": "Configuring hibernation",
+      "status": "ok",
+      "elapsed": 8.630752563476562e-05
+    },
+    {
+      "name": "Configuring system",
+      "status": "ok",
+      "elapsed": 0.5018148422241211
+    },
+    {
+      "name": "Installing addons",
+      "status": "ok",
+      "elapsed": 0.0001010894775390625
+    },
+    {
+      "name": "Staging provisioning",
+      "status": "ok",
+      "elapsed": 0.08997964859008789
+    },
+    {
+      "name": "Finalizing Limine boot",
+      "status": "ok",
+      "elapsed": 3.098097562789917
+    },
+    {
+      "name": "Finalizing user",
+      "status": "ok",
+      "elapsed": 0.08930397033691406
+    },
+    {
+      "name": "Configuring login",
+      "status": "ok",
+      "elapsed": 3.981590270996094e-05
+    },
+    {
+      "name": "Configuring SSH access",
+      "status": "ok",
+      "elapsed": 0.1263434886932373
+    },
+    {
+      "name": "Configuring Tailscale",
+      "status": "ok",
+      "elapsed": 4.76837158203125e-07
+    },
+    {
+      "name": "Configuring DNS resolver",
+      "status": "ok",
+      "elapsed": 7.319450378417969e-05
+    },
+    {
+      "name": "Validating boot setup",
+      "status": "ok",
+      "elapsed": 0.0022716522216796875
+    },
+    {
+      "name": "Enrolling Secure Boot keys",
+      "status": "ok",
+      "elapsed": 3.910064697265625e-05
+    },
+    {
+      "name": "Creating factory snapshot",
+      "status": "ok",
+      "elapsed": 0.8666877746582031
+    }
+  ],
+  "phase_started_at": 1788023699.787017,
+  "finished_at": 1788023700.6540036,
+  "installed_packages": 220,
+  "expected_packages": 223
+}
