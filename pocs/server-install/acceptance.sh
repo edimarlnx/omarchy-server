@@ -336,10 +336,10 @@ check "an ssh session survives the sshd restart it triggers" \
 # because the blob the hardware was handed at boot is not on disk any more.
 check "a firmware upgrade sets the reboot-required marker" \
   '~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required;
-   printf "[ALPM] upgraded linux-firmware (20260801-1 -> 20260901-1)\n" | ~/.lab-sudo tee /tmp/fake-pacman.log >/dev/null;
-   ~/.lab-sudo env HOME=/root OMARCHY_PACMAN_LOG=/tmp/fake-pacman.log omarchy-server-update-restart --no-restart 2>&1 | grep "^reboot required:";
+   printf "[ALPM] upgraded linux-firmware (20260801-1 -> 20260901-1)\n" >~/fake-pacman.log;
+   ~/.lab-sudo env HOME=/root OMARCHY_PACMAN_LOG="$HOME/fake-pacman.log" omarchy-server-update-restart --no-restart 2>&1 | grep "^reboot required:";
    ~/.lab-sudo test -f /root/.local/state/omarchy/reboot-required && echo "marker=set" || echo "marker=absent";
-   ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required /tmp/fake-pacman.log' \
+   ~/.lab-sudo rm -f /root/.local/state/omarchy/reboot-required; rm -f ~/fake-pacman.log' \
   '^marker=set$'
 
 # The rule that keeps a kernel reinstall from costing a reboot: the question is

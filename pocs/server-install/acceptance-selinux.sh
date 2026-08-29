@@ -436,7 +436,7 @@ if [[ ${ENFORCE:-0} == 1 ]]; then
   echo "--- a kernel transaction under enforcing ---"
 
   check "a kernel transaction completes with the initramfs and UKI rebuilt" \
-    'uki=$(ls -t /boot/EFI/Linux/*.efi 2>/dev/null | head -1);
+    'uki=$(~/.lab-sudo sh -c "ls -t /boot/EFI/Linux/*.efi" 2>/dev/null | head -1);
      before=$(~/.lab-sudo stat -c %Y "$uki" 2>/dev/null);
      ~/.lab-sudo dmesg -C >/dev/null 2>&1;
      timeout 1200 ~/.lab-sudo pacman -S --noconfirm linux >/tmp/kernel.log 2>&1; echo "pacman-exit=$?";
@@ -579,7 +579,7 @@ if [[ ${ENFORCE:-0} == 1 ]]; then
   # The verdict is computed rather than pattern-matched: the assertion is the
   # ABSENCE of a string, and grep -E has no way to say that.
   check "the rebuilt UKI no longer carries lsm=...selinux" \
-    'uki=$(ls -t /boot/EFI/Linux/*.efi | head -1); echo "uki=$uki";
+    'uki=$(~/.lab-sudo sh -c "ls -t /boot/EFI/Linux/*.efi" 2>/dev/null | head -1); echo "uki=$uki";
      cmdline=$(~/.lab-sudo objcopy -O binary --only-section=.cmdline "$uki" /dev/stdout 2>/dev/null | tr -d "\0");
      if [ -z "$cmdline" ]; then echo "cmdline=unreadable";
      else echo "cmdline: $cmdline";
