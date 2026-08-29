@@ -1,0 +1,431 @@
+########################################################################
+# omarchy_server — the local SELinux policy of the server profile.
+#
+# Compiled on the machine by install/server/selinux-server.sh with
+# `checkmodule -m` + `semodule_package`, which is plain module syntax and
+# exactly what `audit2allow -M` emits. Not refpolicy macro syntax: that would
+# need make and m4 on a production server to build forty lines of policy.
+#
+# EVERY RULE HERE COMES FROM A DENIAL THAT WAS MEASURED ON THIS PROFILE, in
+# reports/2026-08-29-mandatory-access-control.md. Nothing is here because it
+# seemed likely. Each block says which denial it answers and why allowing it is
+# right rather than merely quieting.
+#
+# All of them have the same shape: the Arch reference policy is
+# refpolicy 20250923 and this profile runs systemd 261 and OpenSSH 10.5, so the
+# gaps are places where those two grew a mechanism the policy has not been
+# taught yet — systemd credentials, PSI, userdb, varlink. None of them is a
+# rule that lets a confined domain reach something it has no business in.
+#
+# NOT here, deliberately: sshd's access to /var/lib/lastlog/lastlog2.db, which
+# produced eight of the eighteen boot denials. Widening sshd_t over all of
+# var_lib_t to reach one database would be the wrong repair. The path is
+# labelled lastlog_t instead, in local-fcontexts, and refpolicy's existing
+# sshd rules for lastlog_t then apply unchanged. Label the object, do not
+# widen the subject.
+########################################################################
+
+module omarchy_server 1.0;
+
+require {
+	attribute daemon;
+	type systemd_generator_t;
+	type systemd_tmpfiles_t;
+	type auditd_etc_t;
+	type shadow_t;
+	type lastlog_t;
+	type bin_t;
+	type selinux_config_t;
+	type sysctl_fs_t;
+	type mount_runtime_t;
+	type etc_runtime_t;
+	type loadkeys_t;
+	type sysfs_t;
+	type user_systemd_t;
+	type gpg_runtime_t;
+	type init_t;
+	type systemd_sysusers_t;
+	type modules_object_t;
+	type tmp_t;
+	type user_sudo_t;
+	type user_t;
+	type getty_t;
+	type gpg_t;
+	type nsfs_t;
+	type system_dbusd_t;
+	type systemd_resolved_t;
+	type systemd_networkd_t;
+	type syslogd_t;
+	type tmpfs_t;
+	type cgroup_t;
+	type sshd_t;
+	type systemd_logind_t;
+	type systemd_user_runtime_dir_t;
+	type systemd_userdbd_t;
+	type systemd_userdbd_runtime_t;
+	class dir { search read open getattr write add_name remove_name create };
+	class bpf { prog_load prog_run map_create map_read map_write };
+	class capability2 bpf;
+	class capability { net_admin dac_read_search };
+	class filesystem { quotaget quotamod };
+	class netlink_audit_socket create;
+	class file { getattr read write open ioctl create unlink map };
+	class lnk_file { read getattr };
+	class sock_file { write create getattr unlink };
+	class system status;
+	class unix_stream_socket { connectto create listen setopt bind };
+}
+
+########################################################################
+# 1. The generators read /etc/selinux/config, which is a symlink.
+#
+#   comm="systemd-fstab-g" name="config" tclass=lnk_file
+#     scontext=systemd_generator_t tcontext=selinux_config_t
+#
+# systemd's generators call libselinux at startup, which stats
+# /etc/selinux/config to find out whether SELinux is enabled and which policy
+# to use. On this profile that path is a SYMLINK to config.refpolicy-arch --
+# the policy package ships it that way and the addon keeps it -- and refpolicy
+# grants generators the file, not the link. Reading the link is how any
+# SELinux-aware process bootstraps; refusing it just makes the generator
+# behave as if SELinux were off.
+#
+# Against the `daemon` attribute plus the generator domain, for the same reason
+# as rule 3: the first boot showed only systemd-fstab-generator, the next
+# showed systemd-networkd doing the identical thing. Any process linked against
+# libselinux reads this symlink at startup. Read on a symlink, and nothing
+# else -- the file it points at is a separate permission the policy still
+# governs.
+########################################################################
+allow systemd_generator_t selinux_config_t:lnk_file read;
+allow daemon selinux_config_t:lnk_file read;
+
+########################################################################
+# 1b. A generator reads /proc/sys/fs/nr_open.
+#
+#   comm="(mkfs)" path="/proc/sys/fs/nr_open" tclass=file
+#     { getattr read open ioctl } scontext=systemd_generator_t
+#     tcontext=sysctl_fs_t
+#
+# systemd raises its own file-descriptor limit before forking a generator, and
+# reads the kernel's ceiling to know how far it may go. A read-only sysctl that
+# says how many files this kernel allows; there is nothing to leak in it.
+########################################################################
+allow systemd_generator_t sysctl_fs_t:file { getattr read open ioctl };
+
+########################################################################
+# 1c. resolved asks networkd for the current link configuration.
+#
+#   comm="systemd-resolve" path="/run/systemd/resolve.hook/io.systemd.Network"
+#     tclass=unix_stream_socket connectto tcontext=systemd_networkd_t
+#   comm="systemd-network" name="mount" tclass=dir search
+#     tcontext=mount_runtime_t
+#
+# The same varlink migration as rule 4: systemd 261 has resolved talk to
+# networkd over a varlink hook socket rather than over D-Bus, and refpolicy
+# describes the D-Bus arrangement. Without it resolved does not learn the DNS
+# servers networkd got from DHCP.
+########################################################################
+allow systemd_resolved_t systemd_networkd_t:unix_stream_socket connectto;
+allow systemd_networkd_t mount_runtime_t:dir search;
+
+########################################################################
+# 2. systemd credentials live on a tmpfs the policy has no name for.
+#
+#   comm="systemd-network" path="/run/credentials/systemd-network-generator.service"
+#     tclass=dir { read open } tcontext=tmpfs_t
+#   comm="systemd-journal"  name="/" tclass=dir { search } tcontext=tmpfs_t
+#
+# systemd 261 mounts a private tmpfs per unit under /run/credentials/<unit>
+# and hands the unit its credentials there. The kernel labels a tmpfs root at
+# mount time and refpolicy 20250923 predates the mechanism, so the mount point
+# is plain tmpfs_t and every unit that reads its own credentials is denied.
+#
+# Against the `daemon` attribute and the getty domain, after the same lesson as
+# rule 3: the first boot showed networkd and journald, a later one showed
+# agetty reading /run/credentials/getty@tty1.service. Credentials are a
+# per-unit systemd mechanism, so the set of domains that use them is "whichever
+# units are configured with them" -- an enumeration that would grow with every
+# unit added.
+#
+# Directory traversal only, not the files inside. A domain that may enter the
+# directory still needs a rule for what it finds there, which is the policy
+# working as intended.
+########################################################################
+allow daemon tmpfs_t:dir { search read open getattr };
+allow getty_t tmpfs_t:dir { search read open getattr };
+
+########################################################################
+# 3. Every systemd service reads its own cgroup's pressure file.
+#
+#   comm="systemd-journal" path="/sys/fs/cgroup/system.slice/
+#     systemd-journald.service/memory.pressure"
+#     tclass=file { getattr read write open } tcontext=cgroup_t
+#   ... and the same, verbatim, for systemd-userdbd, systemd-timesyncd and
+#   systemd-resolved on the next boot.
+#
+# systemd registers each service for kernel PSI notifications so it can shed
+# load when the machine is under memory pressure. Opening memory.pressure
+# read-write is how a poll registration is made -- the write is the
+# registration, not a change to the cgroup's limits, which live in different
+# files. refpolicy 20250923 grants daemons their cgroup directory but not this
+# file.
+#
+# Written against the `daemon` ATTRIBUTE rather than per domain, and that is a
+# deliberate widening. The first version of this module named syslogd_t alone,
+# because journald was the only service that had tripped it in that boot; the
+# next boot produced the identical denial for three more domains. The pattern
+# is not "journald does something unusual", it is "systemd does this for every
+# unit", so enumerating domains would be an open-ended list that grows every
+# time a service is added.
+#
+# The honest cost: this grants every daemon domain read-write on cgroup_t
+# FILES, not just its own memory.pressure -- SELinux labels the whole cgroup
+# hierarchy cgroup_t, so the policy has no way to say "its own". Narrower would
+# require the policy to type-transition per-unit cgroups, which refpolicy does
+# not do. Recorded here so nobody has to rediscover why the rule is this shape.
+########################################################################
+allow daemon cgroup_t:file { getattr read write open };
+# The directory the pressure file lives in, for the same reason and the same
+# domains. Traversal and listing only; no add_name, no remove_name, no write.
+allow daemon cgroup_t:dir { search read open getattr };
+
+########################################################################
+# 4. sshd talks to logind over varlink.
+#
+#   comm="sshd-session" path="/run/systemd/io.systemd.Login"
+#     tclass=unix_stream_socket connectto tcontext=systemd_logind_t
+#
+# pam_systemd registers the new session with logind. systemd 261 moved that
+# conversation from D-Bus to a varlink socket, and refpolicy's sshd rules still
+# describe the D-Bus path. Without this there is no logind session for an ssh
+# login: no /run/user/<uid>, no session scope, no session tracking.
+#
+# This is the same conversation the policy already intends to allow, over a
+# different transport.
+########################################################################
+allow sshd_t systemd_logind_t:unix_stream_socket connectto;
+
+########################################################################
+# 5. systemd-user-runtime-dir asks userdb who the user is.
+#
+#   comm="systemd-user-ru" name="io.systemd.Multiplexer"
+#     tclass=sock_file write tcontext=systemd_userdbd_runtime_t
+#   comm="systemd-user-ru" path="/run/systemd/userdb/io.systemd.Multiplexer"
+#     tclass=unix_stream_socket connectto tcontext=systemd_userdbd_t
+#
+# systemd-user-runtime-dir@<uid>.service creates /run/user/<uid> and resolves
+# the user through systemd-userdbd's multiplexer socket rather than through
+# NSS directly. Two denials for one operation: writing the socket file and
+# connecting to the daemon behind it.
+#
+# Both target systemd-userdbd specifically, which is the one service whose
+# entire purpose is answering this question.
+########################################################################
+allow systemd_user_runtime_dir_t systemd_userdbd_runtime_t:sock_file write;
+allow systemd_user_runtime_dir_t systemd_userdbd_t:unix_stream_socket connectto;
+
+########################################################################
+# 6. sshd reaches the lastlog database's DIRECTORY.
+#
+#   comm="sshd-session" name="lastlog" tclass=dir { search getattr }
+#     tcontext=lastlog_t
+#
+# The companion to the /var/lib/lastlog fcontext in local-fcontexts. refpolicy
+# knows lastlog_t as a FILE -- /var/log/lastlog was a single sparse file --
+# and grants sshd_t what it needs on it. shadow's lastlog2 is a DIRECTORY
+# holding lastlog2.db, so labelling the path correctly still leaves sshd unable
+# to enter it. One rule, on the type this profile just assigned, for the domain
+# that already has the file permissions.
+########################################################################
+#
+# The full set, and it is wider than a "read a database" rule looks: lastlog2
+# is SQLite, so every login creates and removes a lastlog2.db-journal beside
+# the database. That is add_name/remove_name/write on the directory and
+# create/unlink on the file -- write access to one directory this profile
+# labelled itself, which is the narrowest form this can take.
+allow sshd_t lastlog_t:dir { search getattr read open write add_name remove_name };
+allow sshd_t lastlog_t:file { create unlink };
+
+########################################################################
+# 7. systemd-tmpfiles stats paths that belong to other subsystems.
+#
+#   comm="systemd-tmpfile" name="profile.d"   tclass=dir  { search } tcontext=bin_t
+#   comm="systemd-tmpfile" name="80-systemd-osc-context.sh"
+#                                             tclass=lnk_file { read } tcontext=bin_t
+#   comm="systemd-tmpfile" path="/etc/profile.d/locale.sh"
+#                                             tclass=file { getattr } tcontext=bin_t
+#   comm="systemd-tmpfile" path="/etc/gshadow" tclass=file { getattr } tcontext=shadow_t
+#   comm="systemd-tmpfile" name="audit"       tclass=dir  { search } tcontext=auditd_etc_t
+#   comm="systemd-tmpfile" path="/etc/audit/audit-stop.rules"
+#                                             tclass=file { getattr } tcontext=auditd_etc_t
+#
+# systemd-tmpfiles walks every path named in tmpfiles.d and stats it to decide
+# whether the ownership and mode already match. Stat-ing a path it is told
+# about is the entire job; refpolicy grants it most of /etc but not these three
+# types. /etc/profile.d is bin_t because the policy correctly treats shell
+# fragments as programs.
+#
+# getattr and read only -- no write, no create, no unlink. tmpfiles here is
+# checking, not changing, and if it ever needs to change one of these the
+# denial should be seen rather than pre-granted.
+########################################################################
+allow systemd_tmpfiles_t bin_t:dir search;
+allow systemd_tmpfiles_t bin_t:file getattr;
+allow systemd_tmpfiles_t bin_t:lnk_file { read getattr };
+allow systemd_tmpfiles_t shadow_t:file getattr;
+allow systemd_tmpfiles_t auditd_etc_t:dir search;
+allow systemd_tmpfiles_t auditd_etc_t:file getattr;
+
+########################################################################
+# 8. systemd-user-runtime-dir reads /etc/machine-id.
+#
+#   comm="systemd-user-ru" path="/etc/machine-id" tclass=file { read open }
+#     tcontext=etc_runtime_t
+#
+# The per-user runtime directory is keyed by the machine id. Reading the file
+# whose entire purpose is to be read by everything on the system.
+########################################################################
+allow systemd_user_runtime_dir_t etc_runtime_t:file { read open getattr };
+
+########################################################################
+# 9. loadkeys writes the keymap it just decompressed into a memfd.
+#
+#   comm="loadkeys" path=<hex>"/memfd:/usr/share/kbd/keymaps/i386/qwerty/
+#     us.map.gz (deleted)" tclass=file { write getattr } tcontext=tmpfs_t
+#
+# The console keymap ships gzipped; loadkeys decompresses it into an anonymous
+# memfd, which the kernel labels tmpfs_t because that is what a memfd is. It is
+# writing to its own memory. refpolicy predates systemd-vconsole-setup taking
+# this route.
+########################################################################
+allow loadkeys_t tmpfs_t:file { write getattr };
+
+########################################################################
+# 10. networkd loads its own BPF programs.
+#
+#   comm="systemd-network" tclass=bpf { prog_load prog_run map_create
+#     map_read map_write } scontext=tcontext=systemd_networkd_t
+#   comm="systemd-network" capability=39 (CAP_BPF) tclass=capability2
+#   comm="systemd-network" path="/sys/kernel/btf/vmlinux" tclass=file { map }
+#     tcontext=sysfs_t
+#
+# systemd-networkd implements per-interface ingress/egress filtering and
+# BPFProgram= with BPF, and reads /sys/kernel/btf/vmlinux to relocate the
+# program against this kernel. refpolicy 20250923 has no bpf class rules for
+# networkd at all.
+#
+# The widest rule in this module, and the one to revisit first: CAP_BPF plus
+# prog_load is real capability. It is scoped to networkd acting on ITSELF
+# (scontext == tcontext), which is as narrow as the bpf class allows, and the
+# alternative is a network manager that cannot configure the interfaces it
+# exists to configure. If this profile ever stops using systemd-networkd, this
+# block goes with it.
+########################################################################
+allow systemd_networkd_t self:bpf { prog_load prog_run map_create map_read map_write };
+allow systemd_networkd_t self:capability2 bpf;
+allow systemd_networkd_t sysfs_t:file map;
+
+########################################################################
+# 11. The per-user systemd instance sets up /run/user/<uid>.
+#
+#   comm="systemd" name="gnupg" tclass=dir { create write add_name }
+#     scontext=user_systemd_t tcontext=gpg_runtime_t
+#   comm="systemd" path="/run/systemd/oom/io.systemd.ManagedOOM"
+#     tclass=unix_stream_socket connectto tcontext=init_t
+#   comm="systemd-user-ru" tclass=filesystem { quotaget quotamod }
+#     tcontext=tmpfs_t
+#   comm="systemd-user-ru" tclass=dir read tcontext=tmp_t
+#
+# These are on the LOGIN PATH, which is why they matter more than the rest of
+# this module: `omarchy-server-selinux enforcing` blocks on any denial raised
+# by the user role, and it did block on exactly these. A user manager that
+# cannot create its own runtime directories is a broken login, not a degraded
+# service.
+#
+# What each one is: systemd --user runs the tmpfiles rules that create
+# /run/user/<uid>/gnupg; it registers with the system manager's ManagedOOM
+# varlink socket; and systemd-user-runtime-dir sets the tmpfs size quota on the
+# runtime directory it just mounted, which is what quotaget/quotamod are here.
+# All four are the user manager operating on the user's own runtime tree.
+########################################################################
+allow user_systemd_t gpg_runtime_t:dir { create write add_name search read open getattr };
+allow user_systemd_t init_t:unix_stream_socket connectto;
+allow systemd_user_runtime_dir_t tmpfs_t:filesystem { quotaget quotamod };
+allow systemd_user_runtime_dir_t tmp_t:dir read;
+
+########################################################################
+# 12. sudo and the user shell need two capabilities.
+#
+#   scontext=tcontext=user_sudo_t tclass=capability { net_admin }
+#   scontext=tcontext=user_t      tclass=capability { dac_read_search }
+#
+# net_admin is `ufw status verbose` under sudo -- reading the firewall means
+# talking to netfilter. dac_read_search is the user shell traversing a
+# directory it owns but whose mode would otherwise refuse it, which is what
+# every `sudo`-adjacent tool does when it stats a path under /var.
+#
+# Both are the capability the operator already has by being in the sudo group;
+# SELinux is a second gate on the same action, and this opens only that second
+# gate for those two domains.
+########################################################################
+allow user_sudo_t self:capability net_admin;
+allow user_t self:capability dac_read_search;
+
+########################################################################
+# 13. The remaining early-boot tmpfiles and sysusers gaps.
+#
+#   comm="systemd-tmpfile" name="modules" tclass=dir search
+#     tcontext=modules_object_t
+#   comm="systemd-tmpfile" path="/run/initramfs/mkinitcpio-shutdown.conf"
+#     tclass=dir { write add_name } / file { create write open }
+#     tcontext=tmpfs_t
+#   comm="systemd-sysusers" tclass=netlink_audit_socket create
+#   comm="loadkeys" tclass=file read tcontext=tmpfs_t
+#
+# mkinitcpio ships a tmpfiles rule that writes its shutdown configuration into
+# /run/initramfs, which is a tmpfs; the modules directory search is the same
+# walk over /usr/lib/modules. systemd-sysusers opens a netlink audit socket to
+# record the accounts it creates -- refusing that would silence an audit
+# record, which is the wrong direction. loadkeys needs read as well as the
+# write already granted in rule 9: it decompresses into the memfd and then
+# reads it back.
+########################################################################
+allow systemd_tmpfiles_t modules_object_t:dir search;
+allow systemd_tmpfiles_t tmpfs_t:dir { write add_name };
+allow systemd_tmpfiles_t tmpfs_t:file { create write open getattr };
+allow systemd_sysusers_t self:netlink_audit_socket create;
+allow loadkeys_t tmpfs_t:file read;
+
+########################################################################
+# 14. The user manager socket-activates gpg-agent.
+#
+#   comm="systemd" tclass=unix_stream_socket { create listen setopt }
+#     scontext=user_systemd_t tcontext=gpg_t
+#   comm="..." tclass=file getattr scontext=user_t tcontext=nsfs_t
+#
+# systemd --user owns gpg-agent's listening sockets so it can start the agent
+# on first use; creating and listening on a socket that will belong to gpg_t is
+# the whole of socket activation. Also on the login path, so it blocks
+# `enforcing` until it is allowed.
+#
+# nsfs_t is /proc/<pid>/ns/*: a namespace link the shell stats. getattr only.
+########################################################################
+allow user_systemd_t gpg_t:unix_stream_socket { create listen setopt bind };
+allow user_t nsfs_t:file getattr;
+# The socket FILES the activation above puts in /run/user/<uid>/gnupg. The
+# directory was rule 11; these are the entries in it.
+allow user_systemd_t gpg_runtime_t:sock_file { create getattr write unlink };
+
+########################################################################
+# 15. dbus asks the system manager whether it is still running.
+#
+#   comm="dbus-broker-lau" tclass=system status
+#     scontext=system_dbusd_t tcontext=init_t
+#
+# `system status` is systemd's own permission class for "may this domain query
+# the manager". dbus-broker-launch reads the manager state at startup. A query,
+# with no ability to start, stop or reload anything -- those are separate
+# permissions in the same class and are not granted here.
+########################################################################
+allow system_dbusd_t init_t:system status;

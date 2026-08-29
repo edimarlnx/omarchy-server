@@ -44,7 +44,7 @@ usage() {
   echo "Available addons:"
   local name
   while read -r name; do
-    printf '  %-10s %s\n' "$name" "$(addon_summary "$name")"
+    printf '  %-14s %s\n' "$name" "$(addon_summary "$name")"
   done < <(available_addons)
 }
 

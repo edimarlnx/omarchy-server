@@ -1,16 +1,20 @@
-# File contexts this profile adds to the reference policy, applied with
-# `semanage fcontext -a` by install/server/selinux-server.sh.
+# File contexts this profile adds to the reference policy.
+#
+# install/server/selinux-server.sh renders these into the policy store's
+# file_contexts.local -- the same file `semanage fcontext -a` would write, in
+# the same format, at the path libselinux looks for it. Writing it directly is
+# what lets the `selinux` addon leave selinux-python (and setools, and 453 MiB
+# of scientific Python) to the separate `selinux-tools` addon.
 #
 # Format: <path regex> <whitespace> <SELinux type>. Comments and blank lines
-# are ignored. One line per rule, because that is one `semanage` call and one
-# thing to remove.
+# are ignored. The setup leaf adds the user and role, and adds a level only if
+# the loaded policy is MLS -- refpolicy-arch is built TYPE=standard and is not,
+# so a hand-written `:s0` here would be an INVALID context, silently dropped by
+# setfiles with the rule it belongs to. Write the bare type.
 #
-# Why semanage rather than a policy module: a module has to contain at least
-# one rule to compile at all -- `checkmodule` rejects a module whose only
-# content is a file-context file -- and this profile has no measured denial
-# that needs a rule yet. `semanage fcontext` is the supported way to add a
-# label without inventing policy, it survives a policy upgrade, and
-# `semanage fcontext -l -C` lists exactly what was added locally.
+# A file context is the right tool when the policy already has rules for the
+# type and only the path is wrong. Where a rule is genuinely missing, it goes
+# in omarchy_server.te beside this file.
 #
 # /usr/share/omarchy/bin holds programs, not data, and the reference policy's
 # default for anything below /usr/share is usr_t. Labelling them bin_t is what
@@ -20,3 +24,14 @@
 # -- sourced, never executed -- and stays data.
 
 /usr/share/omarchy/bin(/.*)?	bin_t
+
+# /var/lib/lastlog holds shadow's lastlog2.db, which sshd writes on every
+# login. refpolicy knows lastlog_t and grants sshd_t what it needs on it, but
+# only names /var/log/lastlog -- shadow moved the database to /var/lib and the
+# policy has not followed. Eight of the eighteen denials on a bare boot were
+# this one file.
+#
+# Labelling the path is the whole fix, and it is the right shape of fix:
+# the alternative is a policy rule letting sshd_t write every var_lib_t file on
+# the system in order to reach one database.
+/var/lib/lastlog(/.*)?	lastlog_t

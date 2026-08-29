@@ -13,22 +13,46 @@
 # That is a measured failure, not a hypothesis:
 # reports/2026-08-29-mandatory-access-control.md.
 #
-# Ordering: nothing early. The machine boots PERMISSIVE after the addon, so
-# there is no window where a wrong label refuses anything; the relabel just has
-# to happen before anyone switches to enforcing. Running it in multi-user, once,
-# keeps it out of the boot path of every subsequent boot -- the flag is removed
-# when it succeeds.
+# Ordering: before ANY login can happen, and that is the whole point of the
+# unit. systemd-user-sessions.service is the gate -- it removes /run/nologin --
+# so ordering ahead of it holds back ssh, the serial getty and the virtual
+# consoles alike, rather than ahead of sshd only and racing the getty.
+#
+# The machine boots PERMISSIVE after the addon, so nothing is refused while
+# this runs; the relabel just has to have finished before anyone switches to
+# enforcing, and the first login is the earliest anyone could. It runs once:
+# the flag is removed when it succeeds, so every subsequent boot skips it on
+# the condition and adds nothing to the boot path.
 Description=Relabel the filesystem for SELinux (one-shot)
-Documentation=man:setfiles(8)
+Documentation=man:restorecon(8)
 ConditionPathExists=/.autorelabel
 ConditionSecurity=selinux
+DefaultDependencies=yes
 After=local-fs.target
-Before=sshd.service
+# After sshdgenkeys, before sshd. Arch generates the ssh host keys in
+# sshdgenkeys.service, which sshd.service Wants and is ordered After -- and on
+# a fresh install that is the first boot, i.e. AFTER the offline relabel and,
+# without this line, after this unit too. The keys then keep the label of
+# /etc, and the private host keys sit there as etc_t instead of sshd_key_t:
+# readable by every domain the policy lets read /etc, which is most of them.
+# Measured -- eight files, in
+# reports/2026-08-29-mandatory-access-control.md.
+#
+# Slotting in between keygen and sshd costs nothing: sshd already waits for
+# sshdgenkeys, so this only lengthens a chain the boot was going to walk.
+# Wants as well as After: ordering alone does not pull a unit into the
+# transaction, and sshdgenkeys.service is `disabled` on Arch -- it exists only
+# because sshd.service wants it. Wanting it here makes the ordering real
+# instead of conditional on sshd being in the same transaction. Its own
+# ConditionPathExists still skips it when the keys are already there.
+Wants=sshdgenkeys.service
+After=sshdgenkeys.service
+Before=systemd-user-sessions.service sshd.service getty.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=no
-# The command removes /.autorelabel itself when setfiles succeeds, which is
+# The command removes /.autorelabel itself when the relabel succeeds, which is
 # what stops this from running again.
 ExecStart=/usr/bin/omarchy-server-selinux relabel
 TimeoutStartSec=30min

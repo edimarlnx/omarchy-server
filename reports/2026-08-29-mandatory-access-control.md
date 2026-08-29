@@ -8,9 +8,10 @@ then in their enforcing mode.
 zero denials under the whole workload, and the machine came back from a reboot
 still confined. SELinux reached permissive cleanly (**28/30**) and then
 **locked the operator out** when it went enforcing — root-caused, fixed in
-code, and the fix is not yet re-validated on a fresh install.
+code, and re-validated on a fresh install in **§10**.
 
-Neither is recommended as a default today. §8 says what would change that.
+Neither is recommended as a default today. §8 says what would change that, and
+**§10.7 revisits it** against what the re-validation measured.
 
 ---
 
@@ -398,11 +399,8 @@ earlier snapper snapshot from the Limine menu, or the installer medium).
    console. This guard alone would have turned the lockout into a message.
 3. The corrected recovery instructions above.
 
-**Not yet re-validated.** Proving those three fixes requires another ISO build
-and a fresh install; that run has not happened. The report says so rather than
-implying a green result. The evidence file
-`acceptance-selinux-enforcing.txt` ends with a note explaining why the run
-stops where it does.
+**Re-validated on a fresh install — see §10.** The three fixes were not enough
+on their own, and §10 is the run that found out why.
 
 ---
 
@@ -498,3 +496,291 @@ here and a machine that stays reachable.
   permissive.
 - Long-running behaviour. The longest thing either machine did was an
   `omarchy-server-update`.
+
+---
+
+## 10. Re-validation — SELinux on a fresh install, permissive then enforcing
+
+**Date** 2026-08-29, later the same day · **Scope** the three fixes of §6.4
+proven or disproven on a machine installed from scratch, plus the two changes
+§8 asked for: the tooling split and the lockstep check.
+
+**Result in one line.** Permissive is now **36/36**, with **0 AVC denials on a
+boot**. Enforcing was reached and **the operator was not locked out** — ssh,
+`sudo`, the home directory, snapper, `pacman` and a reboot all survived it. But
+enforcing is **not usable** on this profile yet, for a reason nothing in §6 had
+looked at: `sudo` does not change the SELinux role, so every administrative
+command runs as `user_t` and most of them are refused.
+
+### 10.1 What it took to get there
+
+Five bugs stood between the §6.4 fixes and a working install. Each was found by
+a run, and each is worth recording because each is a trap on this route.
+
+| # | Bug | How it presented |
+|---|---|---|
+| 1 | `setfiles <file_contexts> /` reads **one** spec file | libselinux loads `file_contexts` + `.homedirs` + `.local` only when it opens the store *by policy type*; given a path it reads that file alone. So the relabel never applied the `/home/[^/]+ → user_home_dir_t` rule (it lives in `.homedirs`) nor the profile's own rules (`.local`). **This is the other half of the §6.4 lockout** — the late home directory was only the first half. Fixed by using `restorecon -R -F /`. |
+| 2 | Concatenating the three specs for `setfiles` does not work | They legitimately disagree about `/root/.k5login` (`system_u` vs `root`), which libselinux resolves by precedence and `setfiles` rejects with *Multiple different specifications*, relabelling nothing. Tried, measured, reverted. |
+| 3 | A four-field context is silently dropped | `system_u:object_r:bin_t:s0` is invalid on `refpolicy-arch`, which is `TYPE=standard`. `setfiles` prints one line, drops the rule and **exits 0**. `/usr/share/omarchy/bin` stayed `unlabeled_t` through two relabels with no failure anywhere. The setup leaf now derives the suffix from the policy's own `file_contexts` and **verifies the labels on disk afterwards** instead of trusting an exit status. |
+| 4 | `/.snapshots` breaks every relabel | snapper mounts its five snapshots read-only; `restorecon -R /` reports *Read-only file system* for each file and exits non-zero, which would leave `/.autorelabel` in place and make `enforcing` refuse forever. Excluded. |
+| 5 | The ssh host keys were `etc_t` | `sshdgenkeys.service` generates them on the first boot — **after** the relabel unit ran. The private host keys sat in `/etc/ssh` as `etc_t`, readable by every domain the policy lets read `/etc`. The relabel unit is now ordered `Wants=`/`After=sshdgenkeys.service` and `Before=sshd.service`. |
+
+Bug 3 is the one to remember: **neither `setfiles` nor `restorecon` fails when a
+spec line is invalid.** Any check on this route that trusts an exit status is
+checking nothing.
+
+A sixth was found in the *acceptance script itself*: the check for unlabeled
+files used `find -context`, and Arch's `findutils` is not built against
+libselinux (`findutils-selinux` is deliberately not in the rebuild set). The
+predicate writes *"SELinux is not enabled"* to stderr and nothing to stdout, so
+`| wc -l` returned a clean `0` and the check **passed without reading a file**.
+It now uses `restorecon -nvR`, which answers a stronger question — every path
+whose label differs from the policy, not merely the unlabeled ones. The
+`enforcing` preflight had the same hole and now tests for the predicate first.
+
+### 10.2 The local policy module
+
+There is one now: `install/server/mac/selinux/omarchy_server.te`, 15 documented
+blocks, compiled on the machine with `checkmodule` + `semodule_package`. Every
+rule came from a measured denial. Getting there took six boot-and-measure
+rounds, and the trajectory is the finding:
+
+| Round | Boot denials | What changed |
+|---:|---:|---|
+| 1 | 18 | baseline, no module |
+| 2 | 28 | first module; **new domains appeared** for the same PSI pattern |
+| 3 | 18 | PSI rewritten against the `daemon` attribute |
+| 4 | 18 | different set again — tmpfiles, modules, loadkeys |
+| 5 | 12 | credentials generalised to `daemon` + `getty_t` |
+| 6 | 4 | user-manager rules (gpg runtime, ManagedOOM) |
+| 7 | **0** | gpg socket files, `system_dbusd_t → init_t:system status` |
+
+Two rules are deliberately written against the `daemon` **attribute** rather
+than per domain, and that is the lesson of rounds 2 and 4: the PSI
+(`memory.pressure`) and systemd-credentials patterns are not "one service does
+something odd", they are what systemd does for *every* unit. Enumerating
+domains produced a list that grew on the next boot.
+
+Everything in the module is the gap between **refpolicy 20250923** and
+**systemd 261 / OpenSSH 10.5**: credentials on tmpfs, PSI, logind and networkd
+over varlink instead of D-Bus, userdb, networkd's BPF, and the `system status`
+class. None of it is a rule letting a confined domain reach something new.
+
+One denial was fixed by **labelling instead of by policy**, which is the shape
+to prefer: eight of the first eighteen were sshd reaching
+`/var/lib/lastlog/lastlog2.db`. `refpolicy` knows `lastlog_t` and already grants
+sshd what it needs on it, but only names `/var/log/lastlog` — shadow moved the
+database. One line in `local-fcontexts` beat a rule widening `sshd_t` over all
+of `var_lib_t`.
+
+### 10.3 The tooling split (§8.2)
+
+`setools` and `selinux-python` moved into a new **`selinux-tools`** addon.
+What made it possible was rewriting the setup leaf to write the policy store's
+`file_contexts.local` directly instead of calling `semanage fcontext` — the same
+file, the same format, no `selinux-python` on the machine.
+
+| | Base | SELinux before | SELinux now |
+|---|---:|---:|---:|
+| Packages | 220 | 274 (+54) | **229 (+9)** |
+| Installed size | 1402 MiB | 1954 MiB (+552) | **1501 MiB (+99)** |
+| Enabled units | 21 | 21 (+0) | **22 (+1)** — the relabel unit |
+| Boot | 6.920 s | 7.814 s | 7.184 s |
+| ISO | 2876 MiB without | 3003 MiB | 3003 MiB (unchanged — both addons are still bundled) |
+
+**−45 packages and −453 MiB**, exactly the figure §6.1 predicted. Verified on
+the machine: `setools`, `selinux-python`, `python-networkx`, `python-scipy` and
+`python-pandas` are all *"was not found"*.
+
+### 10.4 Permissive: 36 passed, 0 failed
+
+Every check in `acceptance-selinux.sh` passes, including the ones this
+re-validation added:
+
+- `/home/omarchy` is `user_home_dir_t` — **the §6.4 lockout, gone.**
+- nothing under `/home` or `/root` has a label the policy disagrees with;
+- the profile's contexts are in `file_contexts.local` and on disk;
+- the base addon pulled in neither `setools` nor `selinux-python`;
+- the first-boot relabel unit ran and cleared `/.autorelabel`;
+- `init` is `init_t`, `sshd` is `sshd_t`, the session is `user_u:user_r:user_t`;
+- the `pam_faillock` hardening survived the `pambase` replacement (§6.3's bug,
+  still fixed);
+- `omarchy-server-update` completes (§6.3's `OMARCHY_PATH` bug, still fixed).
+
+**0 AVC denials on a boot.** 31 under the full workload, all of them the
+`user_t`-doing-root-work class of §10.6.
+
+One ordering fact the design now depends on: **boot 1 of a fresh install leaves
+`init` in `kernel_t`**, because PID 1 transitions at exec only if
+`/usr/lib/systemd/systemd` already carried `init_exec_t`, and on boot 1 the
+relabel unit runs after PID 1 has started. Boot 2 has `init_t`. The sequence is
+therefore install → boot → relabel → **reboot** → consider enforcing, and the
+`enforcing` preflight refuses while `init` is still `kernel_t`.
+
+### 10.5 Enforcing: reached, reachable, and not lost
+
+The machine went enforcing and **stayed reachable**. Against §6.4, where the
+run could not finish at all:
+
+| | §6.4 | now |
+|---|---|---|
+| ssh login | **lost** | works |
+| home directory | **lost** (`Could not chdir`) | works |
+| `sudo` | **lost** | works |
+| snapper snapshot | not reached | works |
+| `pacman -Sy` | not reached | works |
+| reboot and come back | **failed** | works |
+| Denials under the workload | 53 | **10** |
+
+The preflight also did its job before any of that: asked to enforce, it
+**refused**, and the acceptance now asserts the refusal before using `--force`
+(which the lab has the standing for — serial console, snapshot, installer
+medium; a remote operator has none of them).
+
+### 10.6 Why enforcing is still not usable: `sudo` does not change the role
+
+Five workload items failed in enforcing, and all five have one cause:
+
+```
+$ sudo id -Z
+user_u:user_r:user_t
+```
+
+`sudo` on this profile gives Unix root and leaves the SELinux context exactly as
+it found it. The policy store's `seusers` maps `__default__:user_u`, so the
+operator is `user_u`, and "root through sudo" carries the authority of a
+confined desktop user:
+
+| Failed | Refused with |
+|---|---|
+| `omarchy-server-addon docker` | `failed to create temporary download directory /var/lib/pacman/sync/…: Permission denied` |
+| `omarchy-server-update` | the same pacman failure |
+| `ufw status verbose` | `ERROR: Couldn't determine iptables version` |
+| `systemctl is-active serial-getty@ttyS0` | `Failed to connect to system scope bus via local transport: Operation not permitted` |
+| making enforcing survive a reboot | the write to `/etc/selinux/config` was denied; the mode was runtime-only |
+
+And the consequence that matters most:
+
+```
+$ sudo omarchy-server-selinux permissive
+setenforce:  security_setenforce() failed:  Permission denied
+```
+
+**Enforcing is a one-way door over ssh.** Only `sysadm_r` and `secadm_r` are
+granted `security { setenforce }`; `user_r` reaches neither — `runcon -t
+sysadm_t` answers *invalid context* and `systemd-run` cannot reach the manager.
+Every route back needs a console. `omarchy-server-selinux enforcing` now refuses
+when the calling session's role cannot `setenforce`, and says exactly this.
+
+The fix is the textbook arrangement and is **not made**: map the operator to
+`staff_u` in `seusers` and give sudo a role transition (`ROLE=sysadm_r
+TYPE=sysadm_t` in sudoers), so the login session stays confined as `staff_t`
+while `sudo` reaches `sysadm_t`. It is a change with its own lockout risk and
+needs its own run.
+
+One further drift, found by the stronger label check: after `docker run`, 30+
+paths under `/var/lib/docker` and `/var/lib/containerd` carry labels the policy
+disagrees with (`container_var_lib_t` where it wants `container_ro_file_t`, and
+so on). The container runtime creates them at runtime, so the pacman hook never
+sees them. `restorecon -R /var/lib/docker /var/lib/containerd` fixes it; nothing
+does that automatically today.
+
+### 10.7 §8 revisited, honestly
+
+**The recommendation does not change: ship AppArmor as the switch.** What
+changes is the reason, and it is a better reason than "SELinux has not been
+proven".
+
+Three of §8's four conditions are now met:
+
+1. ~~the enforcing fixes validated on a fresh install~~ — **done**, §10.4/§10.5.
+   The operator is not locked out, and the guard that would have prevented the
+   original lockout refuses correctly.
+2. ~~the tooling split~~ — **done**, §10.3. **+9 packages and +99 MiB**, not
+   +54 and +552.
+3. ~~the lockstep check automated~~ — **done**, §10.8.
+4. `ps -Z` still does not exist, and `/usr/bin/login` still does not link
+   `libselinux`. Unchanged.
+
+And the size argument that carried most of §8's weight is gone. **+9 packages
+and +99 MiB for full-system confinement is a good trade**, and it is roughly
+the cost of one moderate package. If the decision were only about surface,
+SELinux would now win it.
+
+What argues for AppArmor as the default is no longer size. It is three things
+the re-validation put numbers on:
+
+- **The operator has no administrative role.** Until `seusers` and sudo are
+  arranged for a role transition, enforcing means an administrator who cannot
+  run `pacman`, `ufw` or `systemctl` — and cannot turn it back off remotely.
+  That is not a rough edge; it is the machine's own management being confined
+  out of existence.
+- **The policy is materially behind the userland, and closing the gap is
+  open-ended.** Seven rounds to get a *bare boot* to zero denials, with a new
+  set of domains appearing at rounds 2 and 4. That is not a one-time cost:
+  every systemd release reopens it, and this profile is on Arch, which means
+  every few weeks. Two of the fifteen rules had to be widened to a whole
+  attribute precisely because enumeration was losing.
+- **Ten packages still have to be kept in lockstep with Arch**, which is now
+  automated (§10.8) but not eliminated. Automation converts a silent downgrade
+  into a ticket; it does not do the rebuild.
+
+Against that, AppArmor's honest description is unchanged and unflattering: it
+confines sshd and nothing else, **2 of 146** shipped profiles matching a binary
+this machine has. The asymmetry is now stated more precisely than in §8:
+
+> **SELinux confines everything and costs a maintenance relationship.
+> AppArmor confines one daemon and costs nothing.** The size gap that used to
+> stand between them has closed; the maintenance gap has not, and the
+> administrative-role gap is a hard blocker that has to be fixed before the
+> question is even open.
+
+What would now change the default, in order:
+
+1. The `staff_u` + `ROLE=sysadm_r` mapping, validated, so an administrator can
+   administer and can get back out of enforcing over ssh. **This is the
+   blocker.**
+2. A policy pin worth standing behind: either an upstream refpolicy that knows
+   systemd 261, or an accepted position that this profile carries a local module
+   and updates it on a schedule — with the schedule named.
+3. A `restorecon` hook for container runtime paths, or a decision that container
+   label drift is acceptable.
+
+### 10.8 The lockstep check (§8.3)
+
+`omarchy-server-pkgs/scripts/check-selinux-lockstep.sh` clones
+`archlinuxhardened/selinux` at the manifest's pinned commit, copies the
+repository's overrides over it — exactly what `build-selinux.sh` assembles —
+reads `pkgver-pkgrel` from each PKGBUILD and `vercmp`s it against the Arch
+package of the same name with `-selinux` stripped. It compares **what a build
+today would produce**, not what is sitting in the gitignored `out/selinux/`.
+
+`.github/workflows/selinux-lockstep.yml` runs it weekly (Mondays 06:17 UTC), on
+dispatch, and on any push touching the manifest, an override or the script.
+Behind → it opens or updates in place a single issue carrying the diff, and
+fails the job. Level again → it comments and closes that issue. It never
+rebuilds anything.
+
+**First run, 2026-08-29: 14 rebuilds compared, all in sync.**
+
+```
+pambase 20260616-1   pam 1.7.2-2            coreutils 9.11-2
+util-linux 2.42.2-1  util-linux-libs …      shadow 4.20.0.arch1-1
+sudo 1.9.17.p2-6     openssh 10.5p1-1       systemd + 5 splits 261.2-1
+```
+
+`openssh-selinux` at **10.5p1-1** is the check's own justification working:
+that is the override this repository carries because upstream's pin was a
+silent downgrade to 10.4p1-3. Eleven additive packages have no Arch counterpart
+and are listed as not compared, rather than counted as passing.
+
+### 10.9 What this re-validation still does not prove
+
+- The `staff_u` / `sysadm_r` arrangement. Identified, designed, **not built**.
+- That the local policy module is complete. It is complete for *this workload
+  on this boot*; rounds 2 and 4 are the evidence that another workload finds
+  more.
+- Container confinement beyond `docker run hello-world`, and the label drift in
+  §10.6 is unaddressed.
+- Secure Boot together with SELinux. Still no machine has had both.
+- Anything about a machine that has been up longer than one acceptance run.

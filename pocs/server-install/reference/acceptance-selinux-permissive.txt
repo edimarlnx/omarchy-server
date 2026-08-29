@@ -1,4 +1,4 @@
-=== SELinux acceptance — VM 'srvsel' — 2026-08-29T07:55:33-03:00 ===
+=== SELinux acceptance — VM 'srvsel' — 2026-08-29T09:02:54-03:00 ===
 mode under test: permissive
 
 [PASS] the kernel initialised SELinux
@@ -35,14 +35,34 @@ mode under test: permissive
       /etc/selinux/config.refpolicy-arch
 
 [PASS] the profile's own file contexts are in the policy store
-      $ ~/.lab-sudo semanage fcontext -l -C
-      SELinux fcontext                                   type               Context
-      
-      /usr/share/omarchy/bin(/.*)?                       all files          system_u:object_r:bin_t 
+      $ ~/.lab-sudo cat /etc/selinux/refpolicy-arch/contexts/files/file_contexts.local
+      # Written by install/server/selinux-server.sh from
+      # install/server/mac/selinux/local-fcontexts. Do not edit by hand:
+      # the addon rewrites this file whole on every run.
+      /usr/share/omarchy/bin(/.*)?	system_u:object_r:bin_t
+      /var/lib/lastlog(/.*)?	system_u:object_r:lastlog_t
 
 [PASS] and they are what the profile's commands actually carry
       $ ls -Z /usr/share/omarchy/bin/omarchy-server-update
       system_u:object_r:bin_t /usr/share/omarchy/bin/omarchy-server-update
+
+[PASS] the base selinux addon did NOT pull setools or selinux-python in
+      $ pacman -Qq setools selinux-python python-networkx python-scipy python-pandas 2>&1 | sort -u
+      error: package 'python-networkx' was not found
+      error: package 'python-pandas' was not found
+      error: package 'python-scipy' was not found
+      error: package 'selinux-python' was not found
+      error: package 'setools' was not found
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+
+[PASS] and the policy tools are offered as their own addon
+      $ omarchy-server-addon --list | grep -E "^selinux"
+      selinux-tools
+      selinux
 
 [PASS] every binary that needs libselinux reaches it
       /usr/lib/systemd/systemd                 dlopen
@@ -94,10 +114,10 @@ mode under test: permissive
       ---
       user_u:user_r:user_t
 
-[FAIL] the profile's pam_faillock settings survived the pambase replacement
+[PASS] the profile's pam_faillock settings survived the pambase replacement
       $ grep -n "pam_faillock" /etc/pam.d/system-auth; ls /etc/pam.d/*.pacnew 2>/dev/null
-      3:auth       required                    pam_faillock.so      preauth
-      8:auth       [default=die]               pam_faillock.so      authfail
+      3:auth       required                    pam_faillock.so preauth silent deny=10 unlock_time=120
+      8:auth       [default=die]               pam_faillock.so authfail deny=10 unlock_time=120
       11:auth       required                    pam_faillock.so      authsucc
       12:# If you drop the above call to pam_faillock.so the lock will be done also
 
@@ -115,13 +135,36 @@ mode under test: permissive
             system_u:object_r:usr_t /usr
       system_u:object_r:sshd_exec_t /usr/bin/sshd
 
-[PASS] there is no significant pocket of unlabeled files
-      $ ~/.lab-sudo find /etc /usr /var -xdev -context "*unlabeled_t*" 2>/dev/null | head -20; echo "unlabeled=$(~/.lab-sudo find /etc /usr /var -xdev -context "*unlabeled_t*" 2>/dev/null | wc -l)"
-      unlabeled=0
+[PASS] findutils here cannot do the sweep, which is why the check below does not use it
+      $ find /etc -maxdepth 0 -context "*" 2>&1 | head -1; echo "exit=$?"
+      find: invalid predicate -context: SELinux is not enabled.
+      exit=0
+
+[PASS] no file under /etc /usr /var has a label the policy disagrees with
+      $ ~/.lab-sudo restorecon -nvR /etc /usr /var 2>&1 | head -20; echo "wrong=$(~/.lab-sudo restorecon -nvR /etc /usr /var 2>/dev/null | wc -l)"
+      wrong=0
+
+[PASS] /home/<user> is labelled user_home_dir_t, not unlabeled
+      $ ls -Zd /home /home/*
+        system_u:object_r:home_root_t /home
+      user_u:object_r:user_home_dir_t /home/omarchy
+
+[PASS] and nothing under /home has a label the policy disagrees with
+      $ ~/.lab-sudo restorecon -nvR /home /root 2>&1 | head -10; echo "wrong=$(~/.lab-sudo restorecon -nvR /home /root 2>/dev/null | wc -l)"
+      wrong=0
 
 [PASS] the relabel flag was cleared, so the next boot does not repeat it
       $ ls -l /.autorelabel 2>&1
       ls: cannot access '/.autorelabel': No such file or directory
+
+[PASS] the first-boot relabel unit ran and succeeded
+      $ systemctl is-enabled omarchy-server-selinux-relabel.service; ~/.lab-sudo journalctl -u omarchy-server-selinux-relabel.service --no-pager -o cat | tail -5
+      enabled
+      new labels in every already-running process.
+      omarchy-server-selinux-relabel.service: Deactivated successfully.
+      Finished Relabel the filesystem for SELinux (one-shot).
+      omarchy-server-selinux-relabel.service: Consumed 784ms CPU time over 1.129s wall clock time, 87.3M memory peak.
+      Relabel the filesystem for SELinux (one-shot) skipped, unmet condition check ConditionPathExists=/.autorelabel
 
 [PASS] sudo still works
       $ ~/.lab-sudo id -un
@@ -132,7 +175,7 @@ mode under test: permissive
       1
       --+--------+-------+--------------------------+------+---------+--------------------+---------
       0 | single |       |                          | root |         | current            |
-      1 | single |       | Sat Aug 29 07:55:34 2026 | root |         | selinux-acceptance |
+      1 | single |       | Sat Aug 29 09:02:57 2026 | root |         | selinux-acceptance |
 
 [PASS] pacman can run a transaction
       $ ~/.lab-sudo pacman -Sy --noconfirm >/dev/null 2>&1; ~/.lab-sudo pacman -Q pacman-contrib && echo pacman-ok
@@ -170,133 +213,88 @@ mode under test: permissive
       $ ~/.lab-sudo systemctl is-active serial-getty@ttyS0.service
       active
 
-[FAIL] omarchy-server-update completes
+[PASS] omarchy-server-update completes
       $ ~/.lab-sudo omarchy-server-update >/tmp/update.log 2>&1; echo "update-exit=$?"; tail -8 /tmp/update.log
-      update-exit=1
-      ]3008;start=46e796e9022e418eb67e659eb524970d;user=root;hostname=omarchy-selinux;machineid=8622cf4e8a764dc49b6ed4ab51641c0f;bootid=0932ad3a46fd49daa0128240c8730737;pid=2222;pidfdid=4707;comm=sudo;targetuser=root;type=session\]3008;end=46e796e9022e418eb67e659eb524970d\]3008;start=9406464c3d1a4196b4228dea68cc81ce;user=root;hostname=omarchy-selinux;machineid=8622cf4e8a764dc49b6ed4ab51641c0f;bootid=0932ad3a46fd49daa0128240c8730737;pid=2237;pidfdid=4708;comm=sudo;targetuser=root;type=session\]3008;end=9406464c3d1a4196b4228dea68cc81ce\Snapshots can be selected during boot.
-      /usr/bin/omarchy-update-dev: line 7: OMARCHY_PATH: unbound variable
+      update-exit=0
+      Update AUR packages[0m
+      /usr/bin/omarchy-update-aur-pkgs: line 8: yay: command not found
       
-      [0;31mSomething went wrong during the update!
       
-      Please review the output above carefully, correct the error, and retry the update.
-      
-      If you need assistance, get help from the community at https://omarchy.org/discord[0m
+      [32m
+      Restarting shell[0m
+      All plugins have been reloaded
+      Omarchy shell config not found: /usr/share/omarchy/shell
 
 --- AVC denials accumulated by the workload above ---
 == AVC denials since boot ==
-      audit: type=1400 audit(1788000876.807:3): avc:  denied  { read } for  pid=291 comm="systemd-fstab-g" name="config" dev="vda2" ino=81965 scontext=system_u:system_r:systemd_generator_t tcontext=system_u:object_r:selinux_config_t tclass=lnk_file permissive=1
-      audit: type=1400 audit(1788000876.923:4): avc:  denied  { read } for  pid=315 comm="systemd-network" name="/" dev="tmpfs" ino=1 scontext=system_u:system_r:systemd_networkd_t tcontext=system_u:object_r:tmpfs_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000876.923:5): avc:  denied  { open } for  pid=315 comm="systemd-network" path="/run/credentials/systemd-network-generator.service" dev="tmpfs" ino=1 scontext=system_u:system_r:systemd_networkd_t tcontext=system_u:object_r:tmpfs_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000876.928:6): avc:  denied  { search } for  pid=314 comm="systemd-journal" name="/" dev="tmpfs" ino=1 scontext=system_u:system_r:syslogd_t tcontext=system_u:object_r:tmpfs_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000876.928:7): avc:  denied  { search } for  pid=314 comm="systemd-journal" name="/" dev="tmpfs" ino=1 scontext=system_u:system_r:syslogd_t tcontext=system_u:object_r:tmpfs_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000876.928:8): avc:  denied  { getattr } for  pid=314 comm="systemd-journal" path="/sys/fs/cgroup/system.slice/systemd-journald.service/memory.pressure" dev="cgroup2" ino=948 scontext=system_u:system_r:syslogd_t tcontext=system_u:object_r:cgroup_t tclass=file permissive=1
-      audit: type=1400 audit(1788000876.928:9): avc:  denied  { read write } for  pid=314 comm="systemd-journal" name="memory.pressure" dev="cgroup2" ino=948 scontext=system_u:system_r:syslogd_t tcontext=system_u:object_r:cgroup_t tclass=file permissive=1
-      audit: type=1400 audit(1788000876.928:10): avc:  denied  { open } for  pid=314 comm="systemd-journal" path="/sys/fs/cgroup/system.slice/systemd-journald.service/memory.pressure" dev="cgroup2" ino=948 scontext=system_u:system_r:syslogd_t tcontext=system_u:object_r:cgroup_t tclass=file permissive=1
-      audit: type=1400 audit(1788000881.406:108): avc:  denied  { search } for  pid=545 comm="sshd-session" name="omarchy" dev="vda2" ino=257 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000881.406:109): avc:  denied  { search } for  pid=545 comm="sshd-session" name=".ssh" dev="vda2" ino=401 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000881.406:110): avc:  denied  { getattr } for  pid=545 comm="sshd-session" path="/home/omarchy/.ssh/authorized_keys" dev="vda2" ino=402 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000881.406:111): avc:  denied  { search } for  pid=545 comm="sshd-session" name="omarchy" dev="vda2" ino=257 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000881.406:112): avc:  denied  { search } for  pid=545 comm="sshd-session" name=".ssh" dev="vda2" ino=401 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000881.406:113): avc:  denied  { read } for  pid=545 comm="sshd-session" name="authorized_keys" dev="vda2" ino=402 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000881.406:114): avc:  denied  { open } for  pid=545 comm="sshd-session" path="/home/omarchy/.ssh/authorized_keys" dev="vda2" ino=402 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000881.407:115): avc:  denied  { search } for  pid=545 comm="sshd-session" name="omarchy" dev="vda2" ino=257 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000881.407:116): avc:  denied  { search } for  pid=545 comm="sshd-session" name="omarchy" dev="vda2" ino=257 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000881.407:117): avc:  denied  { search } for  pid=545 comm="sshd-session" name=".ssh" dev="vda2" ino=401 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000894.713:170): avc:  denied  { read } for  pid=597 comm="systemctl" name="90-systemd.preset" dev="vda2" ino=86071 scontext=user_u:user_r:user_t tcontext=system_u:object_r:systemd_unit_t tclass=file permissive=1
-      audit: type=1400 audit(1788000894.713:171): avc:  denied  { open } for  pid=597 comm="systemctl" path="/usr/lib/systemd/system-preset/90-systemd.preset" dev="vda2" ino=86071 scontext=user_u:user_r:user_t tcontext=system_u:object_r:systemd_unit_t tclass=file permissive=1
-      audit: type=1400 audit(1788000894.713:172): avc:  denied  { ioctl } for  pid=597 comm="systemctl" path="/usr/lib/systemd/system-preset/90-systemd.preset" dev="vda2" ino=86071 ioctlcmd=0x542a scontext=user_u:user_r:user_t tcontext=system_u:object_r:systemd_unit_t tclass=file permissive=1
-      audit: type=1107 audit(1788000894.716:173): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:init_t msg='avc:  denied  { status } for auid=1000 uid=1000 gid=1000 path="/usr/lib/systemd/system/multi-user.target" cmdline="systemd-analyze" function="mac_selinux_filter" scontext=user_u:user_r:user_t tcontext=system_u:object_r:systemd_unit_t tclass=service permissive=1 exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
-      audit: type=1400 audit(1788000894.718:174): avc:  denied  { read } for  pid=602 comm="journalctl" name="system@51b7852c6c7d486189b25547509a1fc9-0000000000000001-00065a2d6520a707.journal" dev="vda2" ino=273 scontext=user_u:user_r:user_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000894.718:175): avc:  denied  { open } for  pid=602 comm="journalctl" path="/var/log/journal/8622cf4e8a764dc49b6ed4ab51641c0f/system@51b7852c6c7d486189b25547509a1fc9-0000000000000001-00065a2d6520a707.journal" dev="vda2" ino=273 scontext=user_u:user_r:user_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000894.718:176): avc:  denied  { map } for  pid=602 comm="journalctl" path="/var/log/journal/8622cf4e8a764dc49b6ed4ab51641c0f/system@51b7852c6c7d486189b25547509a1fc9-0000000000000001-00065a2d6520a707.journal" dev="vda2" ino=273 scontext=user_u:user_r:user_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000933.280:177): avc:  denied  { write } for  pid=631 comm="bash" name="omarchy" dev="vda2" ino=257 scontext=user_u:user_r:user_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000933.280:178): avc:  denied  { add_name } for  pid=631 comm="bash" name=".lab-pw" scontext=user_u:user_r:user_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000933.280:179): avc:  denied  { create } for  pid=631 comm="bash" name=".lab-pw" scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000933.281:180): avc:  denied  { write open } for  pid=631 comm="bash" path="/home/omarchy/.lab-pw" dev="vda2" ino=403 scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000933.282:181): avc:  denied  { setattr } for  pid=630 comm="chmod" name=".lab-pw" dev="vda2" ino=403 scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000933.295:182): avc:  denied  { write } for  pid=632 comm="bash" name="omarchy" dev="vda2" ino=257 scontext=user_u:user_r:user_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000933.364:183): avc:  denied  { execute } for  pid=637 comm="bash" name=".lab-sudo" dev="vda2" ino=404 scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000933.364:184): avc:  denied  { read } for  pid=637 comm="bash" path="/home/omarchy/.lab-sudo" dev="vda2" ino=404 scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000933.364:185): avc:  denied  { execute_no_trans } for  pid=637 comm="bash" path="/home/omarchy/.lab-sudo" dev="vda2" ino=404 scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000933.365:186): avc:  denied  { ioctl } for  pid=637 comm=".lab-sudo" path="/home/omarchy/.lab-sudo" dev="vda2" ino=404 ioctlcmd=0x542a scontext=user_u:user_r:user_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000938.566:836): avc:  denied  { write } for  pid=949 comm="ldconfig" name="etc" dev="vda2" ino=264 scontext=user_u:user_r:user_t tcontext=system_u:object_r:etc_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000938.566:837): avc:  denied  { write } for  pid=949 comm="ldconfig" name="etc" dev="vda2" ino=264 scontext=user_u:user_r:user_t tcontext=system_u:object_r:etc_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000938.566:838): avc:  denied  { remove_name } for  pid=949 comm="ldconfig" name="ld.so.cache~" dev="vda2" ino=90705 scontext=user_u:user_r:user_t tcontext=system_u:object_r:etc_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000938.566:839): avc:  denied  { rename } for  pid=949 comm="ldconfig" name="ld.so.cache~" dev="vda2" ino=90705 scontext=user_u:user_r:user_t tcontext=user_u:object_r:etc_t tclass=file permissive=1
-      audit: type=1400 audit(1788000938.566:840): avc:  denied  { unlink } for  pid=949 comm="ldconfig" name="ld.so.cache" dev="vda2" ino=90295 scontext=user_u:user_r:user_t tcontext=system_u:object_r:ld_so_cache_t tclass=file permissive=1
-      audit: type=1400 audit(1788000938.566:841): avc:  denied  { write } for  pid=949 comm="ldconfig" name="ldconfig" dev="vda2" ino=45927 scontext=user_u:user_r:user_t tcontext=system_u:object_r:ldconfig_cache_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000938.566:842): avc:  denied  { add_name } for  pid=949 comm="ldconfig" name="aux-cache~" scontext=user_u:user_r:user_t tcontext=system_u:object_r:ldconfig_cache_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000938.566:843): avc:  denied  { create } for  pid=949 comm="ldconfig" name="aux-cache~" scontext=user_u:user_r:user_t tcontext=user_u:object_r:ldconfig_cache_t tclass=file permissive=1
-      audit: type=1400 audit(1788000938.566:844): avc:  denied  { write open } for  pid=949 comm="ldconfig" path="/var/cache/ldconfig/aux-cache~" dev="vda2" ino=90706 scontext=user_u:user_r:user_t tcontext=user_u:object_r:ldconfig_cache_t tclass=file permissive=1
-      audit: type=1400 audit(1788000938.572:845): avc:  denied  { write } for  pid=949 comm="ldconfig" name="ldconfig" dev="vda2" ino=45927 scontext=user_u:user_r:user_t tcontext=system_u:object_r:ldconfig_cache_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000946.297:998): avc:  denied  { search } for  pid=1987 comm="sshd-session" name="omarchy" dev="vda2" ino=257 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000946.297:999): avc:  denied  { search } for  pid=1987 comm="sshd-session" name="omarchy" dev="vda2" ino=257 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000946.297:1000): avc:  denied  { search } for  pid=1987 comm="sshd-session" name=".ssh" dev="vda2" ino=401 scontext=system_u:system_r:sshd_t tcontext=system_u:object_r:unlabeled_t tclass=dir permissive=1
-      audit: type=1400 audit(1788000946.302:1001): avc:  denied  { read } for  pid=1988 comm="sudo" path="/home/omarchy/.lab-pw" dev="vda2" ino=403 scontext=user_u:user_r:user_sudo_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000946.309:1002): avc:  denied  { net_admin } for  pid=1988 comm="sudo" capability=12  scontext=user_u:user_r:user_sudo_t tcontext=user_u:user_r:user_sudo_t tclass=capability permissive=1
-      audit: type=1400 audit(1788000946.317:1003): avc:  denied  { lock } for  pid=1988 comm="sudo" path="/home/omarchy/.lab-pw" dev="vda2" ino=403 scontext=user_u:user_r:user_sudo_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000946.317:1004): avc:  denied  { ioctl } for  pid=1988 comm="sudo" path="/home/omarchy/.lab-pw" dev="vda2" ino=403 ioctlcmd=0x542a scontext=user_u:user_r:user_sudo_t tcontext=user_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000946.362:1005): avc:  denied  { write } for  pid=2009 comm="gpg" name="trustdb.gpg" dev="vda2" ino=278 scontext=user_u:user_r:gpg_t tcontext=system_u:object_r:etc_t tclass=file permissive=1
-      audit: type=1400 audit(1788000946.367:1006): avc:  denied  { append } for  pid=1997 comm="pacman" name="pacman.log" dev="vda2" ino=257 scontext=user_u:user_r:user_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
-      audit: type=1400 audit(1788000946.367:1007): avc:  denied  { open } for  pid=1997 comm="pacman" path="/var/log/pacman.log" dev="vda2" ino=257 scontext=user_u:user_r:user_t tcontext=system_u:object_r:unlabeled_t tclass=file permissive=1
+      audit: type=1400 audit(1788004974.278:3): avc:  denied  { search } for  pid=568 comm="sudo" name="545" dev="proc" ino=9380 scontext=user_u:user_r:user_sudo_t tcontext=system_u:system_r:sshd_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004974.278:4): avc:  denied  { read } for  pid=568 comm="sudo" name="stat" dev="proc" ino=9420 scontext=user_u:user_r:user_sudo_t tcontext=system_u:system_r:sshd_t tclass=file permissive=1
+      audit: type=1400 audit(1788004974.278:5): avc:  denied  { open } for  pid=568 comm="sudo" path="/proc/545/stat" dev="proc" ino=9420 scontext=user_u:user_r:user_sudo_t tcontext=system_u:system_r:sshd_t tclass=file permissive=1
+      audit: type=1400 audit(1788004974.839:6): avc:  denied  { getattr } for  pid=632 comm="restorecon" name="/" dev="tmpfs" ino=1 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:tmpfs_t tclass=filesystem permissive=1
+      audit: type=1400 audit(1788004974.839:7): avc:  denied  { getattr } for  pid=632 comm="restorecon" name="/" dev="cgroup2" ino=1 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:cgroup_t tclass=filesystem permissive=1
+      audit: type=1400 audit(1788004974.839:8): avc:  denied  { getattr } for  pid=632 comm="restorecon" name="/" dev="pstore" ino=4415 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:pstore_t tclass=filesystem permissive=1
+      audit: type=1400 audit(1788004974.839:9): avc:  denied  { getattr } for  pid=632 comm="restorecon" name="/" dev="mqueue" ino=1140 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:tmpfs_t tclass=filesystem permissive=1
+      audit: type=1400 audit(1788004974.839:10): avc:  denied  { getattr } for  pid=632 comm="restorecon" name="/" dev="tracefs" ino=1 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:tracefs_t tclass=filesystem permissive=1
+      audit: type=1400 audit(1788004974.839:11): avc:  denied  { getattr } for  pid=632 comm="restorecon" name="/" dev="hugetlbfs" ino=1810 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:hugetlbfs_t tclass=filesystem permissive=1
+      audit: type=1400 audit(1788004974.839:12): avc:  denied  { getattr } for  pid=632 comm="restorecon" name="/" dev="debugfs" ino=1 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:debugfs_t tclass=filesystem permissive=1
+      audit: type=1400 audit(1788004979.530:403582): avc:  denied  { write } for  pid=841 comm="pacman" name="download-OzX2g2" dev="vda2" ino=277 scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004979.530:403583): avc:  denied  { write } for  pid=841 comm="pacman" name="download-OzX2g2" dev="vda2" ino=277 scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004979.530:403584): avc:  denied  { write } for  pid=841 comm="pacman" name="download-OzX2g2" dev="vda2" ino=277 scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004979.534:403585): avc:  denied  { write } for  pid=841 comm="pacman" name="download-OzX2g2" dev="vda2" ino=277 scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004979.534:403586): avc:  denied  { write } for  pid=841 comm="pacman" name="download-OzX2g2" dev="vda2" ino=277 scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004979.534:403587): avc:  denied  { write } for  pid=841 comm="pacman" name="download-OzX2g2" dev="vda2" ino=277 scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004979.552:403588): avc:  denied  { write } for  pid=841 comm="pacman" name="download-OzX2g2" dev="vda2" ino=277 scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004979.552:403589): avc:  denied  { write } for  pid=841 comm="pacman" name="download-OzX2g2" dev="vda2" ino=277 scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004979.552:403590): avc:  denied  { write } for  pid=841 comm="pacman" name="download-OzX2g2" dev="vda2" ino=277 scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004979.554:403591): avc:  denied  { write } for  pid=841 comm="pacman" name="download-OzX2g2" dev="vda2" ino=277 scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004989.023:404193): avc:  denied  { connectto } for  pid=1659 comm="docker" path="/run/docker.sock" scontext=user_u:user_r:user_sudo_t tcontext=system_u:system_r:dockerd_t tclass=unix_stream_socket permissive=1
+      audit: type=1400 audit(1788004989.385:404194): avc:  denied  { write } for  pid=1965 comm="gpg" name="trustdb.gpg" dev="vda2" ino=278 scontext=user_u:user_r:gpg_t tcontext=system_u:object_r:etc_t tclass=file permissive=1
+      audit: type=1400 audit(1788004989.389:404195): avc:  denied  { append } for  pid=1953 comm="pacman" name="pacman.log" dev="vda2" ino=257 scontext=user_u:user_r:user_t tcontext=system_u:object_r:var_log_t tclass=file permissive=1
+      audit: type=1400 audit(1788004989.389:404196): avc:  denied  { open } for  pid=1953 comm="pacman" path="/var/log/pacman.log" dev="vda2" ino=257 scontext=user_u:user_r:user_t tcontext=system_u:object_r:var_log_t tclass=file permissive=1
+      audit: type=1400 audit(1788004989.389:404197): avc:  denied  { write } for  pid=1953 comm="pacman" name="sync" dev="vda2" ino=297 scontext=user_u:user_r:user_t tcontext=system_u:object_r:var_lib_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004989.389:404198): avc:  denied  { add_name } for  pid=1953 comm="pacman" name="download-GOaCWS" scontext=user_u:user_r:user_t tcontext=system_u:object_r:var_lib_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004989.389:404199): avc:  denied  { create } for  pid=1953 comm="pacman" name="download-GOaCWS" scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_lib_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004989.389:404200): avc:  denied  { setattr } for  pid=1953 comm="pacman" name="download-GOaCWS" dev="vda2" ino=74204 scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_lib_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004989.389:404201): avc:  denied  { write } for  pid=1953 comm="pacman" name="pacman" dev="vda2" ino=267 scontext=user_u:user_r:user_t tcontext=system_u:object_r:var_lib_t tclass=dir permissive=1
+      audit: type=1400 audit(1788004989.389:404202): avc:  denied  { create } for  pid=1953 comm="pacman" name="db.lck" scontext=user_u:user_r:user_t tcontext=user_u:object_r:var_lib_t tclass=file permissive=1
+      audit: type=1400 audit(1788004994.866:404924): avc:  denied  { write } for  pid=2723 comm="gpg" name="trustdb.gpg" dev="vda2" ino=278 scontext=user_u:user_r:gpg_t tcontext=system_u:object_r:etc_t tclass=file permissive=1
       
       == summary: count, source domain, target context, class, permissions ==
-          10  system_u:system_r:sshd_t -> system_u:object_r:unlabeled_t : dir { search }
-           2  user_u:user_r:user_t -> system_u:object_r:unlabeled_t : file { open }
-           2  user_u:user_r:user_t -> system_u:object_r:unlabeled_t : dir { write }
-           2  user_u:user_r:user_t -> system_u:object_r:ldconfig_cache_t : dir { write }
-           2  user_u:user_r:user_t -> system_u:object_r:etc_t : dir { write }
-           2  system_u:system_r:syslogd_t -> system_u:object_r:tmpfs_t : dir { search }
-           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { write open }
-           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { setattr }
-           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { read }
-           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { ioctl }
-           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { execute_no_trans }
-           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { execute }
-           1  user_u:user_r:user_t -> user_u:object_r:unlabeled_t : file { create }
-           1  user_u:user_r:user_t -> user_u:object_r:ldconfig_cache_t : file { write open }
-           1  user_u:user_r:user_t -> user_u:object_r:ldconfig_cache_t : file { create }
-           1  user_u:user_r:user_t -> user_u:object_r:etc_t : file { rename }
-           1  user_u:user_r:user_t -> system_u:object_r:unlabeled_t : file { read }
-           1  user_u:user_r:user_t -> system_u:object_r:unlabeled_t : file { map }
-           1  user_u:user_r:user_t -> system_u:object_r:unlabeled_t : file { append }
-           1  user_u:user_r:user_t -> system_u:object_r:unlabeled_t : dir { add_name }
-           1  user_u:user_r:user_t -> system_u:object_r:systemd_unit_t : service { status }
-           1  user_u:user_r:user_t -> system_u:object_r:systemd_unit_t : file { read }
-           1  user_u:user_r:user_t -> system_u:object_r:systemd_unit_t : file { open }
-           1  user_u:user_r:user_t -> system_u:object_r:systemd_unit_t : file { ioctl }
-           1  user_u:user_r:user_t -> system_u:object_r:ldconfig_cache_t : dir { add_name }
-           1  user_u:user_r:user_t -> system_u:object_r:ld_so_cache_t : file { unlink }
-           1  user_u:user_r:user_t -> system_u:object_r:etc_t : dir { remove_name }
-           1  user_u:user_r:user_sudo_t -> user_u:user_r:user_sudo_t : capability { net_admin }
-           1  user_u:user_r:user_sudo_t -> user_u:object_r:unlabeled_t : file { read }
-           1  user_u:user_r:user_sudo_t -> user_u:object_r:unlabeled_t : file { lock }
-           1  user_u:user_r:user_sudo_t -> user_u:object_r:unlabeled_t : file { ioctl }
-           1  user_u:user_r:gpg_t -> system_u:object_r:etc_t : file { write }
-           1  system_u:system_r:systemd_networkd_t -> system_u:object_r:tmpfs_t : dir { read }
-           1  system_u:system_r:systemd_networkd_t -> system_u:object_r:tmpfs_t : dir { open }
-           1  system_u:system_r:systemd_generator_t -> system_u:object_r:selinux_config_t : lnk_file { read }
-           1  system_u:system_r:syslogd_t -> system_u:object_r:cgroup_t : file { read write }
-           1  system_u:system_r:syslogd_t -> system_u:object_r:cgroup_t : file { open }
-           1  system_u:system_r:syslogd_t -> system_u:object_r:cgroup_t : file { getattr }
-           1  system_u:system_r:sshd_t -> system_u:object_r:unlabeled_t : file { read }
-           1  system_u:system_r:sshd_t -> system_u:object_r:unlabeled_t : file { open }
-           1  system_u:system_r:sshd_t -> system_u:object_r:unlabeled_t : file { getattr }
+          10  user_u:user_r:user_t -> user_u:object_r:var_t : dir { write }
+           2  user_u:user_r:user_t -> system_u:object_r:var_lib_t : dir { write }
+           2  user_u:user_r:user_sudo_t -> system_u:object_r:tmpfs_t : filesystem { getattr }
+           2  user_u:user_r:gpg_t -> system_u:object_r:etc_t : file { write }
+           1  user_u:user_r:user_t -> user_u:object_r:var_lib_t : file { create }
+           1  user_u:user_r:user_t -> user_u:object_r:var_lib_t : dir { setattr }
+           1  user_u:user_r:user_t -> user_u:object_r:var_lib_t : dir { create }
+           1  user_u:user_r:user_t -> system_u:object_r:var_log_t : file { open }
+           1  user_u:user_r:user_t -> system_u:object_r:var_log_t : file { append }
+           1  user_u:user_r:user_t -> system_u:object_r:var_lib_t : dir { add_name }
+           1  user_u:user_r:user_sudo_t -> system_u:system_r:sshd_t : file { read }
+           1  user_u:user_r:user_sudo_t -> system_u:system_r:sshd_t : file { open }
+           1  user_u:user_r:user_sudo_t -> system_u:system_r:sshd_t : dir { search }
+           1  user_u:user_r:user_sudo_t -> system_u:system_r:dockerd_t : unix_stream_socket { connectto }
+           1  user_u:user_r:user_sudo_t -> system_u:object_r:tracefs_t : filesystem { getattr }
+           1  user_u:user_r:user_sudo_t -> system_u:object_r:pstore_t : filesystem { getattr }
+           1  user_u:user_r:user_sudo_t -> system_u:object_r:hugetlbfs_t : filesystem { getattr }
+           1  user_u:user_r:user_sudo_t -> system_u:object_r:debugfs_t : filesystem { getattr }
+           1  user_u:user_r:user_sudo_t -> system_u:object_r:cgroup_t : filesystem { getattr }
       
-      To turn these into a policy module:
+      To turn these into a policy module (audit2allow is in the
+      `selinux-tools` addon, and does not have to be on this machine):
           journalctl -k -b -g 'avc: *denied' -o cat | audit2allow -m omarchy_server_local
       Read what it produces before installing it. A rule that allows a denial
       the machine should not have made is a hole, not a fix.
 
 [PASS] permissive: the denial count was measured
-      55 AVC records this boot
+      31 AVC records this boot
 
 --- rebooting ---
-boot id before: 0932ad3a-46fd-49da-a012-8240c8730737
-boot id after:  f3df782e-75e8-428c-aba9-6e8f4b57068e
+boot id before: 462d450f-fa4d-41f6-b7ce-3a9606a316b2
+boot id after:  cff2fd09-229a-428d-a63b-33b5aac7cb07
 
 [PASS] the machine came back over ssh after a reboot
-      boot_id 0932ad3a-46fd-49da-a012-8240c8730737 -> f3df782e-75e8-428c-aba9-6e8f4b57068e
+      boot_id 462d450f-fa4d-41f6-b7ce-3a9606a316b2 -> cff2fd09-229a-428d-a63b-33b5aac7cb07
 
 [PASS] SELinux is still in the mode it was left in
       $ getenforce
@@ -304,6 +302,6 @@ boot id after:  f3df782e-75e8-428c-aba9-6e8f4b57068e
 
 [PASS] and the boot produced no new denials before login
       $ journalctl -k --no-pager -b -g 'avc: *denied' -o cat | wc -l
-      18
+      0
 
-=== 28 passed, 2 failed ===
+=== 36 passed, 0 failed ===

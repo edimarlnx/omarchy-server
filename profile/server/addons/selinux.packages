@@ -22,18 +22,19 @@ libsepol
 libselinux
 checkpolicy
 secilc
-setools
 libsemanage
 semodule-utils
 policycoreutils
-# selinux-python brings semanage and audit2allow, and setools (its dependency)
-# brings python-networkx, which in Arch hard-depends on python-scipy,
-# python-pandas, python-matplotlib and python-numpy. Measured on an installed
-# machine: those two packages and their closure are 45 packages and 453 MiB,
-# which is 82% of this addon's entire size cost. See
-# reports/2026-08-29-mandatory-access-control.md; splitting them into a second
-# addon is the open recommendation.
-selinux-python
+# NOT here, on purpose: `setools` and `selinux-python`. They carry semanage,
+# audit2allow and sesearch, and they drag python-networkx in, which in Arch
+# hard-depends on python-scipy, python-pandas, python-matplotlib and
+# python-numpy. Measured on an installed machine: those two packages and their
+# closure are 45 packages and 453 MiB -- 82% of what this route used to cost.
+# They now live in the `selinux-tools` addon, which is what a workstation that
+# AUTHORS policy installs. A machine that only RUNS it does not need them: the
+# policy loads, restorecon/setfiles/semodule/checkmodule all work, and the
+# profile's own file contexts are written straight into the policy store's
+# file_contexts.local by install/server/selinux-server.sh.
 selinux-alpm-hook
 selinux-refpolicy-arch
 

@@ -30,32 +30,39 @@
 #               orchestrator's finalize_limine_boot.
 #
 #   local       the file contexts this profile adds, from
-#               install/server/mac/selinux/local-fcontexts, applied with
-#               `semanage fcontext -a`. The reference policy has never heard of
+#               install/server/mac/selinux/local-fcontexts, written into the
+#               policy store's file_contexts.local -- the same file semanage
+#               writes, in the same format, without needing selinux-python on
+#               the machine. The reference policy has never heard of
 #               /usr/share/omarchy/bin and labels it usr_t -- data, not
 #               programs -- and that is the one thing the policy gets wrong
 #               about this profile out of the box.
 #
-#               No local policy MODULE ships today, and that is deliberate: a
-#               rule belongs here only when a measured denial called for it.
-#               If an omarchy_server.te appears beside local-fcontexts it is
-#               built and installed too.
+#               A local policy MODULE ships only when a measured denial called
+#               for it: an omarchy_server.te beside local-fcontexts is compiled
+#               with checkmodule and installed with semodule.
 #
 #   labels      the filesystem is relabelled HERE, offline, with `setfiles`
-#               against the policy's file_contexts. A relabel is minutes of
-#               I/O; doing it during the install, where the machine is already
-#               busy writing, is cheaper than doing it on the first boot with
+#               over file_contexts + file_contexts.homedirs +
+#               file_contexts.local concatenated. A relabel is minutes of I/O;
+#               doing it during the install, where the machine is already busy
+#               writing, is cheaper than doing it on the first boot with
 #               somebody watching.
+#
+#               Concatenated, because setfiles reads exactly the one spec file
+#               it is given, and the entry that gives /home/<user> its
+#               user_home_dir_t lives in file_contexts.homedirs. Getting that
+#               wrong is half of the lockout in
+#               reports/2026-08-29-mandatory-access-control.md.
 #
 #               And then AGAIN, once, on the first boot. /.autorelabel is left
 #               in place and omarchy-server-selinux-relabel.service acts on it
 #               -- selinux-refpolicy-arch ships no such unit, so this profile
-#               ships one. It is not belt and braces: the orchestrator creates
-#               the user's home directory in a phase that runs after this
-#               addon, so the offline pass genuinely cannot have labelled it,
-#               and an unlabeled /home/<user> locks the operator out the moment
-#               the machine goes enforcing. Measured, in
-#               reports/2026-08-29-mandatory-access-control.md.
+#               ships one. That is the other half: the orchestrator creates the
+#               user's home directory in a phase that runs after this addon, so
+#               the offline pass cannot have labelled a directory that did not
+#               exist. The unit is ordered before systemd-user-sessions.service
+#               so no login can happen against unlabeled paths.
 
 OMARCHY_SELINUX_TYPE=refpolicy-arch
 OMARCHY_SELINUX_STORE=/etc/selinux/$OMARCHY_SELINUX_TYPE
@@ -65,7 +72,11 @@ source "$OMARCHY_INSTALL/server/mac-server.sh"
 
 omarchy_selinux_require_userland() {
   local missing=() command
-  for command in load_policy semodule semodule_package checkmodule setfiles restorecon semanage; do
+  # No `semanage` in this list any more. It lives in selinux-python, which
+  # together with setools is 45 packages and 453 MiB of scientific Python on a
+  # headless server, and it moved to the `selinux-tools` addon. Everything this
+  # leaf needs is in policycoreutils, checkpolicy and semodule-utils.
+  for command in load_policy semodule semodule_package checkmodule setfiles restorecon; do
     command -v "$command" >/dev/null || missing+=("$command")
   done
 
@@ -136,31 +147,102 @@ omarchy_selinux_write_cmdline_dropin() {
   echo "selinux: kernel command line drop-in written"
 }
 
-# The profile's own file contexts. `semanage fcontext -a`, not a policy module:
-# checkmodule rejects a module whose only content is a file-context file (it
-# needs at least one rule), and this profile has no measured denial that calls
-# for a rule. A local fcontext is the supported way to add a label without
-# inventing policy; it survives a policy upgrade, and `semanage fcontext -l -C`
-# lists exactly what was added here.
+# The profile's own file contexts, written straight into the policy store's
+# file_contexts.local -- the same file `semanage fcontext -a` writes, in the
+# same format, at the path libselinux's selinux_file_context_local_path()
+# returns. Writing it directly is what lets the `selinux` addon drop
+# selinux-python (and with it setools and 453 MiB of scientific Python; see
+# addons/selinux-tools.packages).
 #
-# When a measured denial does call for a rule, an `omarchy_server.te` beside
-# this file is built and installed by omarchy_selinux_build_local_module below.
-omarchy_selinux_add_fcontexts() {
-  local file="$OMARCHY_INSTALL/server/mac/selinux/local-fcontexts"
-  local path type
+# This is not a shortcut around semanage's bookkeeping: file_contexts.local is
+# a plain spec file, semanage's only extra work on it is to rewrite it whole
+# from its own record, and `restorecon` loads it by name whether semanage or
+# this function put it there. It survives a policy upgrade for the same reason
+# semanage's copy does -- the package owns file_contexts, not this file.
+#
+# Not a policy module either: checkmodule rejects a module whose only content
+# is a file-context file (it needs at least one rule). When a measured denial
+# calls for a rule, an `omarchy_server.te` beside this file is built and
+# installed by omarchy_selinux_build_local_module below.
+# The level suffix, or the absence of one. refpolicy-arch is built
+# TYPE=standard (its include/build.conf), so it is NOT an MLS policy and a
+# valid context has three fields: user:role:type. Writing the four-field
+# `system_u:object_r:bin_t:s0` that an MLS policy would use produces
+#
+#     setfiles: <spec>: line N has invalid context system_u:object_r:bin_t:s0
+#
+# and the rule is DROPPED -- silently, as far as the addon is concerned, since
+# setfiles still exits 0. Measured: it left /usr/share/omarchy/bin unlabeled on
+# a machine whose relabel had otherwise worked.
+#
+# Rather than hard-coding either form, ask the policy's own file_contexts what
+# shape its contexts have. A policy store swapped for an MLS one then keeps
+# working.
+omarchy_selinux_context_suffix() {
+  local file_contexts="$OMARCHY_SELINUX_STORE/contexts/files/file_contexts"
+  local context
 
-  [[ -f $file ]] || return 0
+  context=$(grep -Ev '^[[:space:]]*(#|$)' "$file_contexts" 2>/dev/null |
+    awk '{print $NF}' | grep -m1 ':')
+  # Four colon-separated fields means the last one is a level.
+  if [[ $context == *:*:*:* ]]; then
+    printf ':%s' "${context##*:}"
+  fi
+}
+
+omarchy_selinux_add_fcontexts() {
+  local source="$OMARCHY_INSTALL/server/mac/selinux/local-fcontexts"
+  local target="$OMARCHY_SELINUX_STORE/contexts/files/file_contexts.local"
+  local suffix path type
+
+  [[ -f $source ]] || return 0
+  suffix=$(omarchy_selinux_context_suffix)
+
+  # Rewritten whole rather than appended to, so a re-run is idempotent and a
+  # line removed from the profile disappears from the machine.
+  {
+    echo "# Written by install/server/selinux-server.sh from"
+    echo "# install/server/mac/selinux/local-fcontexts. Do not edit by hand:"
+    echo "# the addon rewrites this file whole on every run."
+    while read -r path type _; do
+      [[ -z $path || $path == \#* ]] && continue
+      printf '%s\tsystem_u:object_r:%s%s\n' "$path" "$type" "$suffix"
+    done <"$source"
+  } >"$target"
 
   while read -r path type _; do
     [[ -z $path || $path == \#* ]] && continue
-    # `-a` fails when the rule is already there, which is the normal state on a
-    # re-run; `-m` modifies an existing one. Try to add, fall back to modify.
-    if ! semanage fcontext -S "$OMARCHY_SELINUX_TYPE" -N -a -t "$type" "$path" 2>/dev/null; then
-      semanage fcontext -S "$OMARCHY_SELINUX_TYPE" -N -m -t "$type" "$path" 2>/dev/null ||
-        echo "selinux: could not set the fcontext for $path" >&2
-    fi
-    echo "selinux: fcontext $path -> $type"
-  done <"$file"
+    echo "selinux: fcontext $path -> ${type}${suffix}"
+  done <"$source"
+}
+
+# file_contexts.homedirs, and why this function exists at all.
+#
+# The reference policy labels /home `home_root_t` in its base file_contexts and
+# says nothing there about what is INSIDE /home. The entries that give
+# /home/<user> `user_home_dir_t` live in file_contexts.homedirs, which
+# libsemanage generates (genhomedircon) when the policy store is rebuilt --
+# generically, as /home/[^/]+ and /home/[^/]+/.*, so it does not matter that no
+# user account exists yet when this runs in the install chroot.
+#
+# `semodule -B` rebuilds the store and regenerates it. Cheap, and it also
+# expands the local module installed just above.
+omarchy_selinux_rebuild_store() {
+  local homedirs="$OMARCHY_SELINUX_STORE/contexts/files/file_contexts.homedirs"
+
+  echo "selinux: rebuilding the policy store"
+  if ! semodule -s "$OMARCHY_SELINUX_TYPE" -B; then
+    echo "selinux: semodule -B failed; the policy store may be incomplete" >&2
+    return 1
+  fi
+
+  if [[ ! -s $homedirs ]]; then
+    echo "selinux: WARNING -- no file_contexts.homedirs after the rebuild." >&2
+    echo "         /home/<user> would be relabelled to nothing, which locks the" >&2
+    echo "         operator out the moment this machine goes enforcing." >&2
+    return 1
+  fi
+  echo "selinux: file_contexts.homedirs has $(grep -c . "$homedirs") entries"
 }
 
 # A local policy module, when one exists. Plain module syntax -- `module`, not
@@ -203,24 +285,108 @@ omarchy_selinux_relabel() {
   fi
 
   echo "selinux: relabelling the filesystem (this takes a few minutes)"
-  # -F: reset the context even where one is already set, which is the point on
-  # a filesystem that was written before any policy existed.
-  # -e: the pseudo-filesystems have no xattrs to write and are labelled by the
-  # kernel at mount time.
-  if setfiles -F -e /dev -e /proc -e /sys -e /run -e /tmp "$file_contexts" /; then
+  # `restorecon -R /`, and NOT `setfiles <file_contexts> /`.
+  #
+  # libselinux's label_file backend loads three spec files when it opens the
+  # store by policy type -- file_contexts, then file_contexts.homedirs, then
+  # file_contexts.local -- and exactly ONE when it is handed a path.
+  # `setfiles` requires the path. So `setfiles <file_contexts> /` relabelled
+  # against the base file alone: /home got home_root_t from it, /home/<user>
+  # matched nothing (its /home/[^/]+ -> user_home_dir_t entry is in
+  # file_contexts.homedirs) and stayed unlabeled, and this profile's own
+  # /usr/share/omarchy/bin rule (file_contexts.local) was never applied.
+  # That is half of the enforcing lockout in
+  # reports/2026-08-29-mandatory-access-control.md.
+  #
+  # Concatenating the three into one spec for setfiles is NOT the fix, and was
+  # tried: the three files legitimately specify the same path twice --
+  # /root/.k5login is krb5_home_t under system_u in the base and under root in
+  # homedirs -- and libselinux resolves that by letting the later file win,
+  # while setfiles rejects the whole spec with "Multiple different
+  # specifications" and relabels nothing. Only the loader has the precedence
+  # rules; use the loader.
+  #
+  # -R recursive, -F reset a context that is already set (the point on a
+  # filesystem written before any policy existed), -i ignore paths in the spec
+  # that do not exist here, -e the pseudo-filesystems, which have no xattrs and
+  # are labelled by the kernel at mount time.
+  #
+  # /.snapshots is excluded for a different reason and it is not cosmetic: this
+  # profile keeps five snapper snapshots, snapper mounts them READ-ONLY, and
+  # restorecon reports "Could not set context ...: Read-only file system" for
+  # every file in every one of them and exits non-zero. On a machine that has
+  # ever taken a snapshot, a relabel without this exclusion always "fails" --
+  # which would leave /.autorelabel in place and make `enforcing` refuse
+  # forever. A read-only snapshot of a past root is not part of the running
+  # system's label set anyway; the subvolume gets relabelled when it is
+  # rolled back into place.
+  if restorecon -R -F -i \
+    -e /dev -e /proc -e /sys -e /run -e /tmp -e /var/lib/machines -e /.snapshots /; then
     # The flag STAYS, and the unit enabled below acts on it at the first boot.
-    # This relabel cannot have covered everything: the orchestrator creates the
-    # user's home directory in a phase that runs after this addon, so on a
-    # fresh install /home/<user> is still unlabeled when setfiles finishes
-    # here. That is invisible in permissive and locks the operator out the
+    # This pass cannot have covered everything: the orchestrator creates the
+    # user's home directory in a phase that runs AFTER this addon, so on a
+    # fresh install /home/<user> does not exist yet when this finishes. An
+    # unlabeled home is invisible in permissive and locks the operator out the
     # moment SELinux goes enforcing.
     touch /.autorelabel
   else
-    echo "selinux: setfiles reported errors; see above" >&2
+    echo "selinux: restorecon reported errors; see above" >&2
     echo "         Leaving /.autorelabel as a marker. Repair with:" >&2
     echo "             sudo omarchy-server-selinux relabel" >&2
     touch /.autorelabel
   fi
+}
+
+# Did the relabel actually apply this profile's own rules?
+#
+# Neither setfiles nor restorecon fails when a spec line carries a context the
+# policy rejects: the rule is dropped, the tool carries on and exits 0, and the
+# paths it named stay unlabeled. That is not hypothetical -- a four-field
+# `system_u:object_r:bin_t:s0` written into file_contexts.local against this
+# non-MLS policy left /usr/share/omarchy/bin as unlabeled_t through two
+# relabels without one error line. An exit status cannot be trusted here, so
+# check the outcome instead of the mechanism.
+omarchy_selinux_verify_labels() {
+  local source="$OMARCHY_INSTALL/server/mac/selinux/local-fcontexts"
+  local wrong=0 path type context probe
+
+  [[ -f $source ]] || return 0
+
+  # `ls -Z` can only report a context on a kernel that has SELinux running, and
+  # this leaf's main caller is the ISO install chroot, where it is not: every
+  # path there reads back as `?`. That is not a labelling failure, it is an
+  # unanswerable question, and reporting it as a failure would print two
+  # warnings on every single install. Check only where the answer means
+  # something -- on a live machine, which is where
+  # omarchy-server-selinux-relabel.service calls the same code path.
+  if [[ ! -d /sys/fs/selinux ]]; then
+    echo "selinux: (labels cannot be read while SELinux is inactive; the"
+    echo "         first-boot relabel verifies them)"
+    return 0
+  fi
+
+  while read -r path type _; do
+    [[ -z $path || $path == \#* ]] && continue
+    # The spec is a regex; the directory it is rooted at is the literal prefix
+    # before the first regex metacharacter, and that is what can be checked.
+    probe=${path%%[\(\[\*\?]*}
+    probe=${probe%/}
+    [[ -e $probe ]] || continue
+    context=$(ls -Zd "$probe" 2>/dev/null | awk '{print $1}')
+    if [[ $context != *":$type"* ]]; then
+      echo "selinux: WARNING -- $probe is $context, but the profile asked for $type" >&2
+      wrong=1
+    fi
+  done <"$source"
+
+  if ((wrong)); then
+    echo "selinux: the profile's own file contexts did not take. Leaving" >&2
+    echo "         /.autorelabel so the first boot tries again, and check" >&2
+    echo "         $OMARCHY_SELINUX_STORE/contexts/files/file_contexts.local" >&2
+    touch /.autorelabel
+    return 1
+  fi
+  echo "selinux: the profile's own file contexts are applied on disk"
 }
 
 # The first-boot relabel unit. Enabled here rather than by the package,
@@ -240,7 +406,10 @@ omarchy_selinux_setup() {
   omarchy_selinux_write_cmdline_dropin
   omarchy_selinux_add_fcontexts
   omarchy_selinux_build_local_module || true
+  # Before the relabel, not after: the relabel reads what this rebuilds.
+  omarchy_selinux_rebuild_store || true
   omarchy_selinux_relabel
+  omarchy_selinux_verify_labels || true
   omarchy_selinux_enable_relabel_unit
 
   omarchy_mac_rebuild_boot

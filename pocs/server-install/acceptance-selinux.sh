@@ -96,18 +96,28 @@ check "/etc/selinux/config says what the addon wrote" \
   'grep -E "^(SELINUX|SELINUXTYPE)=" /etc/selinux/config; readlink -f /etc/selinux/config' \
   'SELINUXTYPE=refpolicy-arch'
 
-# The profile ships no local policy MODULE: a rule belongs in one only when a
-# measured denial called for it. What it does ship is a local file context, the
-# one thing the reference policy gets wrong about this profile out of the box
-# (/usr/share/omarchy/bin is programs, and the default below /usr/share is
-# usr_t, which is data).
+# The profile's local file context, and where it now lives. `semanage` moved to
+# the `selinux-tools` addon together with setools and 453 MiB of scientific
+# Python, so a correctly configured machine does not have it; the addon writes
+# the same file semanage would write, at the path libselinux looks for it.
+# Asserting on the file rather than on the tool is the point of the split.
 check "the profile's own file contexts are in the policy store" \
-  '~/.lab-sudo semanage fcontext -l -C' \
-  '/usr/share/omarchy/bin'
+  '~/.lab-sudo cat /etc/selinux/refpolicy-arch/contexts/files/file_contexts.local' \
+  '/usr/share/omarchy/bin.*bin_t'
 
 check "and they are what the profile's commands actually carry" \
   'ls -Z /usr/share/omarchy/bin/omarchy-server-update' \
   ':bin_t'
+
+# The split is only honest if the base addon really did leave the heavy tools
+# out. 45 packages and 453 MiB is the whole reason it exists.
+check "the base selinux addon did NOT pull setools or selinux-python in" \
+  'pacman -Qq setools selinux-python python-networkx python-scipy python-pandas 2>&1 | sort -u' \
+  'was not found'
+
+check "and the policy tools are offered as their own addon" \
+  'omarchy-server-addon --list | grep -E "^selinux"' \
+  'selinux-tools'
 
 # ── 3. the rebuilt userland ─────────────────────────────────────────────────
 
@@ -148,6 +158,15 @@ check "openssh was not downgraded by the rebuild" \
 
 # procps-ng on Arch is not built against libselinux, so `ps -Z` does not exist;
 # the kernel exports the same thing per process.
+# init_t, not kernel_t, and the difference is a measurement rather than a
+# detail. PID 1 transitions to init_t at exec only if /usr/lib/systemd/systemd
+# already carries init_exec_t. On the FIRST boot of a fresh install it does
+# not: the offline relabel could not label what the orchestrator had not
+# written yet, and omarchy-server-selinux-relabel.service fixes the labels
+# after PID 1 has already started. So boot 1 leaves init in kernel_t and boot 2
+# has it in init_t -- which is why this profile reboots once after the
+# first-boot relabel before anyone considers enforcing, and why
+# `omarchy-server-selinux enforcing` refuses while init is still kernel_t.
 check "init runs in a domain of its own" \
   'tr -d "\0" </proc/1/attr/current' \
   'init_t'
@@ -180,23 +199,76 @@ check "/etc and /usr carry real labels, not unlabeled_t" \
 
 # A relabel that half-finished is worse than one that did not run: the count is
 # the evidence, not the absence of an error message.
-check "there is no significant pocket of unlabeled files" \
-  '~/.lab-sudo find /etc /usr /var -xdev -context "*unlabeled_t*" 2>/dev/null | head -20; echo "unlabeled=$(~/.lab-sudo find /etc /usr /var -xdev -context "*unlabeled_t*" 2>/dev/null | wc -l)"' \
-  '^unlabeled=0$'
+#
+# NOT `find -context`. Arch's findutils is not built against libselinux -- and
+# findutils-selinux is deliberately not in the rebuild set -- so the predicate
+# answers "find: invalid predicate -context: SELinux is not enabled" on stderr
+# and prints nothing on stdout. Piped to `wc -l` that is a clean `0`, and the
+# check passes without having looked at a single file. It did exactly that
+# here before this was noticed.
+#
+# `restorecon -nvR` needs nothing but policycoreutils, and it answers a
+# stronger question than "is anything unlabeled": it lists every path whose
+# label differs from what the policy says it should be.
+check "findutils here cannot do the sweep, which is why the check below does not use it" \
+  'find /etc -maxdepth 0 -context "*" 2>&1 | head -1; echo "exit=$?"' \
+  '.'
+
+check "no file under /etc /usr /var has a label the policy disagrees with" \
+  '~/.lab-sudo restorecon -nvR /etc /usr /var 2>&1 | head -20; echo "wrong=$(~/.lab-sudo restorecon -nvR /etc /usr /var 2>/dev/null | wc -l)"' \
+  '^wrong=0$'
+
+# THE check of this whole re-validation. The first enforcing run locked the
+# operator out because /home/<user> carried no label at all: the offline
+# relabel ran before the orchestrator created the home directory, and it ran
+# with `setfiles <file_contexts>`, which does not load file_contexts.homedirs
+# where the /home/[^/]+ -> user_home_dir_t entry lives. Both halves are fixed;
+# this is what proves it.
+check "/home/<user> is labelled user_home_dir_t, not unlabeled" \
+  'ls -Zd /home /home/*' \
+  'user_home_dir_t'
+
+check "and nothing under /home has a label the policy disagrees with" \
+  '~/.lab-sudo restorecon -nvR /home /root 2>&1 | head -10; echo "wrong=$(~/.lab-sudo restorecon -nvR /home /root 2>/dev/null | wc -l)"' \
+  '^wrong=0$'
 
 check "the relabel flag was cleared, so the next boot does not repeat it" \
   'ls -l /.autorelabel 2>&1' \
   'No such file'
 
+check "the first-boot relabel unit ran and succeeded" \
+  'systemctl is-enabled omarchy-server-selinux-relabel.service; ~/.lab-sudo journalctl -u omarchy-server-selinux-relabel.service --no-pager -o cat | tail -5' \
+  '.'
+
 # ── 6. optionally switch to enforcing ───────────────────────────────────────
 
 if [[ ${ENFORCE:-0} == 1 ]]; then
   echo "--- switching to enforcing ---"
-  run '~/.lab-sudo omarchy-server-selinux enforcing'
+
+  # First, that the guard REFUSES. This is an assertion, not a formality: the
+  # operator's session is user_u:user_r:user_t, sudo does not change that on
+  # this profile, and user_r is not granted security { setenforce } -- so
+  # enforcing from an ssh session is a one-way door and the command is supposed
+  # to say so rather than do it. A run where this silently succeeded would mean
+  # the guard had stopped working.
+  check "enforcing is refused from a session that could not undo it" \
+    '~/.lab-sudo omarchy-server-selinux enforcing 2>&1 | head -14; echo "mode=$(getenforce)"' \
+    'refusing to enforce'
+
+  # Then --force, which is what this lab has the standing to use: the VM has a
+  # serial console, a snapper snapshot from before the switch, and an installer
+  # medium. A remote operator has none of those, which is the point of the
+  # refusal above.
+  run '~/.lab-sudo omarchy-server-selinux enforcing --force'
   echo
   check "the machine is enforcing" 'getenforce' '^Enforcing$'
   check "and it will still be enforcing after a reboot" \
     'grep "^SELINUX=" /etc/selinux/config' 'SELINUX=enforcing'
+
+  # The other half of the one-way door, asserted rather than assumed.
+  check "and this session cannot switch it back, as the refusal warned" \
+    '~/.lab-sudo omarchy-server-selinux permissive 2>&1 | tail -3; echo "mode=$(getenforce)"' \
+    '^mode=Enforcing$'
 fi
 
 # ── 7. the workload ─────────────────────────────────────────────────────────

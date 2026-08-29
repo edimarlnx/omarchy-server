@@ -127,8 +127,11 @@ paragraph per package saying why it is not.
 
 **Additive** (replace nothing; installing them changes nothing about a machine
 that never enables SELinux): `libsepol`, `libselinux`, `checkpolicy`, `secilc`,
-`setools`, `libsemanage`, `semodule-utils`, `policycoreutils`, `selinux-python`,
-`selinux-alpm-hook`, `selinux-refpolicy-arch`.
+`libsemanage`, `semodule-utils`, `policycoreutils`, `selinux-alpm-hook`,
+`selinux-refpolicy-arch`.
+
+**Not in the `selinux` addon at all**: `setools` and `selinux-python`. They are
+the separate **`selinux-tools`** addon — see "Two addons, not one" below.
 
 **Rebuilds** (each `provides=` and `conflicts=` its stock counterpart):
 `pambase-selinux`, `pam-selinux`, `coreutils-selinux`, `util-linux-selinux`,
@@ -250,18 +253,39 @@ transitions into its own domain at exec, every file has a label, and the
 policy's answer to "may `sshd_t` read `shadow_t`" is a rule somebody wrote on
 purpose.
 
-The one thing the reference policy gets wrong about *this* profile out of the
-box is the label on its own commands: `/usr/share/omarchy/bin` holds programs,
-and the default for anything under `/usr/share` is `usr_t`, which is data. The
-addon fixes that with `semanage fcontext -a`, from
-`install/server/mac/selinux/local-fcontexts`.
+Two things the reference policy gets wrong about *this* profile out of the box
+are labels, and both are fixed by labelling rather than by policy:
 
-There is deliberately **no local policy module**. A module has to contain at
-least one rule to compile at all — `checkmodule` rejects one whose only content
-is a file-context file — and a rule belongs there only when a measured denial
-called for it. If an `omarchy_server.te` appears beside `local-fcontexts` the
-setup leaf builds and installs it with `checkmodule` + `semodule_package`,
-which is plain module syntax and exactly what `audit2allow -M` emits.
+- `/usr/share/omarchy/bin` holds programs, and the default for anything under
+  `/usr/share` is `usr_t`, which is data.
+- `/var/lib/lastlog` holds shadow's `lastlog2.db`, which sshd writes on every
+  login. refpolicy knows `lastlog_t` and grants sshd what it needs on it, but
+  only names `/var/log/lastlog`; shadow moved the database and the policy has
+  not followed.
+
+Both live in `install/server/mac/selinux/local-fcontexts`, which the setup leaf
+renders into the policy store's `file_contexts.local` — the same file
+`semanage fcontext -a` writes, in the same format, at the path libselinux looks
+for it. Writing it directly rather than through `semanage` is what lets the
+`selinux` addon leave `selinux-python` out.
+
+> Contexts there are **three fields**, no `:s0`. `refpolicy-arch` is built
+> `TYPE=standard` and is not MLS, so a four-field context is *invalid* — and
+> `setfiles` responds by dropping that rule, printing one line, and exiting
+> **0**. That mistake left `/usr/share/omarchy/bin` as `unlabeled_t` through two
+> relabels without a failure anywhere. The setup leaf now derives the suffix
+> from the policy's own `file_contexts`, and verifies afterwards that the
+> labels are on disk rather than trusting the exit status.
+
+There **is** a local policy module, `install/server/mac/selinux/omarchy_server.te`,
+and every rule in it came from a denial measured on this profile. The setup leaf
+builds it on the machine with `checkmodule -m` + `semodule_package` — plain
+module syntax, exactly what `audit2allow -M` emits, and no `make`/`m4` on a
+production server. What it covers, and why each rule is the shape it is, is in
+the file; the short version is that it is entirely the gap between
+refpolicy 20250923 and systemd 261 — credentials on tmpfs, PSI
+(`memory.pressure`), logind and networkd over varlink instead of D-Bus,
+userdb, and networkd's BPF.
 
 ### AppArmor
 
@@ -324,15 +348,18 @@ profile setup step that happens to need packages), a thin
 `install/server/addons/<name>.sh` that sources it, and a runtime command.
 
 ```
-profile/server/addons/selinux.packages          the package set
+profile/server/addons/selinux.packages          the package set (17)
 profile/server/addons/selinux.pacman-args       --ask=4, and why
+profile/server/addons/selinux-tools.packages    setools + selinux-python (2)
 profile/server/addons/apparmor.packages
-overlay/runtime/install/server/addons/selinux.preflight.sh   refuse before installing
+overlay/runtime/install/server/addons/selinux.preflight.sh        refuse before installing
+overlay/runtime/install/server/addons/selinux-tools.preflight.sh  refuse without a policy store
 overlay/runtime/install/server/addons/apparmor.preflight.sh
 overlay/runtime/install/server/mac-server.sh    shared: lsm= drop-in, exclusivity
 overlay/runtime/install/server/selinux-server.sh
 overlay/runtime/install/server/apparmor-server.sh
 overlay/runtime/install/server/mac/selinux/local-fcontexts
+overlay/runtime/install/server/mac/selinux/omarchy_server.te   the local policy
 overlay/runtime/systemd/omarchy-server-selinux-relabel.service
 overlay/runtime/install/server/mac/apparmor/usr.bin.sshd
 overlay/runtime/bin/omarchy-server-selinux      status|avc|permissive|enforcing|relabel|disable
@@ -352,18 +379,147 @@ machine that may not come back — and this is a headless machine reached only
 over ssh. `omarchy-server-selinux avc` / `omarchy-server-apparmor denials`
 summarise the log by count; the second step is taken once they are quiet.
 
-### The relabel happens during the install
+### What `enforcing` refuses over, and what it only warns about
 
-SELinux labels the filesystem with `setfiles` inside the install chroot, not on
-the first boot. A relabel is minutes of I/O, and doing it while the machine is
-already busy writing is cheaper than doing it with somebody watching a console.
-And then once more on the first boot. `/.autorelabel` is left in place and
+`omarchy-server-selinux enforcing` has a preflight, because §7 is a run where
+the operator lost the machine by switching without one. What it blocks on is
+narrow and does not move:
+
+1. `/.autorelabel` still present — the first-boot relabel did not finish.
+2. `/root` or any `/home/<user>` unlabeled. `ls -Zd`, which needs nothing but
+   `coreutils-selinux`.
+3. PID 1 not in `init_t`. init transitions at exec only if
+   `/usr/lib/systemd/systemd` already carried `init_exec_t`, so `kernel_t`
+   means this boot happened before the labels were complete — exactly the state
+   that locks the operator out. It is the normal state of the *first* boot of a
+   fresh install, and the reason the sequence is relabel → **reboot** →
+   enforcing.
+4. Unlabeled paths under `/home /root /etc /usr /var` — *when this machine can
+   look*. Arch's `findutils` is not built against libselinux and
+   `findutils-selinux` is deliberately not in the rebuild set, so
+   `find -context` answers "SELinux is not enabled" on stderr and nothing on
+   stdout. Piped to `wc -l` that is a clean `0` and the check passes without
+   having read a file. The preflight tests for the predicate first and says so
+   when it has to skip; checks 2 and 3 do not depend on it.
+5. Denials **on the way back in**: anything whose target is `unlabeled_t`, and
+   anything raised by `sshd_t`, `login`, a getty, `sudo` or the user role.
+
+Everything *else* in the denial log is printed as a **warning with a count**,
+not a refusal. An earlier version refused over any denial at all; that was
+measured and it is unusable. A bare boot of a correctly labelled machine
+produces on the order of eighteen denials from systemd mechanisms
+refpolicy 20250923 has not been taught, the set differs from boot to boot as
+different services start, and closing them is an open-ended job rather than a
+precondition. A gate nobody can satisfy is a gate everybody passes with
+`--force`.
+
+The distinction is the honest one: a denial on the login path is a locked door,
+and a denial inside a service is that service degrading — recoverable over the
+ssh session the first four checks just protected.
+
+### `enforcing` is a one-way door over ssh, and the guard says so
+
+The sixth thing the preflight blocks on is the one nobody expected. **There is
+no way back from enforcing over ssh on this profile**, and it was measured
+rather than reasoned:
+
+```
+$ sudo omarchy-server-selinux permissive
+setenforce:  security_setenforce() failed:  Permission denied
+$ sudo id -Z
+user_u:user_r:user_t
+```
+
+`sudo` on this profile does not change the SELinux user or role. The policy
+store's `seusers` maps `__default__:user_u`, the operator logs in as
+`user_u:user_r:user_t`, and `sudo` leaves that context exactly as it found it —
+so "root through sudo" has the same SELinux authority as the login shell, which
+is none over `security_t`. Only `sysadm_r` and `secadm_r` are granted
+`security { setenforce }`, and `user_r` can reach neither: `runcon -t sysadm_t`
+answers *invalid context*, and `systemd-run` cannot reach the manager either.
+
+Every remaining route back needs the console: an earlier snapper snapshot from
+the Limine menu, or the installer medium. And **not** the kernel command line —
+see below.
+
+`omarchy-server-selinux enforcing` therefore refuses when the calling session's
+role cannot `setenforce`, and prints that reasoning. `--force` is for somebody
+who has a console.
+
+The fix, when this should be reversible, is the textbook arrangement and is
+**not made yet**: map the operator to `staff_u` in `seusers` and give sudo a
+role transition (`ROLE=sysadm_r TYPE=sysadm_t` in sudoers), so the login session
+stays confined as `staff_t` while `sudo` reaches `sysadm_t`. That is a change to
+the profile with its own lockout risk, and it needs its own validation run.
+
+### Two addons, not one
+
+`selinux` is what a machine needs to **run** confined: the policy, the loader,
+`restorecon`/`setfiles`/`semodule`, and the eight rebuilds. `selinux-tools` is
+what a machine needs to **author** policy: `semanage`, `audit2allow`,
+`sesearch` — i.e. `selinux-python` and `setools`.
+
+The split is not tidiness. `setools` depends on `python-networkx`, and Arch's
+`python-networkx` hard-depends on `python-scipy`, `python-pandas`,
+`python-matplotlib` and `python-numpy`. Measured on an installed machine, those
+two packages and their closure are **45 packages and 453 MiB** — a scientific
+Python stack on a headless server so that somebody could run `audit2allow` on
+it once. Splitting them took the SELinux route from +54 packages / +552 MiB to
+**+9 packages / +99 MiB**.
+
+What made it possible was rewriting the setup leaf to write
+`file_contexts.local` directly instead of calling `semanage fcontext`. The
+workflow it assumes: a machine reports its denials with
+`omarchy-server-selinux avc`; the rule is authored wherever `selinux-tools` is
+installed and ships as an `omarchy_server.te` in the profile, which every
+machine compiles locally with `checkmodule`.
+
+`selinux-tools` has a preflight that refuses on a machine with no SELinux
+policy store, so it cannot be installed by mistake over an `apparmor` machine.
+
+### The relabel happens during the install, and again on the first boot
+
+SELinux labels the filesystem inside the install chroot, not on the first boot.
+A relabel is minutes of I/O, and doing it while the machine is already busy
+writing is cheaper than doing it with somebody watching a console. And then once
+more on the first boot: `/.autorelabel` is left in place and
 `omarchy-server-selinux-relabel.service` acts on it — `selinux-refpolicy-arch`
-ships no such unit, so this profile ships one, enabled by the addon. That
-second pass is not belt and braces: the orchestrator creates the user's home
-directory in a phase that runs *after* the addon, so the offline pass cannot
-have labelled it, and an unlabeled `/home/<user>` locks the operator out the
-moment the machine goes enforcing. §7 is the run where that happened.
+ships no such unit, so this profile ships one, enabled by the addon. That second
+pass is not belt and braces: the orchestrator creates the user's home directory
+in a phase that runs *after* the addon, so the offline pass cannot have labelled
+a directory that did not exist yet, and an unlabeled `/home/<user>` locks the
+operator out the moment the machine goes enforcing. §7 is the run where that
+happened.
+
+The unit is ordered `Before=systemd-user-sessions.service`, not before `sshd`
+only. `systemd-user-sessions` is the gate that removes `/run/nologin`, so
+ordering ahead of it holds back ssh, the serial getty and the virtual consoles
+alike instead of racing them.
+
+**Both passes use `restorecon -R -F /`, never `setfiles <file_contexts> /`.**
+libselinux loads three spec files — `file_contexts`, then
+`file_contexts.homedirs`, then `file_contexts.local` — when it opens the store
+*by policy type*, and exactly one when it is handed a *path*, which `setfiles`
+requires. So a `setfiles` relabel silently applied neither the
+`/home/[^/]+ → user_home_dir_t` entry (which lives in `file_contexts.homedirs`)
+nor this profile's own rules (which live in `file_contexts.local`). That was
+half of the lockout in §7; the home directory being created late was the other
+half.
+
+Concatenating the three into one spec for `setfiles` was tried and is **not** a
+fix: they legitimately disagree about `/root/.k5login`, which libselinux
+resolves by precedence and `setfiles` rejects outright with "Multiple different
+specifications", relabelling nothing. Only the loader has the precedence rules.
+
+`file_contexts.homedirs` is generated by libsemanage's genhomedircon, so the
+setup leaf runs `semodule -B` before relabelling and refuses to continue
+quietly if the file is still empty afterwards.
+
+`/.snapshots` is excluded from both passes. This profile keeps five snapper
+snapshots and snapper mounts them read-only, so without the exclusion every
+relabel on a machine that has ever taken a snapshot reports thousands of
+"Read-only file system" errors and exits non-zero — which would leave
+`/.autorelabel` in place and make `enforcing` refuse forever.
 
 ### Mutual exclusion
 
@@ -373,7 +529,7 @@ feature must never have. It is refused in three places:
 
 - a **preflight leaf**, `install/server/addons/<name>.preflight.sh`, which
   `omarchy-server-addon` sources *before* it installs anything. Refusing in the
-  setup leaf would be too late: nineteen packages, eight of them replacing core
+  setup leaf would be too late: seventeen packages, eight of them replacing core
   packages, would already be on a machine that is not going to use them. The
   preflight mechanism is general — any addon may ship one — but these two are
   the only addons that have a reason to.
@@ -423,14 +579,18 @@ first and then enforcing. The numbers that decide the design:
 
 | | Base | AppArmor | SELinux |
 |---|---:|---:|---:|
-| Packages | 220 | 222 (+2) | 274 (+54) |
-| Installed size | 1402 MiB | 1408 MiB (+6) | 1954 MiB (+552) |
-| Enabled units | 21 | 22 (+1) | 21 (+0) |
-| Boot | 6.920 s | 7.376 s | 7.814 s |
-| Install (orchestrator) | 28.9 s | ~29 s | 45 s |
+| Packages | 220 | 222 (+2) | **229 (+9)** |
+| Installed size | 1402 MiB | 1408 MiB (+6) | **1501 MiB (+99)** |
+| Enabled units | 21 | 22 (+1) | 22 (+1) |
+| Boot | 6.920 s | 7.376 s | 7.184 s |
 | Packages replaced | 0 | 0 | 10 |
-| Denials under the workload | — | 0 complain, 0 enforce | 55 permissive, 53 enforcing |
-| Reached its enforcing mode | — | **yes, 24/24** | **not yet** |
+| Denials on a boot | — | 0 | **0** |
+| Denials under the workload | — | 0 complain, 0 enforce | 31 permissive, 10 enforcing |
+| Reached its enforcing mode | — | **yes, 24/24** | **yes** — permissive 36/36, enforcing reached without a lockout, but see below |
+
+The SELinux column is the re-validation of report §10, not the original run:
+`setools` and `selinux-python` moved to `selinux-tools` (−45 packages,
+−453 MiB) and the local policy module took a bare boot to zero denials.
 
 Three results from that run change what is written above, and are worth having
 here rather than only in the report:
@@ -441,12 +601,11 @@ machine has — `bin.ping`, and the `usr.bin.sshd` this addon ships itself. 163
 profiles load; they are for desktop software that is not installed. That is the
 route's real coverage, and it should be quoted whenever the route is described.
 
-**82% of the SELinux route's size is not SELinux.** `setools` depends on
-`python-networkx`, which in Arch has `python-scipy`, `python-pandas`,
-`python-matplotlib` and `python-numpy` as hard dependencies. Removing `setools`
-and `selinux-python`, minus what the base already had, is **45 packages and
-452.9 MiB**. Splitting the management tooling into a second addon is the
-biggest open improvement to this design.
+**82% of the SELinux route's size was not SELinux, and is now gone.** `setools`
+depends on `python-networkx`, which in Arch has `python-scipy`, `python-pandas`,
+`python-matplotlib` and `python-numpy` as hard dependencies — **45 packages and
+452.9 MiB**. They are the `selinux-tools` addon now, and the route costs **+9
+packages and +99 MiB**.
 
 **Replacing a core package undoes what the profile did to it.** The addon
 replaced `pambase`, and pacman saved the profile's hardened
@@ -472,7 +631,18 @@ with it. Three changes came out of that:
   session that still has root, an earlier snapper snapshot, or the installer
   medium.
 
-Those three are written but **not yet re-validated on a fresh install**.
+Those three were re-validated on a fresh install, and were **not sufficient**.
+Two more things had to be fixed before `/home/<user>` was labelled at all —
+`setfiles` reading only one spec file, and a four-field context being silently
+dropped — and the ssh host keys turned out to be `etc_t` because they are
+generated after the relabel. All five are in report §10.1.
+
+**The one that is not fixed.** `sudo` does not change the SELinux role on this
+profile: `sudo id -Z` answers `user_u:user_r:user_t`, because `seusers` maps
+`__default__:user_u`. So in enforcing, an administrator cannot run `pacman`,
+`ufw` or `systemctl`, and cannot switch back to permissive — enforcing is a
+one-way door over ssh. That is the blocker now, and the section above says what
+the fix looks like.
 
 ## 8. Recommendation
 
@@ -484,18 +654,40 @@ lock the operator out the way the SELinux run did. For a pipeline that wants to
 turn something on, that is the whole argument — provided the claim made for it
 is the true one: *sshd is confined*, not *the server is confined*.
 
-SELinux confines vastly more and costs vastly more: 54 packages, 552 MiB, ten
-replaced core packages, a standing obligation to track Arch's versions, and one
-unvalidated fix between here and a machine that stays reachable in enforcing.
-Four things would change the recommendation, in order:
+SELinux confines vastly more. **It no longer costs vastly more**: the addon
+split took it from +54 packages / +552 MiB to **+9 packages / +99 MiB**, and
+the size argument that carried most of this recommendation is gone. Three of
+the four conditions below have been met since it was first written:
 
-1. the enforcing fixes validated on a fresh install;
-2. `setools` and `selinux-python` split into a second addon (45 packages,
-   453 MiB);
-3. a CI job comparing every `*-selinux` pkgver against the Arch package of the
-   same name — one of the eight was already behind at the pinned commit, and it
-   was `openssh`;
-4. an answer for `ps -Z`, which does not exist on this system.
+1. ~~the enforcing fixes validated on a fresh install~~ — **done**. Permissive
+   is 36/36 with zero boot denials; enforcing was reached and the operator kept
+   ssh, `sudo`, the home directory, snapper, `pacman` and a reboot.
+2. ~~`setools` and `selinux-python` split into a second addon~~ — **done**, as
+   `selinux-tools`.
+3. ~~a CI job comparing every `*-selinux` pkgver against Arch~~ — **done**,
+   weekly in `omarchy-server-pkgs`; first run compared 14 rebuilds, all in sync.
+4. an answer for `ps -Z`, which does not exist on this system. Unchanged.
+
+What keeps AppArmor the default is now a different and sharper set of reasons:
+
+- **The operator has no administrative SELinux role.** `sudo id -Z` answers
+  `user_u:user_r:user_t`. In enforcing that means an administrator who cannot
+  run `pacman`, `ufw` or `systemctl`, and cannot switch back to permissive
+  remotely. This is a hard blocker, and the `staff_u` + `ROLE=sysadm_r` fix is
+  designed but not built.
+- **The policy is materially behind the userland.** Getting a *bare boot* to
+  zero denials took seven rounds, and new domains appeared for the same pattern
+  at rounds 2 and 4. refpolicy 20250923 against systemd 261 is a standing gap,
+  and this profile is on Arch.
+- **Ten packages still have to track Arch.** Automated now, not eliminated: the
+  job opens a ticket, it does not do the rebuild.
+
+Which leaves the trade stated more precisely than before:
+
+> **SELinux confines everything and costs a maintenance relationship. AppArmor
+> confines one daemon and costs nothing.** The size gap has closed; the
+> maintenance gap has not, and the administrative-role gap has to be fixed
+> before the question is even open.
 
 The reasoning, with the evidence behind each number, is in
-`reports/2026-08-29-mandatory-access-control.md`.
+`reports/2026-08-29-mandatory-access-control.md` — §10 for the re-validation.
