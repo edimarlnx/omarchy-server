@@ -1,0 +1,32 @@
+=== BEFORE ===
+Enforcing
+11
+top-level label before: ? /run/p
+=== ONE TRANSACTION (patched) ===
+== prune package cache
+==> no candidate packages found for pruning
+[32m
+Transaction succeeded (+0 MiB on the filesystem)[0m
+[32mSwapped in: @ is now the updated root, @prev-20260829204205 is what was running.[0m
+--no-reboot: the machine boots the new root at the next reboot.
+=== AFTER ===
+Enforcing
+11
+--- /sys mounts lost ---
+--- selinuxfs ---
+/sys/fs/selinux
+--- status ---
+root subvolume: /@prev-20260829204205
+device:         /dev/vda2
+last transaction:
+  TX=@tx-20260829204205
+  PREV=@prev-20260829204205
+  CREATED=2026-08-29T20:42:05-03:00
+  STATE=pending
+  NOTE: this machine is running /@prev-20260829204205, not @ -- a swap is waiting on a reboot.
+root subvolumes on the filesystem:
+  @prev-20260829204205
+  @home
+  @log
+  @pkg
+  @factory

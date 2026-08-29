@@ -124,21 +124,49 @@ UKI inside the chroot, the sbctl post hook signs it there, `limine-entry-tool`
 writes the entry with the hash of the signed file, and the machine boots it.
 Measured: `reports/2026-08-29-transactional-updates.md`, items 17–22.
 
-One fact that surfaced while choosing the mechanism and belongs on the record:
-**the UKI on this profile carries no embedded `.cmdline` section**, so the
-command line Limine passes is the command line the kernel gets, Secure Boot or
-not. The `lockdown=integrity module.sig_enforce=1` this profile relies on is in
-`limine.conf` on the ESP, not inside the signature.
+A correction to what this section used to say. It claimed that the UKI on this
+profile carries no embedded `.cmdline`, and therefore that
+`lockdown=integrity module.sig_enforce=1` lives unsigned in `limine.conf`. That
+is wrong. Measured on a lab install, 2026-08-29
+(`reports/2026-08-29-transactional-selinux.md`): the UKI has a `.cmdline`
+section, `/proc/cmdline` is byte for byte its contents, and
+`limine-entry-tool` puts `KERNEL_CMDLINE[default]` there through
+`/etc/kernel/cmdline`. **The command line is inside the signature**, which is
+what `docs/secure-boot.md` §4 and §7 have always said. What is *not* covered is
+`limine.conf` and the `cmdline:` it writes on snapshot entries — see
+`docs/secure-boot.md` §7, "What the signature does not cover".
+
+Nothing about the transactional mechanism depends on which of the two was true:
+the command line, the UKI, `/etc/fstab` and every pacman hook stay byte
+identical across a transaction either way, which is the property the subvolume
+rename was chosen for.
 
 ## SELinux
 
-Reasoned, **not measured** — see the limitations of the report. A btrfs snapshot
-shares the metadata of the subvolume it was taken from, `security.*` xattrs
-included, so no relabel is implied by the snapshot or by the rename. `/boot` and
-`/var/log` are bind mounts of the live objects, so their labels cannot change.
-Files pacman *creates* inside the chroot are labelled by the policy loaded in
-the running kernel, which is exactly the situation an in-place update is already
-in. That enforcing survives a transactional kernel update has not been run.
+Measured on 2026-08-29: `reports/2026-08-29-transactional-selinux.md`. Enforcing
+survives the transactional list — three reboots and a rollback — and the machine
+is still enforcing at the end. The reasoning that got us here was right as far
+as it went: a btrfs snapshot shares the `security.*` xattrs of the subvolume it
+was taken from, so neither the snapshot nor the rename implies a relabel, and
+`/boot` and `/var/log` are bind mounts of the live objects whose labels cannot
+change.
+
+Two things it did not anticipate, both fixed in `omarchy-server-transaction`:
+
+- **Subvolume 5 is unlabeled.** The rename that selects the new root happens at
+  the top of the btrfs, which this machine never mounts in normal operation and
+  which therefore has no `security.selinux` xattr. Under enforcing the rename is
+  refused. `mount_top` now labels it `root_t` once, the first time it finds it
+  unlabeled.
+- **The chroot's mounts propagated back to the host.** The transaction directory
+  is under `/run`, `/run` is shared, and the chroot binds `/run` into itself —
+  so tearing the chroot down unmounted the live machine's `/sys/fs/selinux`,
+  `/sys/fs/cgroup` and eight more, and `getenforce` then read `Disabled` until
+  the next reboot. The transaction's mount tree is now `--make-rslave`.
+
+Still open, and stated in the report: the transaction creates subvolumes
+(`.snapshots`, `/var/lib/machines`, `/var/lib/portables`) without labelling
+them, which leaves snapper unable to take a snapshot on the new root.
 
 ## Installing packages transactionally
 

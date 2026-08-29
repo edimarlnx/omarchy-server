@@ -1,0 +1,22 @@
+mode=Enforcing
+--- /sys after the whole suite ---
+/sys
+`-/sys/fs/fuse/connections
+|-/sys/firmware/efi/efivars
+|-/sys/fs/bpf
+|-/sys/fs/cgroup
+|-/sys/fs/pstore
+|-/sys/fs/selinux
+|-/sys/kernel/config
+|-/sys/kernel/debug
+|-/sys/kernel/security
+|-/sys/kernel/tracing
+--- denials, deduplicated ---
+     10 write | comm="umount" scontext=staff_u:sysadm_r:mount_t tcontext=staff_u:staff_r:staff_t tclass=fifo_file
+      5 getattr | comm="systemd-tmpfile" scontext=system_u:system_r:systemd_tmpfiles_t tcontext=system_u:object_r:unlabeled_t tclass=dir
+      3 read | comm="iptables" scontext=staff_u:sysadm_r:iptables_t tcontext=staff_u:object_r:user_home_t tclass=file
+      2 search | comm="sudo" scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:system_r:sshd_t tclass=dir
+      2 read | comm="systemd-tmpfile" scontext=system_u:system_r:systemd_tmpfiles_t tcontext=system_u:object_r:unlabeled_t tclass=dir
+      2 read | comm="mount" scontext=staff_u:sysadm_r:mount_t tcontext=staff_u:object_r:user_home_t tclass=file
+      2 read | comm="ip6tables" scontext=staff_u:sysadm_r:iptables_t tcontext=staff_u:object_r:user_home_t tclass=file
+      1 read | comm="umount" scontext=staff_u:sysadm_r:mount_t tcontext=staff_u:object_r:user_home_t tclass=file

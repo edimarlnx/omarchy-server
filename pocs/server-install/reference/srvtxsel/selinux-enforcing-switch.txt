@@ -1,0 +1,27 @@
+SELinux is now enforcing, and enforcing on the next boot.
+
+If this locks something out, the ways back, in order:
+  1. from this session, which has a role that may setenforce:
+         sudo omarchy-server-selinux permissive
+  * boot the previous snapper snapshot from the Limine menu and
+    undo it there. The profile keeps five.
+  * boot the installer medium, mount the root subvolume and set
+    SELINUX=permissive in its /etc/selinux/config.
+
+NOT the kernel command line. `enforcing=0` cannot be added at the
+Limine menu on this profile: the cmdline lives inside the UKI, and a
+UKI entry ignores the `cmdline:` in limine.conf.
+mode=Enforcing
+SELINUX=enforcing
+--- /sys mounts before the suite ---
+/sys
+`-/sys/fs/fuse/connections
+|-/sys/firmware/efi/efivars
+|-/sys/fs/bpf
+|-/sys/fs/cgroup
+|-/sys/fs/pstore
+|-/sys/fs/selinux
+|-/sys/kernel/config
+|-/sys/kernel/debug
+|-/sys/kernel/security
+|-/sys/kernel/tracing

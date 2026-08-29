@@ -1,0 +1,16 @@
+UNIT FILE                            STATE  PRESET
+avahi-daemon.service                 masked disabled
+bluetooth.service                    masked disabled
+cups-browsed.service                 masked disabled
+cups.service                         masked disabled
+NetworkManager-wait-online.service   masked disabled
+plymouth-quit-wait.service           masked disabled
+plymouth-quit.service                masked disabled
+plymouth-start.service               masked disabled
+power-profiles-daemon.service        masked disabled
+sddm.service                         masked disabled
+systemd-networkd-wait-online.service masked enabled
+avahi-daemon.socket                  masked disabled
+cups.socket                          masked disabled
+
+13 unit files listed.

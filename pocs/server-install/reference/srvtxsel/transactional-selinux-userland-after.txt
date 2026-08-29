@@ -1,0 +1,15 @@
+=== selinux userland now ===
+coreutils-selinux
+openssh-selinux
+pam-selinux
+pambase-selinux
+shadow-selinux
+sudo-selinux
+systemd-libs-selinux
+systemd-selinux
+util-linux-selinux
+=== getenforce ===
+Enforcing
+=== .snapshots ===
+ERROR: cannot access '/.snapshots': Permission denied
+ls: cannot access '/.snapshots': Permission denied

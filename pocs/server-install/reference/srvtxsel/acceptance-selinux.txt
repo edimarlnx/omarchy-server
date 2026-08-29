@@ -1,0 +1,325 @@
+=== SELinux acceptance — VM 'srvtxsel' — 2026-08-29T20:45:28-03:00 ===
+mode under test: permissive
+
+[PASS] the kernel initialised SELinux
+      $ ls -d /sys/fs/selinux 2>&1; grep -o "lsm=[^ ]*" /proc/cmdline
+      /sys/fs/selinux
+      lsm=landlock,lockdown,yama,integrity,selinux,bpf
+
+[PASS] lsm= names selinux, with lockdown ahead of it and bpf last
+      $ grep -o "lsm=[^ ]*" /proc/cmdline
+      lsm=landlock,lockdown,yama,integrity,selinux,bpf
+
+[PASS] the cmdline came from inside the UKI, not from limine.conf
+      $ ~/.lab-sudo grep -c "lsm=" /boot/limine.conf 2>/dev/null; echo "in-cmdline=$(grep -c "lsm=landlock" /proc/cmdline)"
+      1
+      in-cmdline=1
+
+[PASS] the refpolicy-arch policy is loaded
+      $ sestatus
+      SELinux status:                 enabled
+      SELinuxfs mount:                /sys/fs/selinux
+      SELinux root directory:         /etc/selinux
+      Loaded policy name:             refpolicy-arch
+      Current mode:                   permissive
+      Mode from config file:          permissive
+      Policy MLS status:              disabled
+      Policy deny_unknown status:     denied
+      Memory protection checking:     actual (secure)
+      Max kernel policy version:      35
+
+[PASS] /etc/selinux/config says what the addon wrote
+      $ grep -E "^(SELINUX|SELINUXTYPE)=" /etc/selinux/config; readlink -f /etc/selinux/config
+      SELINUX=permissive
+      SELINUXTYPE=refpolicy-arch
+      /etc/selinux/config.refpolicy-arch
+
+[PASS] the profile's own file contexts are in the policy store
+      $ ~/.lab-sudo cat /etc/selinux/refpolicy-arch/contexts/files/file_contexts.local
+      # Written by install/server/selinux-server.sh from
+      # install/server/mac/selinux/local-fcontexts. Do not edit by hand:
+      # the addon rewrites this file whole on every run.
+      /usr/share/omarchy/bin(/.*)?	system_u:object_r:bin_t
+      /var/lib/lastlog(/.*)?	system_u:object_r:lastlog_t
+      /etc/pacman\.d/gnupg(/.*)?	system_u:object_r:gpg_secret_t
+      /opt/containerd(/.*)?	system_u:object_r:container_var_lib_t
+
+[PASS] and they are what the profile's commands actually carry
+      $ ls -Z /usr/share/omarchy/bin/omarchy-server-update
+      system_u:object_r:bin_t /usr/share/omarchy/bin/omarchy-server-update
+
+[PASS] the base selinux addon did NOT pull setools or selinux-python in
+      $ pacman -Qq setools selinux-python python-networkx python-scipy python-pandas 2>&1 | sort -u
+      error: package 'python-networkx' was not found
+      error: package 'python-pandas' was not found
+      error: package 'python-scipy' was not found
+      error: package 'selinux-python' was not found
+      error: package 'setools' was not found
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+
+[PASS] and the policy tools are offered as their own addon
+      $ omarchy-server-addon --list | grep -E "^selinux"
+      selinux-tools
+      selinux
+
+[PASS] every binary that needs libselinux reaches it
+      /usr/lib/systemd/systemd                 dlopen
+      /usr/bin/ls                              linked
+      /usr/bin/id                              linked
+      /usr/bin/sudo                            linked
+      /usr/lib/ssh/sshd-session                linked
+      /usr/bin/useradd                         linked
+      /usr/bin/mount                           linked
+      /usr/lib/security/pam_selinux.so         linked
+
+[PASS] the stock packages were replaced, not installed alongside
+      $ pacman -Qq | grep -E "^(systemd|coreutils|util-linux|shadow|sudo|openssh|pam|pambase)(-selinux)?$" | sort
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+      coreutils-selinux
+      openssh-selinux
+      pam-selinux
+      pambase-selinux
+      shadow-selinux
+      sudo-selinux
+      systemd-selinux
+      util-linux-selinux
+
+[PASS] openssh was not downgraded by the rebuild
+      $ pacman -Q openssh-selinux; sshd -V 2>&1 | head -1
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+      openssh-selinux 10.5p1-1
+      OpenSSH_10.5p1, OpenSSL 3.6.4 25 Aug 2026
+
+[PASS] init runs in a domain of its own
+      $ ~/.lab-sudo sh -c "tr -d \"\\0\" </proc/1/attr/current"
+      system_u:system_r:init_t
+
+[PASS] sshd runs in a domain of its own
+      $ ~/.lab-sudo sh -c "for p in \$(pgrep -x sshd); do tr -d \"\\0\" </proc/\$p/attr/current; echo; done | sort -u"
+      system_u:system_r:sshd_t
+
+[PASS] the ssh session is not simply sshd's own context
+      $ id -Z; echo "---"; tr -d "\0" </proc/$$/attr/current
+      staff_u:staff_r:staff_t
+      ---
+      staff_u:staff_r:staff_t
+
+[PASS] the profile's pam_faillock settings survived the pambase replacement
+      $ grep -n "pam_faillock" /etc/pam.d/system-auth; ls /etc/pam.d/*.pacnew 2>/dev/null
+      3:auth       required                    pam_faillock.so preauth silent deny=10 unlock_time=120
+      8:auth       [default=die]               pam_faillock.so authfail deny=10 unlock_time=120
+      11:auth       required                    pam_faillock.so      authsucc
+      12:# If you drop the above call to pam_faillock.so the lock will be done also
+
+[PASS] the transition is pam_selinux's, and it is in the sshd stack
+      $ grep -rn selinux /etc/pam.d/sshd /etc/pam.d/system-login 2>/dev/null
+      /etc/pam.d/system-login:13:# pam_selinux.so close should be the first session rule
+      /etc/pam.d/system-login:14:session    required   pam_selinux.so close
+      /etc/pam.d/system-login:19:# pam_selinux.so open should only be followed by sessions to be executed in the user context
+      /etc/pam.d/system-login:20:session    required   pam_selinux.so open
+
+[PASS] the operator logs in as staff_t, not as the default user_t
+      $ id -Z
+      staff_u:staff_r:staff_t
+
+[PASS] and sudo lands in sysadm_t, which is the whole point
+      $ ~/.lab-sudo id -Z
+      staff_u:sysadm_r:sysadm_t
+
+[PASS] the login domain is confined: sysadm_t is reached by sudo, not by ssh
+      $ id -Z; ~/.lab-sudo getsebool ssh_sysadm_login allow_ptrace
+      staff_u:staff_r:staff_t
+      ssh_sysadm_login --> off
+      allow_ptrace --> off
+
+[PASS] the mapping is %wheel -> staff_u in the policy store's seusers
+      $ grep -Ev "^#|^$" /etc/selinux/refpolicy-arch/seusers
+      root:root
+      __default__:user_u
+      %wheel:staff_u
+
+[PASS] and sudoers carries the role transition for that same group
+      $ ~/.lab-sudo cat /etc/sudoers.d/omarchy-selinux-role
+      # Written by omarchy-server-selinux admin-role.
+      #
+      # sudo changes the SELinux role as well as the Unix identity: a member
+      # of 'wheel' logs in as staff_u:staff_r:staff_t and runs sudo as
+      # staff_u:sysadm_r:sysadm_t. Without this line sudo gives Unix root and
+      # leaves the confined user context in place, which in enforcing means
+      # pacman, ufw, systemctl and setenforce are all refused.
+      Defaults:%wheel role=sysadm_r, type=sysadm_t
+
+[PASS] omarchy-server-selinux status reports both halves
+      $ omarchy-server-selinux status | sed -n "/administrative role/,/^$/p"
+      == administrative role ==
+      seusers:    root:root
+      seusers:    __default__:user_u
+      seusers:    %wheel:staff_u
+      sudoers:    (not readable without root)
+
+[PASS] /etc and /usr carry real labels, not unlabeled_t
+      $ ls -Zd /etc /usr /usr/bin/sshd /etc/shadow
+            system_u:object_r:etc_t /etc
+         system_u:object_r:shadow_t /etc/shadow
+            system_u:object_r:usr_t /usr
+      system_u:object_r:sshd_exec_t /usr/bin/sshd
+
+[PASS] findutils here cannot do the sweep, which is why the check below does not use it
+      $ find /etc -maxdepth 0 -context "*" 2>&1 | head -1; echo "exit=$?"
+      find: invalid predicate -context: SELinux is not enabled.
+      exit=0
+
+[PASS] no file under /etc /usr /var has a label the policy disagrees with
+      $ ~/.lab-sudo restorecon -nvR -e /var/lib/docker -e /var/lib/containerd /etc /usr /var 2>&1 | head -20; echo "wrong=$(~/.lab-sudo restorecon -nvR -e /var/lib/docker -e /var/lib/containerd /etc /usr /var 2>/dev/null | wc -l)"
+      Can't stat exclude path "/var/lib/docker", No such file or directory - ignoring.
+      Can't stat exclude path "/var/lib/containerd", No such file or directory - ignoring.
+      wrong=0
+
+[PASS] /home/<user> is labelled user_home_dir_t, not unlabeled
+      $ ls -Zd /home /home/*
+         system_u:object_r:home_root_t /home
+      staff_u:object_r:user_home_dir_t /home/omarchy
+
+[PASS] and nothing under /home has a label the policy disagrees with
+      $ ~/.lab-sudo restorecon -nvR /home /root 2>&1 | head -10; echo "wrong=$(~/.lab-sudo restorecon -nvR /home /root 2>/dev/null | wc -l)"
+      wrong=0
+
+[PASS] the relabel flag was cleared, so the next boot does not repeat it
+      $ ls -l /.autorelabel 2>&1
+      ls: cannot access '/.autorelabel': No such file or directory
+
+[PASS] the first-boot relabel unit ran and succeeded
+      $ systemctl is-enabled omarchy-server-selinux-relabel.service; ~/.lab-sudo journalctl -u omarchy-server-selinux-relabel.service --no-pager -o cat | tail -5
+      enabled
+      new labels in every already-running process.
+      omarchy-server-selinux-relabel.service: Deactivated successfully.
+      Finished Relabel the filesystem for SELinux (one-shot).
+      omarchy-server-selinux-relabel.service: Consumed 795ms CPU time over 1.096s wall clock time, 87.6M memory peak.
+      Relabel the filesystem for SELinux (one-shot) skipped, unmet condition check ConditionPathExists=/.autorelabel
+
+[PASS] sudo still works
+      $ ~/.lab-sudo id -un
+      root
+
+[PASS] a snapper snapshot can be taken
+      $ ~/.lab-sudo snapper -c root create -d selinux-acceptance --print-number && ~/.lab-sudo snapper -c root list | tail -3
+      1
+      --+--------+-------+--------------------------+------+---------+--------------------+---------
+      0 | single |       |                          | root |         | current            |
+      1 | single |       | Sat Aug 29 20:45:31 2026 | root |         | selinux-acceptance |
+
+[PASS] pacman can run a transaction
+      $ ~/.lab-sudo pacman -Sy --noconfirm >/dev/null 2>&1; ~/.lab-sudo pacman -Q pacman-contrib && echo pacman-ok
+      pacman-contrib 1.13.1-1
+      pacman-ok
+
+[PASS] the docker addon installs and runs a container
+      $ ~/.lab-sudo omarchy-server-addon docker >/tmp/addon-docker.log 2>&1; echo "addon-exit=$?"; tail -3 /tmp/addon-docker.log; ~/.lab-sudo docker run --rm hello-world >/tmp/hello.log 2>&1; echo "run-exit=$?"; grep -c "Hello from Docker" /tmp/hello.log
+      addon-exit=0
+      Created symlink '/etc/systemd/system/sockets.target.wants/docker.socket' → '/usr/lib/systemd/system/docker.socket'.
+      Firewall reloaded
+      Addon 'docker' installed.
+      run-exit=0
+      1
+
+[PASS] nothing in the container runtime tree is unlabeled or non-container
+      $ ~/.lab-sudo sh -c "ls -RZ /var/lib/docker /var/lib/containerd 2>/dev/null | grep -oE \"[a-z_]+_t \" | sort -u"; echo "bad=$(~/.lab-sudo sh -c "ls -RZ /var/lib/docker /var/lib/containerd 2>/dev/null | grep -cE \"unlabeled_t|:etc_t |:usr_t \"")"
+      container_file_t 
+      container_var_lib_t 
+      bad=0
+
+[PASS] the size of that disagreement is recorded, not repaired
+      $ echo "differs-from-static-policy=$(~/.lab-sudo restorecon -nvR /var/lib/docker /var/lib/containerd 2>/dev/null | wc -l)"
+      differs-from-static-policy=10
+
+[PASS] the tui-firewall addon installs
+      $ ~/.lab-sudo omarchy-server-addon tui-firewall 2>&1 | tail -3; command -v tui-firewall
+      Relabeling package files...
+      Relabeling generated directories...
+      Addon 'tui-firewall' installed.
+      /usr/bin/tui-firewall
+
+[PASS] the firewall still answers
+      $ ~/.lab-sudo ufw status verbose | head -8
+      Status: active
+      Logging: on (low)
+      Default: deny (incoming), allow (outgoing), deny (routed)
+      New profiles: skip
+      
+      To                         Action      From
+      --                         ------      ----
+      22/tcp                     LIMIT IN    Anywhere                  
+
+[PASS] a login on the serial console reaches a shell in a user domain
+      $ ~/.lab-sudo systemctl is-active serial-getty@ttyS0.service
+      active
+
+[PASS] omarchy-server-update completes
+      $ ~/.lab-sudo omarchy-server-update >/tmp/update.log 2>&1; echo "update-exit=$?"; tail -8 /tmp/update.log
+      update-exit=0
+      [32m
+      Restarting shell[0m
+      All plugins have been reloaded
+      Omarchy shell config not found: /usr/share/omarchy/shell
+      
+      restarted: none
+      deferred: none
+      reboot required: no
+
+[PASS] and the same update run the way the timer runs it
+      $ ~/.lab-sudo systemctl start omarchy-server-update.service; ~/.lab-sudo systemctl show -p Result -p ExecMainStatus omarchy-server-update.service
+      Result=success
+      ExecMainStatus=0
+
+--- AVC denials accumulated by the workload above ---
+== AVC denials since boot ==
+      audit: type=1400 audit(1788047126.282:3): avc:  denied  { search } for  pid=627 comm="sudo" name="551" dev="proc" ino=7882 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:system_r:sshd_t tclass=dir permissive=1
+      audit: type=1400 audit(1788047126.282:4): avc:  denied  { read } for  pid=627 comm="sudo" name="stat" dev="proc" ino=9544 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:system_r:sshd_t tclass=file permissive=1
+      audit: type=1400 audit(1788047126.282:5): avc:  denied  { open } for  pid=627 comm="sudo" path="/proc/551/stat" dev="proc" ino=9544 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:system_r:sshd_t tclass=file permissive=1
+      audit: type=1400 audit(1788047126.398:6): avc:  denied  { read } for  pid=649 comm="sudo" name="stat" dev="proc" ino=9544 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:system_r:sshd_t tclass=file permissive=1
+      audit: type=1400 audit(1788047126.398:7): avc:  denied  { open } for  pid=649 comm="sudo" path="/proc/551/stat" dev="proc" ino=9544 scontext=staff_u:staff_r:staff_sudo_t tcontext=system_u:system_r:sshd_t tclass=file permissive=1
+      audit: type=1400 audit(1788047126.541:8): avc:  denied  { read } for  pid=672 comm="iptables" path="/home/omarchy/.lab-pw" dev="vda2" ino=403 scontext=staff_u:sysadm_r:iptables_t tcontext=staff_u:object_r:user_home_t tclass=file permissive=1
+      
+      == summary: count, source domain, target context, class, permissions ==
+           2  staff_u:staff_r:staff_sudo_t -> system_u:system_r:sshd_t : file { read }
+           2  staff_u:staff_r:staff_sudo_t -> system_u:system_r:sshd_t : file { open }
+           1  staff_u:sysadm_r:iptables_t -> staff_u:object_r:user_home_t : file { read }
+           1  staff_u:staff_r:staff_sudo_t -> system_u:system_r:sshd_t : dir { search }
+      
+      To turn these into a policy module (audit2allow is in the
+      `selinux-tools` addon, and does not have to be on this machine):
+          journalctl -k -b -g 'avc: *denied' -o cat | audit2allow -m omarchy_server_local
+      Read what it produces before installing it. A rule that allows a denial
+      the machine should not have made is a hole, not a fix.
+
+[PASS] permissive: the denial count was measured
+      6 AVC records this boot
+
+--- rebooting ---
+boot id before: abf032a3-3279-4617-bac5-e64d85bcba91
+boot id after:  34f802af-5101-446a-952b-e797e8136c5e
+
+[PASS] the machine came back over ssh after a reboot
+      boot_id abf032a3-3279-4617-bac5-e64d85bcba91 -> 34f802af-5101-446a-952b-e797e8136c5e
+
+[PASS] SELinux is still in the mode it was left in
+      $ getenforce
+      Permissive
+
+[PASS] and the boot produced no new denials before login
+      $ journalctl -k --no-pager -b -g 'avc: *denied' -o cat | wc -l
+      0
+
+=== 45 passed, 0 failed ===
