@@ -302,6 +302,12 @@ probe() { timeout 20 "$lab" "$vm" ssh "$@" 2>/dev/null; }
 
 reboot_seconds() {
   local label=$1 command=$2 before after started elapsed downtime
+  # Let the firewall's window drain before spending two connections in a row.
+  # `ufw limit 22` counts six connections per thirty seconds per source, and
+  # the checks immediately above this have just used several: without the
+  # pause, the very command that asks for the reboot is the one that gets
+  # dropped, and the measurement then times a machine that never rebooted.
+  sleep 35
   before=$(probe 'cat /proc/sys/kernel/random/boot_id' | tr -d '\r')
   started=$(date +%s)
   probe "$command" >/dev/null 2>&1
