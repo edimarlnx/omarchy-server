@@ -297,17 +297,21 @@ reboot_seconds() {
   before=$(run 'cat /proc/sys/kernel/random/boot_id')
   started=$(date +%s)
   run "$command" >/dev/null 2>&1
-  # Fifteen seconds before the first probe, ten between them. `ufw limit 22`
-  # drops the seventh connection from one source inside thirty seconds, and a
-  # reboot kills the ssh master, so every probe after one is a NEW connection:
-  # probing faster than this measures the firewall rather than the machine.
-  # Measured the hard way -- a two second loop locked the lab out for minutes
-  # and returned a 187 second "reboot".
-  sleep 15
-  for _ in $(seq 1 24); do
-    after=$(run 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null)
-    [[ -n $after && $after != "$before" ]] && break
-    sleep 10
+  # Thirty seconds before the first probe, twenty between them, and only a
+  # UUID counts as an answer. `ufw limit 22` drops the seventh connection from
+  # one source inside thirty seconds; a reboot kills the ssh master, so every
+  # probe is a NEW connection; and a refused connection comes back through
+  # `run` as the string "kex_exchange_identification: read: Connection reset by
+  # peer", which a naive check happily accepts as a new boot id. Probing faster
+  # than this measures the firewall rather than the machine -- learned twice,
+  # once as a 187 second "reboot" and once as a boot id full of error text.
+  # Both paths come back inside ten seconds, so nothing is lost by waiting.
+  sleep 30
+  for _ in $(seq 1 10); do
+    after=$(run 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '\r')
+    [[ $after =~ ^[0-9a-f]{8}-[0-9a-f]{4}- ]] && [[ $after != "$before" ]] && break
+    after=""
+    sleep 20
   done
   elapsed=$(($(date +%s) - started))
   if [[ -n ${after:-} && $after != "$before" ]]; then
