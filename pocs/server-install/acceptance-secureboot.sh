@@ -276,64 +276,55 @@ echo "=== kexec ==="
 # because neither alone is trustworthy here.
 #
 #   client    the wall-clock gap between issuing the command and ssh answering
-#             on a NEW boot id. It is what an operator feels, and it carries
-#             the lab's own noise, which is not small: `ufw limit 22` drops the
-#             seventh connection from one source inside thirty seconds, so a
-#             probe loop that polls faster than every five seconds ends up
-#             measuring its own rate limit. Hence the six second interval, and
-#             hence a resolution of six seconds on this number.
-#   downtime  measured by the machine itself and immune to all of that: the
-#             first journal timestamp of the new boot minus the last timestamp
-#             of the one before it. That gap is the shutdown tail plus, for the
-#             firmware path only, POST, the option ROMs and the Limine menu.
-#             It is the number the two paths should be compared on.
+#             on a NEW boot id. It is what an operator feels, at the ten second
+#             resolution `wait-ssh` polls with.
+#   downtime  measured by the machine itself: the first journal timestamp of
+#             the new boot minus the last timestamp of the one before it. That
+#             gap is the shutdown tail plus, for the firmware path only, POST,
+#             the option ROMs and the Limine menu. It is the number the two
+#             paths should be compared on.
 #
-# `systemd-analyze time` is deliberately NOT used. After a kexec it still
-# reports a firmware and a loader phase -- the values it read from the EFI
-# variables of the boot before -- so it cannot tell the two paths apart, which
-# is exactly what it looks like it is for.
-# Every ssh in this helper is wrapped in `timeout`. Without it a connect to a
-# port the firewall is currently dropping does not fail, it HANGS -- and the
-# helper then blocks indefinitely on a machine that never received the reboot
-# command in the first place. Measured: a run that sat for half an hour with a
-# single "Restarting system" in the serial log, and that one was from an
-# earlier section.
-probe() { timeout 20 "$lab" "$vm" ssh "$@" 2>/dev/null; }
-
+# `systemd-analyze time` is deliberately NOT used: after a kexec it still
+# reports a firmware and a loader phase, read from the EFI variables of the
+# boot before, so it cannot tell the two paths apart.
+#
+# Coming back is `vm.sh wait-ssh`, and that choice is the whole reason this
+# function works. Two earlier versions polled ssh themselves and both broke the
+# lab rather than measuring it:
+#
+#   * a two second poll measured `ufw limit 22`, which drops the seventh
+#     connection from one source inside thirty seconds, and reported a 187
+#     second "reboot";
+#   * wrapping each probe in `timeout` to stop it hanging was worse. Killing
+#     ssh mid-handshake leaves half-open connections in QEMU's user-mode
+#     hostfwd table, and enough of them stop it establishing to the guest while
+#     it still accepts on the host -- so the machine answered nothing for the
+#     rest of the run, and a `nc` to the port connected and received zero
+#     bytes. The guest was healthy the whole time: restarting QEMU alone, same
+#     disk, brought ssh straight back.
+#
+# `wait-ssh` already polls at ten seconds for the first reason, uses
+# `ConnectTimeout=3` so a dropped SYN gives up cleanly instead of being
+# SIGKILLed, and is the same code path `lab up` trusts. Do not replace it with
+# a loop here.
 reboot_seconds() {
   local label=$1 command=$2 before after started elapsed downtime
-  # Let the firewall's window drain before spending two connections in a row.
-  # `ufw limit 22` counts six connections per thirty seconds per source, and
-  # the checks immediately above this have just used several: without the
-  # pause, the very command that asks for the reboot is the one that gets
-  # dropped, and the measurement then times a machine that never rebooted.
-  sleep 35
-  before=$(probe 'cat /proc/sys/kernel/random/boot_id' | tr -d '\r')
+  before=$(run 'cat /proc/sys/kernel/random/boot_id' | tr -d '\r')
   started=$(date +%s)
-  probe "$command" >/dev/null 2>&1
-  # Thirty seconds before the first probe, twenty between them, and only a
-  # UUID counts as an answer. `ufw limit 22` drops the seventh connection from
-  # one source inside thirty seconds; a reboot kills the ssh master, so every
-  # probe is a NEW connection; and a refused connection comes back through
-  # `run` as the string "kex_exchange_identification: read: Connection reset by
-  # peer", which a naive check happily accepts as a new boot id. Probing faster
-  # than this measures the firewall rather than the machine -- learned twice,
-  # once as a 187 second "reboot" and once as a boot id full of error text.
-  # Both paths come back inside ten seconds, so nothing is lost by waiting.
-  sleep 30
-  for _ in $(seq 1 10); do
-    after=$(probe 'cat /proc/sys/kernel/random/boot_id' | tr -d '\r')
-    [[ $after =~ ^[0-9a-f]{8}-[0-9a-f]{4}- ]] && [[ $after != "$before" ]] && break
-    after=""
-    sleep 20
-  done
+  # No timeout on this one: the connection ends when the machine goes down,
+  # which is a clean close, and it is exactly what the reboot check above does.
+  run "$command" >/dev/null 2>&1
+  sleep 5
+  "$lab" "$vm" wait-ssh 300 >/dev/null 2>&1
   elapsed=$(($(date +%s) - started))
-  if [[ -n ${after:-} && $after != "$before" ]]; then
-    downtime=$(probe '~/.lab-sudo sh -c "
+  after=$(run 'cat /proc/sys/kernel/random/boot_id' | tr -d '\r')
+
+  if [[ $after =~ ^[0-9a-f]{8}- ]] && [[ $after != "$before" ]]; then
+    downtime=$(run '~/.lab-sudo sh -c "
       last=\$(journalctl -b -1 -o short-unix --no-pager 2>/dev/null | tail -1 | cut -d. -f1)
       first=\$(journalctl -b -o short-unix --no-pager 2>/dev/null | head -1 | cut -d. -f1)
-      [ -n \"\$last\" ] && [ -n \"\$first\" ] && echo \$((first - last)) || echo unknown"')
-    echo "$label: downtime ${downtime}s | client ${elapsed}s (6s resolution) | boot_id $before -> $after"
+      [ -n \"\$last\" ] && [ -n \"\$first\" ] && echo \$((first - last)) || echo unknown"' | tr -d '\r')
+    echo "$label: downtime ${downtime}s | client ${elapsed}s (10s resolution) | boot_id $before -> $after"
   else
     echo "$label: did not come back within ${elapsed}s"
   fi
