@@ -164,8 +164,8 @@ check "zram active" \
 check "/etc/omarchy-profile is server" \
   'cat /etc/omarchy-profile' '^server$'
 
-check "omarchy-version is 4.0.1-1" \
-  'omarchy-version 2>/dev/null' '4\.0\.1-1'
+check "omarchy-version reports the profile release (4.0.1-N)" \
+  'omarchy-version 2>/dev/null' '^4\.0\.1-[0-9]+$'
 
 # ── Identity ────────────────────────────────────────────────────────────────
 # The point of these: a headless install should be recognisably Omarchy from
