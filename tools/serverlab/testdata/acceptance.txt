@@ -1,0 +1,42 @@
+=== Server install acceptance — VM 'srv' — 2026-08-29T04:32:43-03:00 ===
+
+[PASS] default target is multi-user.target
+      $ systemctl get-default
+      multi-user.target
+
+[PASS] no sddm/hyprland/pipewire/plymouth installed
+      $ for p in sddm hyprland pipewire plymouth wireplumber uwsm quickshell xdg-desktop-portal-hyprland gnome-keyring; do pacman -Qq "$p" >/dev/null 2>&1 && echo "PRESENT: $p"; done; echo "graphical=$(pacman -Qq | grep -cE "^(sddm|hyprland|pipewire|plymouth|wireplumber|uwsm|quickshell)$")"
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+      graphical=0
+
+[PASS] docker is absent from the base
+      $ for p in docker docker-compose docker-buildx ufw-docker lazydocker networkmanager base-devel gcc git tailscale; do pacman -Qq "$p" >/dev/null 2>&1 && echo "PRESENT: $p"; done; echo "extras=$(pacman -Qq | grep -cE "^(docker|networkmanager|gcc|tailscale)$")"
+      warning: database file for 'core' does not exist (use '-Sy' to download)
+      warning: database file for 'extra' does not exist (use '-Sy' to download)
+      warning: database file for 'multilib' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy' does not exist (use '-Sy' to download)
+      warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
+      extras=0
+
+[PASS] ssh with the cidata key works
+      $ echo "logged in as $(id -un)@$(uname -n) from $SSH_CONNECTION"
+      logged in as omarchy@omarchy from 10.0.2.2 50312 10.0.2.15 22
+
+[PASS] password authentication is refused
+      $ ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=10 "$(id -un)@localhost" true 2>&1 | tail -2
+      Warning: Permanently added 'localhost' (ED25519) to the list of known hosts.
+      omarchy@localhost: Permission denied (publickey).
+
+[PASS] root cannot log in over ssh
+      $ ~/.lab-sudo sshd -T 2>/dev/null | grep -iE "^(permitrootlogin|passwordauthentication|kbdinteractiveauthentication|permitemptypasswords) "
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitEmptyPasswords no
+
+
+=== 6 passed, 0 failed ===

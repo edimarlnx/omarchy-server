@@ -17,7 +17,8 @@ profile/server/  package list, addons, services, overlay (install/server/*,
                  settings) and patches applied on top of the upstream tree
 iso/             build.sh + overlay/patches for the ISO --profile server
 pocs/            lab scripts and measured results (QEMU/OVMF, cidata autoinstall)
-docs/            technical docs: packaging.md, iso-server.md, secure-boot.md, screenshots/
+tools/serverlab/ the Go driver that runs all of the above in order (make serverlab)
+docs/            technical docs: packaging.md, iso-server.md, secure-boot.md, serverlab.md, screenshots/
 ```
 
 The **PKGBUILDs are not here**. They live in
@@ -85,12 +86,29 @@ wrap on an 80-column line: `pocs/server-install/reference/serial-issue.txt`.
 
 ```bash
 git clone https://github.com/edimarlnx/omarchy-server-pkgs.git ../omarchy-server-pkgs
-./pkgs/build.sh        # build the packages into a local signed repo
-./pkgs/test.sh         # install them in a clean archlinux container
-./iso/build.sh         # build the ISO with the server profile
-pocs/lab/mkcidata.sh --profile server
-pocs/lab/vm.sh srv create && pocs/lab/vm.sh srv start --iso <iso> --cidata <cidata.iso>
+make serverlab                          # bin/serverlab, the driver
+./bin/serverlab doctor                  # what this host is still missing
+./bin/serverlab all --profile server    # packages → ISO → install → acceptance → report
 ```
+
+`serverlab` is a single static Go binary that owns no build logic: it runs the
+same bash scripts, in the right order, with the right environment, and records
+what happened. Each stage is also a command of its own, and each script is still
+runnable by hand:
+
+```bash
+./bin/serverlab pkgs build && ./bin/serverlab pkgs test   # pkgs/build.sh, pkgs/test.sh
+./bin/serverlab iso build                                 # iso/build.sh
+./bin/serverlab lab up srv --profile server               # mkcidata + vm create/start/wait-ssh
+./bin/serverlab lab test srv --suite base                 # collect + surface + acceptance + reboot
+./bin/serverlab report srv                                # reports/YYYY-MM-DD-srv.md + the index row
+```
+
+`--dry-run` prints the plan without running anything. Each lab keeps its
+settings, disk, ssh key and evidence in `pocs/lab/out-<name>/`, and every run
+writes a log under `pocs/lab/runs/`. `docs/serverlab.md` is what it wraps, how
+the report is generated from the evidence, and how a self-hosted runner calls
+the same commands.
 
 The base is deliberately small: enough to boot, update, snapshot, be reached by
 ssh and be firewalled, and nothing else. What a machine needs on top comes from

@@ -5,7 +5,7 @@
 # with ssh forwarded to localhost:$SSH_PORT, VNC on 127.0.0.1:$VNC, and a QEMU
 # monitor socket for screenshots.
 #
-# Usage: vm.sh <name> create [--disk-gb 40] [--iso PATH] [--cidata PATH] [--secboot]
+# Usage: vm.sh <name> create [--disk-gb 40] [--data-disk-gb N] [--iso PATH] [--cidata PATH] [--secboot]
 #        vm.sh <name> start  [--iso PATH] [--cidata PATH] [--secboot]
 #        vm.sh <name> stop | status | screenshot | ssh [cmd...] | wait-ssh [secs]
 #        vm.sh <name> snapshot <tag> | restore <tag>
@@ -22,6 +22,10 @@ name="${1:?vm name}"; shift
 cmd="${1:?command}"; shift
 vm="$out/vm/$name"
 disk="$vm/disk.qcow2"
+# An optional second, empty disk. The install only ever touches /dev/vda, so
+# this one arrives as an untouched /dev/vdb -- which is what a machine that has
+# to be tested with a separate data volume needs.
+data_disk="$vm/data.qcow2"
 vars="$vm/vars.qcow2"
 # The QEMU monitor is a unix socket, and a socket path is capped at ~108 bytes.
 # A checkout path plus an out-<profile>/vm/<name>/ directory already overflows
@@ -42,11 +46,13 @@ cpus="${CPUS:-4}"
 iso="$out/omarchy-4.0.1.iso"
 cidata="$out/cidata.iso"
 disk_gb=40
+data_disk_gb=0
 secboot=0
 
 while (($#)); do
   case "$1" in
     --disk-gb) disk_gb="$2"; shift 2 ;;
+    --data-disk-gb) data_disk_gb="$2"; shift 2 ;;
     --iso) iso="$2"; shift 2 ;;
     --cidata) cidata="$2"; shift 2 ;;
     --secboot) secboot=1; shift ;;
@@ -77,6 +83,7 @@ case "$cmd" in
     mkdir -p "$vm"
     [[ -f $disk ]] && { echo "disk exists: $disk (delete it to recreate)" >&2; exit 1; }
     qemu-img create -q -f qcow2 "$disk" "${disk_gb}G"
+    (( data_disk_gb )) && qemu-img create -q -f qcow2 "$data_disk" "${data_disk_gb}G"
     if (( secboot )); then
       # The distro's secboot variable store is NOT in Setup Mode: it ships with
       # Microsoft's PK, KEK and db already enrolled, which means the firmware
@@ -111,6 +118,7 @@ case "$cmd" in
     # wrongly and boot a firmware that cannot see its own variables.
     (( secboot )) && : >"$vm/secboot"
     note=""; (( secboot )) && note=" [firmware in setup mode]"
+    (( data_disk_gb )) && note+=" [data disk ${data_disk_gb}G]"
     echo "created $vm (disk ${disk_gb}G, secboot=$secboot)$note"
     ;;
   start)
@@ -133,6 +141,11 @@ case "$cmd" in
       -rtc base=utc
       -daemonize -pidfile "$pidfile"
     )
+    # The data disk, when one was created, and no bootindex: it is empty and
+    # must never be what the firmware tries to boot.
+    if [[ -f $data_disk ]]; then
+      args+=(-drive file="$data_disk",format=qcow2,if=none,id=drive1 -device virtio-blk-pci,drive=drive1)
+    fi
     if [[ -f $iso ]]; then
       args+=(-drive file="$iso",media=cdrom,if=none,format=raw,id=cdrom0 -device ide-cd,drive=cdrom0,bus=ide.0,bootindex=2)
     fi

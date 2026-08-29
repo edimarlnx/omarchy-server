@@ -1,0 +1,38 @@
+# serverlab configuration.
+#
+# Every value here is the default serverlab would use with no file at all, so
+# this checkout works unconfigured; the file exists to be edited when something
+# lives somewhere else. An environment variable overrides the file, and the two
+# names the bash scripts already read are honoured (OMARCHY_PKGS_DIR,
+# TUI_TOOLS_DIR), so an exported shell keeps working.
+#
+# Relative paths are read against the repository root.
+
+[paths]
+# The public repository holding the PKGBUILDs and the published, signed
+# [omarchy-server] pacman repository. Env: SERVERLAB_PKGS_DIR, OMARCHY_PKGS_DIR.
+pkgs_repo = "../omarchy-server-pkgs"
+# The checkout the fwall addon is built from. Env: TUI_TOOLS_DIR.
+tui_tools = "../tui-tools"
+# Read-only clones of upstream, never modified by anything here.
+upstream_omarchy = "upstream/omarchy"
+upstream_omarchy_iso = "upstream/omarchy-iso"
+
+[defaults]
+# The profile meant when a command is given none. Env: SERVERLAB_PROFILE.
+profile = "server"
+
+[vm]
+# The system disk. 40 GiB is not a preference: the cidata JSON carries an
+# absolute partition layout for a 40 GiB disk, and a smaller one fails the
+# install with "Partition overlaps backup GPT header".
+disk_gb = 40
+# A second, empty disk, attached as /dev/vdb. 0 for none.
+data_disk_gb = 0
+memory_mb = 8192
+cpus = 4
+
+[host]
+# What `serverlab doctor` wants free on the filesystem holding the repository:
+# an ISO is ~3 GiB and every lab VM grows a disk of its own.
+min_free_gb = 40

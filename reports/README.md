@@ -19,6 +19,7 @@ scripts and artifacts live in `pocs/`.
 
 | Date | Report | Subject | Result |
 |---|---|---|---|
+| 2026-08-29 | [serverlab smoke run](2026-08-29-serverlab-smoke.md) | the base acceptance list driven end to end by `serverlab`, from the same ISO the hand-written reports use | 36 passed, 1 failed |
 | 2026-08-29 | [Mandatory access control](2026-08-29-mandatory-access-control.md) | SELinux and AppArmor built, installed and run against the same workload, permissive then enforcing; §10 re-validates SELinux on a fresh install after the lockout fixes, the addon split and the lockstep check; §11 gives the operator an administrative role (`%wheel` → `staff_u`, sudo → `sysadm_t`) | AppArmor 24/24 in enforce. SELinux 45/45 permissive and **49/49 enforcing, zero denials in both**, on a fresh install; `sudo` reaches `sysadm_t` and enforcing is a two-way door over ssh. Cost: +9 packages / +99 MiB, and 23 locally-maintained policy blocks |
 | 2026-08-29 | [ZFS as a signed kernel module](2026-08-29-zfs-signed-module.md) | whether an out-of-tree module signed by a key this profile controls loads under Secure Boot | it does not; the work is paused on that answer |
 | 2026-08-29 | [Secure Boot](2026-08-29-secure-boot.md) | own-keys Secure Boot, enrolled during a headless install | 24 passed, 0 failed |
