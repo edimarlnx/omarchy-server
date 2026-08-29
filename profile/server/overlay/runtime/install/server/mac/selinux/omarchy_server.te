@@ -9,13 +9,22 @@
 # EVERY RULE HERE COMES FROM A DENIAL THAT WAS MEASURED ON THIS PROFILE, in
 # reports/2026-08-29-mandatory-access-control.md. Nothing is here because it
 # seemed likely. Each block says which denial it answers and why allowing it is
-# right rather than merely quieting.
+# right rather than merely quieting — and where a measured denial is answered
+# with `dontaudit` instead, why the thing being asked for is not needed. Rule
+# 16 records the one place where the rule was written wider than the
+# measurement, and says so.
 #
-# All of them have the same shape: the Arch reference policy is
-# refpolicy 20250923 and this profile runs systemd 261 and OpenSSH 10.5, so the
-# gaps are places where those two grew a mechanism the policy has not been
-# taught yet — systemd credentials, PSI, userdb, varlink. None of them is a
-# rule that lets a confined domain reach something it has no business in.
+# Three shapes, and nothing else:
+#
+#   * the gap between refpolicy 20250923 and systemd 261 / OpenSSH 10.5 —
+#     credentials on tmpfs, PSI, userdb, varlink, BPF (rules 1-15);
+#   * the standard streams a privileged command inherits from the session that
+#     ran it, which is what makes a non-interactive `ssh host sudo …` run
+#     correctly and print nothing (rule 16, and the domains that share it);
+#   * two capabilities that are asked for, refused, and not missed (17, 21).
+#
+# None of them is a rule that lets a confined domain reach something it has no
+# business in.
 #
 # NOT here, deliberately: sshd's access to /var/lib/lastlog/lastlog2.db, which
 # produced eight of the eighteen boot denials. Widening sshd_t over all of
@@ -29,6 +38,10 @@ module omarchy_server 1.0;
 
 require {
 	attribute daemon;
+	attribute domain;
+	attribute systemd_user_session_type;
+	attribute unpriv_userdomain;
+	attribute filesystem_type;
 	type systemd_generator_t;
 	type systemd_tmpfiles_t;
 	type auditd_etc_t;
@@ -41,7 +54,6 @@ require {
 	type etc_runtime_t;
 	type loadkeys_t;
 	type sysfs_t;
-	type user_systemd_t;
 	type gpg_runtime_t;
 	type init_t;
 	type systemd_sysusers_t;
@@ -49,6 +61,23 @@ require {
 	type tmp_t;
 	type user_sudo_t;
 	type user_t;
+	type sysadm_t;
+	type staff_sudo_t;
+	type dockerc_t;
+	type initrc_t;
+	type setfiles_t;
+	type systemd_notify_t;
+	type dosfs_t;
+	type semanage_t;
+	type systemd_sysusers_exec_t;
+	role sysadm_r;
+	type file_context_t;
+	type policy_config_t;
+	type semanage_store_t;
+	type proc_t;
+	type user_tmp_t;
+	type user_home_t;
+	type load_policy_t;
 	type getty_t;
 	type gpg_t;
 	type nsfs_t;
@@ -63,17 +92,20 @@ require {
 	type systemd_user_runtime_dir_t;
 	type systemd_userdbd_t;
 	type systemd_userdbd_runtime_t;
-	class dir { search read open getattr write add_name remove_name create };
+	class dir { search read open getattr write add_name remove_name create relabelfrom relabelto };
 	class bpf { prog_load prog_run map_create map_read map_write };
 	class capability2 bpf;
-	class capability { net_admin dac_read_search };
-	class filesystem { quotaget quotamod };
-	class netlink_audit_socket create;
-	class file { getattr read write open ioctl create unlink map };
+	class capability { net_admin dac_read_search sys_admin audit_write };
+	class filesystem { quotaget quotamod associate getattr };
+	class netlink_audit_socket { create read write nlmsg_relay };
+	class file { getattr read write open ioctl create unlink map append lock relabelfrom relabelto execute entrypoint };
 	class lnk_file { read getattr };
+	class fifo_file { append getattr ioctl lock read write };
 	class sock_file { write create getattr unlink };
 	class system status;
-	class unix_stream_socket { connectto create listen setopt bind };
+	class process { transition siginh rlimitinh noatsecure };
+	class unix_stream_socket { connectto create listen setopt bind read write ioctl };
+	class fd use;
 }
 
 ########################################################################
@@ -90,15 +122,20 @@ require {
 # SELinux-aware process bootstraps; refusing it just makes the generator
 # behave as if SELinux were off.
 #
-# Against the `daemon` attribute plus the generator domain, for the same reason
-# as rule 3: the first boot showed only systemd-fstab-generator, the next
-# showed systemd-networkd doing the identical thing. Any process linked against
-# libselinux reads this symlink at startup. Read on a symlink, and nothing
-# else -- the file it points at is a separate permission the policy still
-# governs.
+# Against the `domain` attribute, and that is the third widening of this rule
+# rather than the first. It started as systemd_generator_t, because that was
+# the only thing that had tripped it; the next boot added systemd-networkd, so
+# it became `daemon`; a later run added systemd-tty-ask-password-agent, which
+# is not a daemon either. The pattern is not "these processes", it is "anything
+# linked against libselinux, at startup", which is the definition of `domain`
+# on a machine where the whole userland was rebuilt against libselinux.
+#
+# What it grants is `read` on ONE symlink, whose content is the string
+# "config.refpolicy-arch". The file it points at is a separate permission the
+# policy still governs, and refusing the link only makes the reader behave as
+# if SELinux were off.
 ########################################################################
-allow systemd_generator_t selinux_config_t:lnk_file read;
-allow daemon selinux_config_t:lnk_file read;
+allow domain selinux_config_t:lnk_file read;
 
 ########################################################################
 # 1b. A generator reads /proc/sys/fs/nr_open.
@@ -300,6 +337,14 @@ allow systemd_user_runtime_dir_t etc_runtime_t:file { read open getattr };
 # this route.
 ########################################################################
 allow loadkeys_t tmpfs_t:file { write getattr };
+# systemd-networkd does the same thing for a different reason: it serialises
+# its own state into a memfd across a reload
+# (path="memfd:serialization (deleted)"). Same mechanism, same anonymous
+# memory, same type from the kernel. Enumerated rather than widened to the
+# `daemon` attribute, because tmpfs_t is also what /dev/shm entries carry and
+# "every daemon may read every daemon's shared memory" is a larger statement
+# than these two memfds justify.
+allow systemd_networkd_t tmpfs_t:file { read write getattr };
 
 ########################################################################
 # 10. networkd loads its own BPF programs.
@@ -348,9 +393,19 @@ allow systemd_networkd_t sysfs_t:file map;
 # varlink socket; and systemd-user-runtime-dir sets the tmpfs size quota on the
 # runtime directory it just mounted, which is what quotaget/quotamod are here.
 # All four are the user manager operating on the user's own runtime tree.
+#
+# Against the `systemd_user_session_type` ATTRIBUTE, not against
+# user_systemd_t, and that is a measured correction rather than a precaution.
+# The per-user manager's domain follows the SELinux user's prefix: a session
+# mapped to user_u runs it as user_systemd_t, one mapped to staff_u runs it as
+# staff_systemd_t. When this profile gained its administrative role (§16) and
+# the operator became staff_u, all six of these denials came back verbatim
+# under the new domain. The attribute holds user_systemd_t, staff_systemd_t and
+# sysadm_systemd_t, which is exactly the set this rule is about: "the systemd
+# --user instance, whoever it belongs to".
 ########################################################################
-allow user_systemd_t gpg_runtime_t:dir { create write add_name search read open getattr };
-allow user_systemd_t init_t:unix_stream_socket connectto;
+allow systemd_user_session_type gpg_runtime_t:dir { create write add_name search read open getattr };
+allow systemd_user_session_type init_t:unix_stream_socket connectto;
 allow systemd_user_runtime_dir_t tmpfs_t:filesystem { quotaget quotamod };
 allow systemd_user_runtime_dir_t tmp_t:dir read;
 
@@ -411,11 +466,21 @@ allow loadkeys_t tmpfs_t:file read;
 #
 # nsfs_t is /proc/<pid>/ns/*: a namespace link the shell stats. getattr only.
 ########################################################################
-allow user_systemd_t gpg_t:unix_stream_socket { create listen setopt bind };
-allow user_t nsfs_t:file getattr;
+#
+# On the attribute, for the same reason as rule 11: the domain is the per-user
+# manager's, and which one it is depends on whether the session was mapped to
+# user_u or to staff_u.
+allow systemd_user_session_type gpg_t:unix_stream_socket { create listen setopt bind };
+# nsfs_t is /proc/<pid>/ns/*: `systemctl` stats /proc/1/ns/pid to work out
+# whether it is inside a container before it talks to the manager, so every
+# login session does it on its first systemctl. Against `unpriv_userdomain`
+# rather than user_t after the same measurement as rule 11: the operator moved
+# from user_t to staff_t with the administrative role and the denial came
+# straight back. getattr on a namespace link, nothing else.
+allow unpriv_userdomain nsfs_t:file getattr;
 # The socket FILES the activation above puts in /run/user/<uid>/gnupg. The
 # directory was rule 11; these are the entries in it.
-allow user_systemd_t gpg_runtime_t:sock_file { create getattr write unlink };
+allow systemd_user_session_type gpg_runtime_t:sock_file { create getattr write unlink };
 
 ########################################################################
 # 15. dbus asks the system manager whether it is still running.
@@ -429,3 +494,302 @@ allow user_systemd_t gpg_runtime_t:sock_file { create getattr write unlink };
 # permissions in the same class and are not granted here.
 ########################################################################
 allow system_dbusd_t init_t:system status;
+
+########################################################################
+# 16. An administrative command has to be able to answer the session that ran it.
+#
+#   comm="sesh"       tclass=fifo_file { write } scontext=...:sysadm_t
+#                                                tcontext=...:sshd_t
+#   comm="sesh"       tclass=fifo_file { write } scontext=...:sysadm_t
+#                                                tcontext=...:staff_t
+#   comm="docker"     tclass=file { write } scontext=...:dockerc_t
+#                                           tcontext=...:user_tmp_t
+#   comm="semodule"   tclass=file { write } scontext=...:semanage_t   ...
+#   comm="load_policy" tclass=file { write } scontext=...:load_policy_t ...
+#
+# One mechanism, found five times, and the most consequential thing in this
+# whole module because of how it fails.
+#
+# `sudo` with a role change execs the command through `sesh` after setexeccon,
+# so the command runs in a domain of its own -- sysadm_t, or something sysadm_t
+# transitions into further (dockerc_t for the docker client, semanage_t and
+# load_policy_t for `semodule -B`, setfiles_t for restorecon). Its stdout and
+# stderr are whatever the SESSION opened: on a NON-interactive
+# `ssh host sudo ...` -- which is what every script and this profile's own
+# acceptance run does -- that is a pipe belonging to sshd_t or to the login
+# shell, or a file the shell created in /tmp or under $HOME. refpolicy grants
+# the sshd pipe to `unpriv_userdomain`, and none of these domains is in that
+# attribute.
+#
+# The symptom is worse than a denial in a log: the command RUNS, exits 0, and
+# its output silently disappears. Measured exactly that way -- `sudo id -Z`
+# printed nothing while `sudo sh -c 'id -Z >/tmp/z'` wrote the right answer,
+# `ufw status | head` reported a working firewall as empty, and
+# `docker run hello-world` returned success with no greeting.
+#
+# An INTERACTIVE session sees none of it: `ssh -t` gives sudo a terminal, and
+# sudo relabels a terminal for the target context, which refpolicy already
+# allows. This is entirely about automation.
+#
+# refpolicy has a boolean that would fix the sshd_t half, `ssh_sysadm_login`:
+# it swaps that rule from `unpriv_userdomain` to `userdomain`. It is NOT used
+# here, because it grants a second thing this profile does not want --
+# `allow sshd_t userdomain:process transition`, i.e. sshd may put a login
+# DIRECTLY into sysadm_t. The whole point of mapping the operator to staff_u
+# rather than sysadm_u is that the login session stays confined and only sudo
+# is not; a boolean that re-opens direct sysadm login is the opposite of that,
+# and it would fix one destination out of three anyway.
+#
+# ONE DEVIATION from this module's own rule that every line comes from a
+# measured denial, stated rather than hidden: the destinations are written as a
+# set -- the sshd pipe, the invoking user domain's pipe, and a file in /tmp or
+# under $HOME -- and not every domain was measured against every destination.
+# Five of the fifteen combinations were. The mechanism is the same one in all
+# fifteen, the lab redirects to /tmp while a real operator redirects into their
+# home, and discovering the remaining ten one reboot at a time would produce
+# the same rules with more rounds. Writing to a descriptor the caller opened
+# and handed over is not a reach into anything the caller did not already have.
+########################################################################
+allow { sysadm_t dockerc_t semanage_t load_policy_t setfiles_t } { user_tmp_t user_home_t }:file { append getattr ioctl lock open read write };
+allow { sysadm_t dockerc_t semanage_t load_policy_t setfiles_t } { sshd_t unpriv_userdomain }:fifo_file { append getattr ioctl lock read write };
+
+########################################################################
+# 17. sudo asks for CAP_NET_ADMIN on every invocation, and does not need it.
+#
+#   comm="sudo" capability=12 tclass=capability { net_admin }
+#     scontext=tcontext=staff_u:staff_r:staff_sudo_t
+#
+# Two of these per `sudo`, in sudo itself, before it execs anything -- a plain
+# `sudo true` produces them. Measured in enforcing: sudo authenticates, changes
+# role, runs the command and exits 0 with the capability refused, so nothing
+# depends on it.
+#
+# dontaudit rather than allow, which is the difference between silencing a
+# denial and granting a privilege. CAP_NET_ADMIN in the domain that every
+# administrative command passes through is not something to hand over to stop a
+# log line, and the acceptance run's "zero denials in enforcing" bar is only
+# meaningful if the way it is reached is not "allow everything that appeared".
+dontaudit staff_sudo_t self:capability net_admin;
+
+########################################################################
+# 18. What the administrative domain needs to run this profile's own update.
+#
+#   comm="gpg" tclass=unix_stream_socket { read write }
+#     scontext=...:gpg_t tcontext=staff_u:sysadm_r:sysadm_t
+#   comm="systemd-inhibit" path="/run/systemd/inhibit/1.ref" tclass=fd { use }
+#     scontext=...:sysadm_t tcontext=system_u:system_r:systemd_logind_t
+#   comm="omarchy-update-" name="63" tclass=filesystem { associate }
+#     scontext=staff_u:object_r:sysadm_t tcontext=system_u:object_r:proc_t
+#
+# Three separate mechanisms, all of them "the administrative domain inherits or
+# is handed something", and none of them a new reach:
+#
+#   * pacman talks to gpg over a socketpair it created itself, and hands gpg
+#     one end. refpolicy has this rule for the domains that normally run gpg
+#     and not for sysadm_t, which nothing normally ran pacman as. The socket
+#     belongs to the process that opened it.
+#   * `omarchy-update` takes a systemd-inhibit lock so nothing shuts the
+#     machine down mid-transaction; logind hands back a file descriptor and the
+#     caller has to keep it open. `fd use` on a descriptor logind chose to give
+#     away is the whole of it.
+#   * the kernel labels the inodes under /proc/<pid> with the process's own
+#     context, so a sysadm_t process reading its own /proc/self/fd/63 -- which
+#     is what a bash process substitution is -- makes the policy ask whether a
+#     file of type sysadm_t may exist on a proc_t filesystem. It is the
+#     process's own /proc entry; the answer is yes.
+########################################################################
+allow gpg_t sysadm_t:unix_stream_socket { read write ioctl };
+allow sysadm_t systemd_logind_t:fd use;
+allow sysadm_t proc_t:filesystem associate;
+
+########################################################################
+# 19. The same, for the update running unattended under systemd.
+#
+#   comm="systemd-notify" tclass=unix_stream_socket { read write }
+#     scontext=system_u:system_r:systemd_notify_t tcontext=...:initrc_t
+#   comm="restorecon"     tclass=unix_stream_socket { read write }
+#     scontext=system_u:system_r:setfiles_t        tcontext=...:initrc_t
+#
+# `systemctl start omarchy-server-update.service` is the path the daily timer
+# takes, and it is a different measurement from running the same command by
+# hand: under the unit, pacman runs as initrc_t and its stdout is the socket
+# systemd connected to the journal. Its children -- systemd-notify from a
+# package's post_install, restorecon from selinux-alpm-hook -- transition into
+# domains of their own and then cannot write to the socket they inherited, so
+# their output disappears from the journal.
+#
+# Read and write on a stream socket that init handed them, and nothing else.
+# The alternative is a service whose log is silently incomplete, which is worse
+# than a denial: nobody reads a log to notice what is missing from it.
+########################################################################
+allow systemd_notify_t initrc_t:unix_stream_socket { read write };
+allow setfiles_t initrc_t:unix_stream_socket { read write };
+# And restorecon statting the filesystem it is about to walk. /boot is the ESP,
+# a vfat filesystem with no xattrs, so restorecon asks what it is before
+# deciding it has nothing to do there -- which is precisely the check that
+# stops it from trying. dosfs_t is the ESP and nothing else on this profile.
+# Raised from both roles, because both the alpm hook (system_r) and a hand-run
+# `omarchy-server-selinux relabel` (sysadm_r) walk the same tree.
+allow setfiles_t dosfs_t:filesystem getattr;
+
+########################################################################
+# 20. The docker CLI, when the `docker` addon is installed.
+#
+#   comm="docker" path="/tmp/addon-docker.log" tclass=file { write }
+#     scontext=...:dockerc_t tcontext=...:user_tmp_t
+#   comm="docker" name="/" tclass=dir  { search }     tcontext=cgroup_t
+#   comm="docker" name="hpage_pmd_size" tclass=file { read } tcontext=sysfs_t
+#   comm="docker" name="/" tclass=filesystem { getattr } tcontext=proc_t
+#
+# `sudo docker run …` transitions to dockerc_t, refpolicy's domain for the
+# docker CLIENT (the daemon is a different one, and is not touched here). Four
+# gaps, measured with `docker run hello-world`:
+#
+#   * the client could not write to the file or pipe its caller gave it, so the
+#     container ran, exited 0, and printed nothing. That half is rule 16's
+#     block, which dockerc_t shares with every other domain sudo reaches.
+#   * cgroup and sysfs reads: the client reports the host's cgroup driver and
+#     transparent-hugepage size in `docker info` and checks them before a run.
+#   * `proc_t:filesystem getattr` is a statfs of /proc.
+#
+# All four are reads of host configuration plus writing to a descriptor the
+# caller opened. None of them is about what a CONTAINER may do: container
+# processes run in container_t, which this module does not mention.
+#
+# This block is only reachable on a machine that installed the `docker` addon.
+# It costs nothing on one that did not -- dockerc_t simply never runs.
+########################################################################
+allow dockerc_t cgroup_t:dir { search getattr open read };
+allow dockerc_t cgroup_t:file { getattr open read };
+allow dockerc_t sysfs_t:file { getattr open read };
+allow dockerc_t proc_t:filesystem getattr;
+# Traversal to reach the descriptors and paths its caller handed it: /tmp
+# itself, the caller's own directory under it, and /bin -- which on Arch is a
+# symlink to usr/bin that anything resolving a path has to read.
+allow dockerc_t { tmp_t user_tmp_t }:dir { search getattr open read };
+allow dockerc_t bin_t:lnk_file { read getattr };
+
+########################################################################
+# 21. networkd asks for CAP_SYS_ADMIN it does not need.
+#
+#   comm="systemd-network" capability=21 tclass=capability { sys_admin }
+#     scontext=tcontext=system_u:system_r:systemd_networkd_t
+#
+# Seven per boot, and only on a machine that has the `docker` addon -- the
+# bridge docker adds is what makes networkd reconfigure. The kernel's
+# bpf_capable() tries CAP_SYS_ADMIN before falling back to CAP_BPF, which rule
+# 10 already grants, so the first check is audited and the second one succeeds.
+# Measured on the machine that produced these: `networkctl` reports routable
+# and online, both interfaces configured, with the denial standing.
+#
+# dontaudit, not allow, for the same reason as rule 17: CAP_SYS_ADMIN is most
+# of root, and handing it to the network manager to silence a log line that a
+# working network is already contradicting would be the wrong trade.
+########################################################################
+dontaudit systemd_networkd_t self:capability sys_admin;
+
+########################################################################
+# 22. Rebuilding the policy store from an administrative session.
+#
+#   comm="semodule" name="file_contexts.homedirs" tclass=file
+#     { relabelfrom relabelto } scontext=...:semanage_t
+#     tcontext=staff_u:object_r:file_context_t
+#   comm="semodule" name="/" tclass=filesystem { getattr }
+#     tcontext=... tmpfs_t | devpts_t | cgroup_t | pstore_t | device_t | fs_t
+#   comm="semodule" path="/tmp/..." tclass=file { write } tcontext=user_tmp_t
+#
+# `omarchy-server-selinux admin-role` runs `semodule -B` on the machine, and on
+# an already-enforcing machine that is the first time semanage_t has ever run
+# here -- the install-time path runs it in a chroot where SELinux is not
+# active, so none of this was reachable before.
+#
+# Two of the three are straightforward:
+#
+#   * a statfs of every mounted filesystem: genhomedircon walks the mount table
+#     to decide which home directories are real. Against the `filesystem_type`
+#     ATTRIBUTE, because the set is "whatever this machine has mounted" -- the
+#     first measurement produced six types and a machine with an NFS mount or a
+#     USB stick would produce more. getattr on a filesystem returns its size
+#     and free space.
+#   * writing to the caller's redirect is rule 16's block, and semanage_t and
+#     load_policy_t are both in it.
+#
+# The relabelling is DONTAUDITED, not allowed, and that is the interesting one.
+# libsemanage tries to set the context on each file it regenerates in the
+# store. It may not, for two independent reasons, and refpolicy means both:
+#
+#   * `relabelto policy_config_t` is a NEVERALLOW in refpolicy's own
+#     selinuxutil module. A rule granting it does not merely widen the policy,
+#     it refuses to compile -- which is refpolicy stating, in the strongest
+#     form it has, that the store manager must not mint policy-file labels.
+#   * the rest fail the identity constraint. `constrain file relabelto
+#     (u1 == u2 or t1 == can_change_object_identity)`: the process is
+#     staff_u (the administrator's SELinux user, through sudo) and the target
+#     context it wants is system_u, and semanage_t is deliberately not in
+#     can_change_object_identity. Adding it there would let the store manager
+#     label a file as any SELinux user -- a much larger grant than the thing
+#     being fixed.
+#
+# Nothing breaks. The files keep the context the type transition gave them --
+# the right TYPE, under the administrator's identity instead of system_u --
+# `semodule -B` commits and exits 0, and refpolicy-arch has UBAC off so the
+# user field of a file context gates nothing. `admin-role` then runs
+# `restorecon -F` over the store, which is setfiles_t's job and which setfiles_t
+# is allowed to do, so the identity on disk is correct afterwards and the label
+# drift check stays clean. Measured: 0 drift under /var/lib/selinux and
+# /etc/selinux after an admin-role run on an enforcing machine.
+########################################################################
+allow semanage_t filesystem_type:filesystem getattr;
+dontaudit semanage_t { file_context_t policy_config_t selinux_config_t semanage_store_t }:file { relabelfrom relabelto };
+dontaudit semanage_t semanage_store_t:dir { relabelfrom relabelto };
+
+########################################################################
+# 23. systemd-sysusers, when pacman is run by an administrator rather than by
+#     the update timer.
+#
+#   comm="systemd-sysuser" name=".#gshadow…" tclass=file
+#     { create write setattr rename unlink }
+#     scontext=staff_u:sysadm_r:sysadm_t tcontext=system_u:object_r:shadow_t
+#   comm="systemd-sysuser" capability=29 { audit_write }
+#
+# The `docker` addon installs a package that ships a sysusers.d fragment, and
+# an alpm hook runs `systemd-sysusers` to create the `docker` group. Under the
+# daily update timer that happens inside a pacman running as initrc_t, which
+# refpolicy DOES transition into systemd_sysusers_t -- a domain that already
+# has every rule this needs, including the shadow files and the audit record.
+# Run by hand through sudo, pacman is sysadm_t, refpolicy has no transition
+# from there, and systemd-sysusers ends up editing /etc/gshadow AS the
+# administrative domain.
+#
+# The fix is to make the transition happen, not to give sysadm_t the shadow
+# files. Those two are not close: shadow_t is an `auth_file_type`, which is
+# exactly the set refpolicy withholds from sysadm_t on purpose so that password
+# and group databases are only ever written by the account tools. Adding
+# `allow sysadm_t shadow_t:file write` would be two lines and would quietly
+# retire that separation for every command an administrator ever runs. Four
+# lines and a role association reuse the domain refpolicy already wrote.
+#
+# `role sysadm_r types systemd_sysusers_t` is what makes the new domain
+# reachable from the administrator's role at all; without it the transition is
+# an invalid context rather than a denial.
+########################################################################
+role sysadm_r types systemd_sysusers_t;
+type_transition sysadm_t systemd_sysusers_exec_t:process systemd_sysusers_t;
+allow sysadm_t systemd_sysusers_t:process transition;
+allow sysadm_t systemd_sysusers_exec_t:file { getattr open read execute map };
+allow systemd_sysusers_t systemd_sysusers_exec_t:file entrypoint;
+# The three permissions every domain transition needs beside `transition`
+# itself: the child inherits the parent's signal disposition and rlimits, and
+# noatsecure says the dynamic linker need not run in secure mode across it.
+# refpolicy grants all three on the init_t -> systemd_sysusers_t transition it
+# already has; this is the same set for the new source domain.
+allow sysadm_t systemd_sysusers_t:process { siginh rlimitinh noatsecure };
+# And what systemd-sysusers does once it is there. refpolicy's rules for this
+# domain were written for the transition from init_t and cover the account
+# files; the audit record it writes when it creates a group was measured
+# missing on BOTH paths -- rule 13 already had to add `create` on the socket
+# from the timer path, and running it from sudo turned up the rest of the same
+# operation. Refusing an audit record is the wrong direction: the whole point
+# of the record is that somebody added a group.
+allow systemd_sysusers_t self:netlink_audit_socket { read write nlmsg_relay };
+allow systemd_sysusers_t self:capability audit_write;

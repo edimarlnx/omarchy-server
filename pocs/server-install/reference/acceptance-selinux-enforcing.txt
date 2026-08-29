@@ -1,4 +1,4 @@
-=== SELinux acceptance — VM 'srvsel' — 2026-08-29T09:03:29-03:00 ===
+=== SELinux acceptance — VM 'srvsel' — 2026-08-29T11:32:32-03:00 ===
 mode under test: enforcing1
 
 [PASS] the kernel initialised SELinux
@@ -12,7 +12,7 @@ mode under test: enforcing1
 
 [PASS] the cmdline came from inside the UKI, not from limine.conf
       $ ~/.lab-sudo grep -c "lsm=" /boot/limine.conf 2>/dev/null; echo "in-cmdline=$(grep -c "lsm=landlock" /proc/cmdline)"
-      3
+      4
       in-cmdline=1
 
 [PASS] the refpolicy-arch policy is loaded
@@ -41,6 +41,8 @@ mode under test: enforcing1
       # the addon rewrites this file whole on every run.
       /usr/share/omarchy/bin(/.*)?	system_u:object_r:bin_t
       /var/lib/lastlog(/.*)?	system_u:object_r:lastlog_t
+      /etc/pacman\.d/gnupg(/.*)?	system_u:object_r:gpg_secret_t
+      /opt/containerd(/.*)?	system_u:object_r:container_var_lib_t
 
 [PASS] and they are what the profile's commands actually carry
       $ ls -Z /usr/share/omarchy/bin/omarchy-server-update
@@ -86,18 +88,18 @@ mode under test: enforcing1
       OpenSSH_10.5p1, OpenSSL 3.6.4 25 Aug 2026
 
 [PASS] init runs in a domain of its own
-      $ tr -d "\0" </proc/1/attr/current
+      $ ~/.lab-sudo sh -c "tr -d \"\\0\" </proc/1/attr/current"
       system_u:system_r:init_t
 
 [PASS] sshd runs in a domain of its own
-      $ for p in $(pgrep -x sshd); do tr -d "\0" </proc/$p/attr/current; echo; done | sort -u
+      $ ~/.lab-sudo sh -c "for p in \$(pgrep -x sshd); do tr -d \"\\0\" </proc/\$p/attr/current; echo; done | sort -u"
       system_u:system_r:sshd_t
 
 [PASS] the ssh session is not simply sshd's own context
       $ id -Z; echo "---"; tr -d "\0" </proc/$$/attr/current
-      user_u:user_r:user_t
+      staff_u:staff_r:staff_t
       ---
-      user_u:user_r:user_t
+      staff_u:staff_r:staff_t
 
 [PASS] the profile's pam_faillock settings survived the pambase replacement
       $ grep -n "pam_faillock" /etc/pam.d/system-auth; ls /etc/pam.d/*.pacnew 2>/dev/null
@@ -113,6 +115,45 @@ mode under test: enforcing1
       /etc/pam.d/system-login:19:# pam_selinux.so open should only be followed by sessions to be executed in the user context
       /etc/pam.d/system-login:20:session    required   pam_selinux.so open
 
+[PASS] the operator logs in as staff_t, not as the default user_t
+      $ id -Z
+      staff_u:staff_r:staff_t
+
+[PASS] and sudo lands in sysadm_t, which is the whole point
+      $ ~/.lab-sudo id -Z
+      staff_u:sysadm_r:sysadm_t
+
+[PASS] the login domain is confined: sysadm_t is reached by sudo, not by ssh
+      $ id -Z; ~/.lab-sudo getsebool ssh_sysadm_login allow_ptrace
+      staff_u:staff_r:staff_t
+      ssh_sysadm_login --> off
+      allow_ptrace --> off
+
+[PASS] the mapping is %wheel -> staff_u in the policy store's seusers
+      $ grep -Ev "^#|^$" /etc/selinux/refpolicy-arch/seusers
+      root:root
+      __default__:user_u
+      %wheel:staff_u
+
+[PASS] and sudoers carries the role transition for that same group
+      $ ~/.lab-sudo cat /etc/sudoers.d/omarchy-selinux-role
+      # Written by omarchy-server-selinux admin-role.
+      #
+      # sudo changes the SELinux role as well as the Unix identity: a member
+      # of 'wheel' logs in as staff_u:staff_r:staff_t and runs sudo as
+      # staff_u:sysadm_r:sysadm_t. Without this line sudo gives Unix root and
+      # leaves the confined user context in place, which in enforcing means
+      # pacman, ufw, systemctl and setenforce are all refused.
+      Defaults:%wheel role=sysadm_r, type=sysadm_t
+
+[PASS] omarchy-server-selinux status reports both halves
+      $ omarchy-server-selinux status | sed -n "/administrative role/,/^$/p"
+      == administrative role ==
+      seusers:    root:root
+      seusers:    __default__:user_u
+      seusers:    %wheel:staff_u
+      sudoers:    (not readable without root)
+
 [PASS] /etc and /usr carry real labels, not unlabeled_t
       $ ls -Zd /etc /usr /usr/bin/sshd /etc/shadow
             system_u:object_r:etc_t /etc
@@ -125,25 +166,14 @@ mode under test: enforcing1
       find: invalid predicate -context: SELinux is not enabled.
       exit=0
 
-[FAIL] no file under /etc /usr /var has a label the policy disagrees with
-      $ ~/.lab-sudo restorecon -nvR /etc /usr /var 2>&1 | head -20; echo "wrong=$(~/.lab-sudo restorecon -nvR /etc /usr /var 2>/dev/null | wc -l)"
-      Would relabel /etc/docker from user_u:object_r:etc_t to user_u:object_r:container_config_t
-      Would relabel /var/lib/containerd/io.containerd.snapshotter.v1.btrfs/snapshots from system_u:object_r:container_var_lib_t to system_u:object_r:container_ro_file_t
-      Would relabel /var/lib/containerd/io.containerd.snapshotter.v1.native/snapshots from system_u:object_r:container_var_lib_t to system_u:object_r:container_ro_file_t
-      Would relabel /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots from system_u:object_r:container_var_lib_t to system_u:object_r:container_ro_file_t
-      Would relabel /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1 from system_u:object_r:container_var_lib_t to system_u:object_r:container_ro_file_t
-      Would relabel /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1/fs from system_u:object_r:container_var_lib_t to system_u:object_r:container_ro_file_t
-      Would relabel /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1/fs/hello from system_u:object_r:container_var_lib_t to system_u:object_r:container_ro_file_t
-      Would relabel /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1/work from system_u:object_r:container_var_lib_t to system_u:object_r:container_ro_file_t
-      Would relabel /var/lib/docker/volumes from system_u:object_r:container_file_t to system_u:object_r:container_var_lib_t
-      Would relabel /var/lib/docker/volumes/backingFsBlockDev from system_u:object_r:container_file_t to system_u:object_r:container_var_lib_t
-      Would relabel /var/lib/docker/volumes/metadata.db from system_u:object_r:container_file_t to system_u:object_r:container_var_lib_t
-      wrong=11
+[PASS] no file under /etc /usr /var has a label the policy disagrees with
+      $ ~/.lab-sudo restorecon -nvR -e /var/lib/docker -e /var/lib/containerd /etc /usr /var 2>&1 | head -20; echo "wrong=$(~/.lab-sudo restorecon -nvR -e /var/lib/docker -e /var/lib/containerd /etc /usr /var 2>/dev/null | wc -l)"
+      wrong=0
 
 [PASS] /home/<user> is labelled user_home_dir_t, not unlabeled
       $ ls -Zd /home /home/*
-        system_u:object_r:home_root_t /home
-      user_u:object_r:user_home_dir_t /home/omarchy
+         system_u:object_r:home_root_t /home
+      staff_u:object_r:user_home_dir_t /home/omarchy
 
 [PASS] and nothing under /home has a label the policy disagrees with
       $ ~/.lab-sudo restorecon -nvR /home /root 2>&1 | head -10; echo "wrong=$(~/.lab-sudo restorecon -nvR /home /root 2>/dev/null | wc -l)"
@@ -158,58 +188,35 @@ mode under test: enforcing1
       enabled
       omarchy-server-selinux-relabel.service: Deactivated successfully.
       Finished Relabel the filesystem for SELinux (one-shot).
-      omarchy-server-selinux-relabel.service: Consumed 784ms CPU time over 1.129s wall clock time, 87.3M memory peak.
+      omarchy-server-selinux-relabel.service: Consumed 799ms CPU time over 1.161s wall clock time, 87.7M memory peak.
       Relabel the filesystem for SELinux (one-shot) skipped, unmet condition check ConditionPathExists=/.autorelabel
       Relabel the filesystem for SELinux (one-shot) skipped, unmet condition check ConditionPathExists=/.autorelabel
 
 --- switching to enforcing ---
-[PASS] enforcing is refused from a session that could not undo it
-      $ ~/.lab-sudo omarchy-server-selinux enforcing 2>&1 | head -14; echo "mode=$(getenforce)"
-      omarchy-server-selinux: refusing to enforce.
-        - this session runs as user_u:user_r:user_t, and that role cannot
-        -     setenforce. Going enforcing from here is a ONE-WAY door:
-        -     `sudo omarchy-server-selinux permissive` will be refused by the
-        -     policy afterwards, because sudo does not change the SELinux role
-        -     on this profile (seusers maps __default__:user_u).
-        -     The ways back all need console access. Use --force only if you
-        -     have one.
-        - 10 denials on the login/sudo path or against an
-        -     unlabeled target. These are the ones that lock you out:
-        -     audit: type=1400 audit(1788005009.531:3): avc:  denied  { search } for  pid=583 comm="sudo" name="559" dev="proc" ino=7958 scontext=user_u:user_r:user
-        -     audit: type=1400 audit(1788005009.531:4): avc:  denied  { read } for  pid=583 comm="sudo" name="stat" dev="proc" ino=8586 scontext=user_u:user_r:user_
-        -     audit: type=1400 audit(1788005009.531:5): avc:  denied  { open } for  pid=583 comm="sudo" path="/proc/559/stat" dev="proc" ino=8586 scontext=user_u:us
+[PASS] enforcing is accepted from a session that can undo it
+      $ ~/.lab-sudo omarchy-server-selinux enforcing 2>&1 | head -8; echo "mode=$(getenforce)"
+      SELinux is now enforcing, and enforcing on the next boot.
       
-      mode=Permissive
+      If this locks something out, the ways back, in order:
+        1. from this session, which has a role that may setenforce:
+               sudo omarchy-server-selinux permissive
+        * boot the previous snapper snapshot from the Limine menu and
+          undo it there. The profile keeps five.
+        * boot the installer medium, mount the root subvolume and set
+      mode=Enforcing
 
-SELinux is now enforcing, and enforcing on the next boot.
+[PASS] and it will still be enforcing after a reboot
+      $ grep "^SELINUX=" /etc/selinux/config
+      SELINUX=enforcing
 
-If this locks something out, the ways back, in order:
-  NOT from an ssh session. This machine maps its operator to
-  user_u, sudo does not change that, and user_r is not granted
-  security { setenforce } -- so `omarchy-server-selinux permissive`
-  will be refused by the policy from here on. Measured, not assumed.
-  * boot the previous snapper snapshot from the Limine menu and
-    undo it there. The profile keeps five.
-  * boot the installer medium, mount the root subvolume and set
-    SELINUX=permissive in its /etc/selinux/config.
+[PASS] and it is a TWO-way door: back to permissive and forward again, over ssh
+      $ ~/.lab-sudo omarchy-server-selinux permissive >/dev/null 2>&1; echo "back=$(getenforce)"; ~/.lab-sudo omarchy-server-selinux enforcing --force >/dev/null 2>&1; echo "fwd=$(getenforce)"
+      back=Permissive
+      fwd=Enforcing
 
-NOT the kernel command line. `enforcing=0` cannot be added at the
-Limine menu on this profile: the cmdline lives inside the UKI, and a
-UKI entry ignores the `cmdline:` in limine.conf.
-
-[PASS] the machine is enforcing
+[PASS] and forward again left it enforcing
       $ getenforce
       Enforcing
-
-[FAIL] and it will still be enforcing after a reboot
-      $ grep "^SELINUX=" /etc/selinux/config
-      SELINUX=permissive
-
-[PASS] and this session cannot switch it back, as the refusal warned
-      $ ~/.lab-sudo omarchy-server-selinux permissive 2>&1 | tail -3; echo "mode=$(getenforce)"
-      setenforce:  security_setenforce() failed:  Permission denied
-      omarchy-server-selinux: setenforce failed.
-      mode=Enforcing
 
 [PASS] sudo still works
       $ ~/.lab-sudo id -un
@@ -217,99 +224,94 @@ UKI entry ignores the `cmdline:` in limine.conf.
 
 [PASS] a snapper snapshot can be taken
       $ ~/.lab-sudo snapper -c root create -d selinux-acceptance --print-number && ~/.lab-sudo snapper -c root list | tail -3
-      3
-      1 | single |       | Sat Aug 29 09:02:57 2026 | root |         | selinux-acceptance |
-      2 | single |       | Sat Aug 29 09:03:11 2026 | root | number  | 4.0.1-4            |
-      3 | single |       | Sat Aug 29 09:03:32 2026 | root |         | selinux-acceptance |
+      4
+      2 | single |       | Sat Aug 29 11:32:02 2026 | root | number  | 4.0.1-5            |
+      3 | single |       | Sat Aug 29 11:32:06 2026 | root | number  | 4.0.1-5            |
+      4 | single |       | Sat Aug 29 11:32:35 2026 | root |         | selinux-acceptance |
 
 [PASS] pacman can run a transaction
       $ ~/.lab-sudo pacman -Sy --noconfirm >/dev/null 2>&1; ~/.lab-sudo pacman -Q pacman-contrib && echo pacman-ok
       pacman-contrib 1.13.1-1
       pacman-ok
 
-[FAIL] the docker addon installs and runs a container
+[PASS] the docker addon installs and runs a container
       $ ~/.lab-sudo omarchy-server-addon docker >/tmp/addon-docker.log 2>&1; echo "addon-exit=$?"; tail -3 /tmp/addon-docker.log; ~/.lab-sudo docker run --rm hello-world >/tmp/hello.log 2>&1; echo "run-exit=$?"; grep -c "Hello from Docker" /tmp/hello.log
-      addon-exit=1
-      :: Synchronizing package databases...
-      error: failed to create temporary download directory /var/lib/pacman/sync/download-PoLv70: Permission denied
-      error: failed to synchronize all databases (failed to initialize download)
-      run-exit=1
-      0
+      addon-exit=0
+      # END UFW AND DOCKER
+      Firewall reloaded
+      Addon 'docker' installed.
+      run-exit=0
+      1
+
+[PASS] nothing in the container runtime tree is unlabeled or non-container
+      $ ~/.lab-sudo sh -c "ls -RZ /var/lib/docker /var/lib/containerd 2>/dev/null | grep -oE \"[a-z_]+_t \" | sort -u"; echo "bad=$(~/.lab-sudo sh -c "ls -RZ /var/lib/docker /var/lib/containerd 2>/dev/null | grep -cE \"unlabeled_t|:etc_t |:usr_t \"")"
+      container_file_t 
+      container_var_lib_t 
+      bad=0
+
+[PASS] the size of that disagreement is recorded, not repaired
+      $ echo "differs-from-static-policy=$(~/.lab-sudo restorecon -nvR /var/lib/docker /var/lib/containerd 2>/dev/null | wc -l)"
+      differs-from-static-policy=10
 
 [PASS] the fwall addon installs
       $ ~/.lab-sudo omarchy-server-addon fwall 2>&1 | tail -3; command -v fwall
-      :: Synchronizing package databases...
-      error: failed to create temporary download directory /var/lib/pacman/sync/download-jW0X6u: Permission denied
-      error: failed to synchronize all databases (failed to initialize download)
+      warning: omarchy-server: local (4.0.1-5) is newer than omarchy-server (4.0.1-4)
+       there is nothing to do
+      Addon 'fwall' installed.
       /usr/bin/fwall
 
-[FAIL] the firewall still answers
+[PASS] the firewall still answers
       $ ~/.lab-sudo ufw status verbose | head -8
-      ERROR: Couldn't determine iptables version
+      Status: active
+      Logging: on (low)
+      Default: deny (incoming), allow (outgoing), deny (routed)
+      New profiles: skip
+      
+      To                         Action      From
+      --                         ------      ----
+      22/tcp                     LIMIT IN    Anywhere                  
 
-[FAIL] a login on the serial console reaches a shell in a user domain
+[PASS] a login on the serial console reaches a shell in a user domain
       $ ~/.lab-sudo systemctl is-active serial-getty@ttyS0.service
-      Failed to connect to system scope bus via local transport: Operation not permitted (consider using --machine=<user>@.host --user to connect to bus of other user)
+      active
 
-[FAIL] omarchy-server-update completes
+[PASS] omarchy-server-update completes
       $ ~/.lab-sudo omarchy-server-update >/tmp/update.log 2>&1; echo "update-exit=$?"; tail -8 /tmp/update.log
-      update-exit=1
-      [0m[?25h]3008;end=c0b0083db58f40fbafddffbe058defd0\[1;31merror: [0mfailed to create temporary download directory /var/lib/pacman/sync/download-sdf96T: Permission denied
-      [1;31merror: [0mfailed to synchronize all databases (failed to initialize download)
+      update-exit=0
+      Update AUR packages[0m
+      /usr/bin/omarchy-update-aur-pkgs: line 8: yay: command not found
       
-      [0;31mSomething went wrong during the update!
       
-      Please review the output above carefully, correct the error, and retry the update.
-      
-      If you need assistance, get help from the community at https://omarchy.org/discord[0m
+      [32m
+      Restarting shell[0m
+      All plugins have been reloaded
+      Omarchy shell config not found: /usr/share/omarchy/shell
+
+[PASS] and the same update run the way the timer runs it
+      $ ~/.lab-sudo systemctl start omarchy-server-update.service; ~/.lab-sudo systemctl show -p Result -p ExecMainStatus omarchy-server-update.service
+      Result=success
+      ExecMainStatus=0
 
 --- AVC denials accumulated by the workload above ---
 == AVC denials since boot ==
-      audit: type=1400 audit(1788005009.531:3): avc:  denied  { search } for  pid=583 comm="sudo" name="559" dev="proc" ino=7958 scontext=user_u:user_r:user_sudo_t tcontext=system_u:system_r:sshd_t tclass=dir permissive=1
-      audit: type=1400 audit(1788005009.531:4): avc:  denied  { read } for  pid=583 comm="sudo" name="stat" dev="proc" ino=8586 scontext=user_u:user_r:user_sudo_t tcontext=system_u:system_r:sshd_t tclass=file permissive=1
-      audit: type=1400 audit(1788005009.531:5): avc:  denied  { open } for  pid=583 comm="sudo" path="/proc/559/stat" dev="proc" ino=8586 scontext=user_u:user_r:user_sudo_t tcontext=system_u:system_r:sshd_t tclass=file permissive=1
-      audit: type=1400 audit(1788005010.106:6): avc:  denied  { getattr } for  pid=689 comm="restorecon" name="/" dev="tmpfs" ino=1 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:tmpfs_t tclass=filesystem permissive=1
-      audit: type=1400 audit(1788005010.106:7): avc:  denied  { getattr } for  pid=689 comm="restorecon" name="/" dev="cgroup2" ino=1 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:cgroup_t tclass=filesystem permissive=1
-      audit: type=1400 audit(1788005010.106:8): avc:  denied  { getattr } for  pid=689 comm="restorecon" name="/" dev="pstore" ino=4148 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:pstore_t tclass=filesystem permissive=1
-      audit: type=1400 audit(1788005010.106:9): avc:  denied  { getattr } for  pid=689 comm="restorecon" name="/" dev="hugetlbfs" ino=717 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:hugetlbfs_t tclass=filesystem permissive=1
-      audit: type=1400 audit(1788005010.106:10): avc:  denied  { getattr } for  pid=689 comm="restorecon" name="/" dev="tracefs" ino=1 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:tracefs_t tclass=filesystem permissive=1
-      audit: type=1400 audit(1788005010.106:11): avc:  denied  { getattr } for  pid=689 comm="restorecon" name="/" dev="debugfs" ino=1 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:debugfs_t tclass=filesystem permissive=1
-      audit: type=1400 audit(1788005010.107:12): avc:  denied  { getattr } for  pid=689 comm="restorecon" path="/etc/pacman.d/gnupg/S.dirmngr" dev="vda2" ino=74280 scontext=user_u:user_r:user_sudo_t tcontext=system_u:object_r:etc_t tclass=sock_file permissive=1
-      
-      == summary: count, source domain, target context, class, permissions ==
-           1  user_u:user_r:user_sudo_t -> system_u:system_r:sshd_t : file { read }
-           1  user_u:user_r:user_sudo_t -> system_u:system_r:sshd_t : file { open }
-           1  user_u:user_r:user_sudo_t -> system_u:system_r:sshd_t : dir { search }
-           1  user_u:user_r:user_sudo_t -> system_u:object_r:tracefs_t : filesystem { getattr }
-           1  user_u:user_r:user_sudo_t -> system_u:object_r:tmpfs_t : filesystem { getattr }
-           1  user_u:user_r:user_sudo_t -> system_u:object_r:pstore_t : filesystem { getattr }
-           1  user_u:user_r:user_sudo_t -> system_u:object_r:hugetlbfs_t : filesystem { getattr }
-           1  user_u:user_r:user_sudo_t -> system_u:object_r:etc_t : sock_file { getattr }
-           1  user_u:user_r:user_sudo_t -> system_u:object_r:debugfs_t : filesystem { getattr }
-           1  user_u:user_r:user_sudo_t -> system_u:object_r:cgroup_t : filesystem { getattr }
-      
-      To turn these into a policy module (audit2allow is in the
-      `selinux-tools` addon, and does not have to be on this machine):
-          journalctl -k -b -g 'avc: *denied' -o cat | audit2allow -m omarchy_server_local
-      Read what it produces before installing it. A rule that allows a denial
-      the machine should not have made is a hole, not a fix.
+      (none in this boot's kernel log)
 
-[FAIL] enforcing: something was denied under the workload
-      10 AVC records this boot — see the dump above
+[PASS] enforcing: nothing was denied under the workload
+      0 AVC records this boot
 
 --- rebooting ---
-boot id before: cff2fd09-229a-428d-a63b-33b5aac7cb07
-boot id after:  18a52742-eb64-4940-95d4-fbbc2d48389c
+boot id before: 55364fd1-055f-4737-9b9e-bfc9f25b03e5
+boot id after:  2b346a70-7388-4bee-8513-45c20622cdb1
 
 [PASS] the machine came back over ssh after a reboot
-      boot_id cff2fd09-229a-428d-a63b-33b5aac7cb07 -> 18a52742-eb64-4940-95d4-fbbc2d48389c
+      boot_id 55364fd1-055f-4737-9b9e-bfc9f25b03e5 -> 2b346a70-7388-4bee-8513-45c20622cdb1
 
 [PASS] SELinux is still in the mode it was left in
       $ getenforce
-      Permissive
+      Enforcing
 
 [PASS] and the boot produced no new denials before login
       $ journalctl -k --no-pager -b -g 'avc: *denied' -o cat | wc -l
       0
 
-=== 33 passed, 7 failed ===
+=== 49 passed, 0 failed ===

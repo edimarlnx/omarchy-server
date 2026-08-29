@@ -35,3 +35,43 @@
 # the alternative is a policy rule letting sshd_t write every var_lib_t file on
 # the system in order to reach one database.
 /var/lib/lastlog(/.*)?	lastlog_t
+
+# /etc/pacman.d/gnupg is pacman's keyring: a GnuPG home directory that happens
+# to live under /etc, so the reference policy's default gives it etc_t and gpg
+# is refused when it writes there. Measured on every `pacman -Sy`:
+#
+#   comm="gpg" name="trustdb.gpg" tclass=file { write }
+#     scontext=...:gpg_t tcontext=system_u:object_r:etc_t
+#
+# gpg exits non-zero on that and pacman carries on, which is the worst shape a
+# failure can have: the trust database silently stops being updated while every
+# transaction still succeeds. Not something to dontaudit.
+#
+# gpg_secret_t is refpolicy's type for the contents of a GnuPG home, and gpg_t
+# already has exactly the file and directory permissions it needs on it. The
+# alternative -- a rule letting gpg_t write etc_t -- would give the domain that
+# parses untrusted signatures write access to the whole of /etc. Label the
+# object, do not widen the subject, again.
+#
+# It costs nothing on the reading side: gpg_secret_t is non_auth_file_type, so
+# sysadm_t (pacman under sudo) and init_t (pacman under the update timer) keep
+# the access they had, and the DAC modes on the private key material are what
+# they always were.
+/etc/pacman\.d/gnupg(/.*)?	gpg_secret_t
+
+# containerd creates /opt/containerd/{bin,lib} for its plugins on first start.
+# /opt is usr_t, so the daemon is refused:
+#
+#   comm="containerd" name="containerd" tclass=dir { add_name }
+#     scontext=system_u:system_r:dockerd_t tcontext=system_u:object_r:usr_t
+#
+# The rule that would fix it in policy is `allow dockerd_t usr_t:dir add_name`,
+# which is a container runtime with write access to /opt, /usr/share and
+# everything else the default gives usr_t. Labelling the one directory it
+# actually owns is the same fix at a fraction of the reach: container_var_lib_t
+# is what /var/lib/containerd already carries, and refpolicy grants dockerd_t
+# what it needs on it.
+#
+# Only reachable on a machine that installed the `docker` addon; on any other
+# one the path does not exist and the rule matches nothing.
+/opt/containerd(/.*)?	container_var_lib_t

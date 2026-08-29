@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # omarchy:summary=Inspect and switch the SELinux mode of a headless server
-# omarchy:args=[status|permissive|enforcing|relabel|avc|disable]
+# omarchy:args=[status|permissive|enforcing|relabel|admin-role|avc|disable]
 # omarchy:examples=omarchy server-selinux status | omarchy server-selinux avc
 # omarchy:requires-sudo=true
 
@@ -31,6 +31,12 @@ selinux_type() {
   sed -n 's/^SELINUXTYPE=//p' "$config" | tail -n 1
 }
 
+# The Unix group whose members get the administrative SELinux role. `wheel` is
+# what archinstall puts the install user in on this profile, and it is the
+# group every later administrator is added to.
+admin_group="${OMARCHY_SELINUX_ADMIN_GROUP:-wheel}"
+sudoers_role_file=/etc/sudoers.d/omarchy-selinux-role
+
 require_userland() {
   if ! command -v getenforce >/dev/null; then
     echo "omarchy-server-selinux: the SELinux userland is not installed." >&2
@@ -49,9 +55,29 @@ kernel_has_selinux() {
 
 # procps-ng on Arch is not built against libselinux, so `ps -Z` does not exist.
 # The kernel exports the same thing per process.
+#
+# It can legitimately fail to answer, and quietly: in enforcing, a confined
+# user domain may not read another domain's attr file, so an unprivileged
+# `status` cannot report sshd's or init's context. That is the policy working,
+# not a fault -- but the read error has to be swallowed and the caller has to
+# say "not readable" rather than print an empty field.
 process_context() { # process_context <pid>
-  local file="/proc/$1/attr/current"
-  [[ -r $file ]] && tr -d '\0' <"$file"
+  local file="/proc/${1:-}/attr/current"
+  [[ -n ${1:-} && -r $file ]] || return 1
+  tr -d '\0' <"$file" 2>/dev/null
+}
+
+# process_context, or an explanation of why not.
+process_context_or_reason() { # process_context_or_reason <pid>
+  local context
+  if context=$(process_context "${1:-}") && [[ -n $context ]]; then
+    printf '%s' "$context"
+  elif ((EUID != 0)); then
+    printf '(not readable from a %s session; try sudo)' \
+      "$(process_context $$ | cut -d: -f3)"
+  else
+    printf '(unknown)'
+  fi
 }
 
 cmd_status() {
@@ -78,6 +104,35 @@ cmd_status() {
     grep -E '^(SELINUX|SELINUXTYPE)=' /etc/selinux/config
   fi
   grep -o 'lsm=[^ ]*' /proc/cmdline || echo "lsm= is not on the running command line"
+
+  echo
+  echo "== administrative role =="
+  # Two halves, and one without the other is a machine that either cannot be
+  # administered (mapping but no sudoers) or maps nobody (sudoers but no
+  # mapping). Reported separately so a half-applied machine is visible.
+  # The generated seusers, not the store's seusers.local: this command is meant
+  # to be useful without sudo, and the store is root-only while
+  # /etc/selinux/<type>/seusers is world-readable by design.
+  local mapping
+  mapping=$(grep -Ev '^[[:space:]]*(#|$)' "/etc/selinux/$(selinux_type)/seusers" 2>/dev/null)
+  if [[ -n $mapping ]]; then
+    sed 's/^/seusers:    /' <<<"$mapping"
+  fi
+  if ! grep -q ':staff_u' <<<"$mapping"; then
+    echo "            NO administrative mapping. Every login is __default__, i.e."
+    echo "            the confined user_u, and \`sudo\` does NOT change the SELinux"
+    echo "            role -- so enforcing would be a one-way door. Fix with:"
+    echo "                sudo omarchy-server-selinux admin-role"
+  fi
+  # /etc/sudoers.d is mode 750, so an unprivileged caller cannot answer this at
+  # all. Say which of the two it is rather than reporting "absent" for both.
+  if [[ -r $sudoers_role_file ]]; then
+    grep -Ev '^[[:space:]]*(#|$)' "$sudoers_role_file" | sed 's/^/sudoers:    /'
+  elif ((EUID == 0)); then
+    echo "sudoers:    $sudoers_role_file is absent"
+  else
+    echo "sudoers:    (not readable without root)"
+  fi
   # The addon leaves this flag deliberately, and
   # omarchy-server-selinux-relabel.service clears it on the first boot. Seeing
   # it on a machine that has booted means that unit did not finish, and a
@@ -88,13 +143,21 @@ cmd_status() {
     echo
     echo "== this session =="
     echo "shell:      $(process_context $$)"
-    echo "sshd:       $(process_context "$(pgrep -x sshd | head -1)" 2>/dev/null)"
-    echo "init:       $(process_context 1)"
+    echo "sshd:       $(process_context_or_reason "$(pgrep -x sshd | head -1)")"
+    echo "init:       $(process_context_or_reason 1)"
 
     echo
     echo "== local policy modules =="
-    semodule -s "$(selinux_type)" -l 2>/dev/null | grep -E '^omarchy' ||
-      echo "(none named omarchy*)"
+    # The policy store is root-only, so an unprivileged caller cannot tell
+    # "no omarchy module" from "cannot look" -- and reporting the first when it
+    # is the second is exactly the kind of quiet wrong answer this command
+    # exists to avoid.
+    if ((EUID != 0)); then
+      echo "(the policy store is not readable without root; try sudo)"
+    else
+      semodule -s "$(selinux_type)" -l 2>/dev/null | grep -E '^omarchy' ||
+        echo "(none named omarchy*)"
+    fi
   fi
 }
 
@@ -191,29 +254,24 @@ home_labels_problem() {
 
 # Is there a way BACK from enforcing on this session?
 #
-# Measured, and it is the most important thing this guard learned: there is
-# not. `sudo omarchy-server-selinux permissive` under enforcing fails with
+# Only sysadm_r and secadm_r are granted `security { setenforce }`; user_r
+# reaches neither, and `runcon -t sysadm_t` from user_r answers "invalid
+# context". So on a machine with refpolicy's default mapping this answers no,
+# and it is right to: measured, `sudo omarchy-server-selinux permissive` under
+# enforcing failed with
 #
 #     setenforce: security_setenforce() failed: Permission denied
 #
-# because sudo on this profile does not change the SELinux user or role. The
-# policy store's seusers maps `__default__:user_u`, the operator logs in as
-# user_u:user_r:user_t, and sudo leaves that context alone -- `sudo id -Z`
-# answers user_u:user_r:user_t. Only sysadm_r and secadm_r are granted
-# `security { setenforce }`, and user_r cannot reach either: `runcon -t
-# sysadm_t` answers "invalid context", and `systemd-run` cannot reach the
-# manager either.
+# because sudo gave Unix root and left the SELinux context alone. Every way
+# back then needed console access, which a remote operator does not have.
 #
-# So on an ssh-only machine with the default mapping, `enforcing` is a ONE-WAY
-# door. That is worth a refusal rather than a footnote: the ways back all need
-# physical or console access (an earlier snapper snapshot from the Limine menu,
-# or the installer medium), which a remote operator does not have.
-#
-# The fix, when somebody wants this reversible, is the textbook arrangement:
-# map the operator to staff_u in seusers and give sudo a role transition
-# (`ROLE=sysadm_r TYPE=sysadm_t` in sudoers), so the login session stays
-# confined as staff_t while sudo reaches sysadm_t. That is a change to the
-# profile, not to this command, and it is not made yet.
+# `omarchy-server-selinux admin-role` is what makes this answer yes, and it is
+# applied by the addon at install time: %wheel is mapped to staff_u in seusers
+# and sudoers carries `role=sysadm_r, type=sysadm_t`, so this command -- which
+# re-execs itself under sudo in require_root -- is already running as
+# staff_u:sysadm_r:sysadm_t by the time the check is made. That is the honest
+# form of the question: not "is the machine configured" but "can THIS process,
+# the one about to call setenforce, call it again afterwards".
 session_can_return() {
   local context role
   context=$(process_context $$)
@@ -266,10 +324,11 @@ enforcing_preflight() {
     problems+=("this session runs as $(process_context $$), and that role cannot")
     problems+=("    setenforce. Going enforcing from here is a ONE-WAY door:")
     problems+=("    \`sudo omarchy-server-selinux permissive\` will be refused by the")
-    problems+=("    policy afterwards, because sudo does not change the SELinux role")
-    problems+=("    on this profile (seusers maps __default__:user_u).")
-    problems+=("    The ways back all need console access. Use --force only if you")
-    problems+=("    have one.")
+    problems+=("    policy afterwards, and every way back needs console access.")
+    problems+=("    Give this machine an administrative role first:")
+    problems+=("        sudo omarchy-server-selinux admin-role")
+    problems+=("    then log in again and check \`sudo id -Z\` says sysadm_t.")
+    problems+=("    Use --force only from a console you can still reach.")
   fi
 
   # 6. the denial record, split in two.
@@ -374,10 +433,11 @@ set_mode() { # set_mode <permissive|enforcing> [--force]
       echo "  1. from this session, which has a role that may setenforce:"
       echo "         sudo omarchy-server-selinux permissive"
     else
-      echo "  NOT from an ssh session. This machine maps its operator to"
-      echo "  user_u, sudo does not change that, and user_r is not granted"
-      echo "  security { setenforce } -- so \`omarchy-server-selinux permissive\`"
-      echo "  will be refused by the policy from here on. Measured, not assumed."
+      echo "  NOT from an ssh session. This machine has no administrative"
+      echo "  SELinux role: sudo does not change the role, and user_r is not"
+      echo "  granted security { setenforce } -- so"
+      echo "  \`omarchy-server-selinux permissive\` will be refused by the policy"
+      echo "  from here on. Measured, not assumed. See \`admin-role\`."
     fi
     echo "  * boot the previous snapper snapshot from the Limine menu and"
     echo "    undo it there. The profile keeps five."
@@ -388,6 +448,166 @@ set_mode() { # set_mode <permissive|enforcing> [--force]
     echo "Limine menu on this profile: the cmdline lives inside the UKI, and a"
     echo "UKI entry ignores the \`cmdline:\` in limine.conf."
   fi
+}
+
+# ── the administrative role ─────────────────────────────────────────────────
+#
+# The problem this solves, measured before it was designed: with the reference
+# policy's default mapping (`__default__:user_u`) the operator logs in as
+# user_u:user_r:user_t and `sudo` gives Unix root WITHOUT changing the SELinux
+# context. In enforcing that leaves an administrator who cannot run pacman, ufw
+# or systemctl, and -- because only sysadm_r and secadm_r are granted
+# `security { setenforce }` -- cannot switch back to permissive either. See
+# reports/2026-08-29-mandatory-access-control.md §10.6.
+#
+# The arrangement, which is refpolicy's own and needs no policy change for the
+# role transition itself:
+#
+#   seusers   %wheel:staff_u -- members of the sudo group are the SELinux user
+#             staff_u. `__default__` stays user_u, so a service account or an
+#             unprivileged login is still confined exactly as before. staff_u
+#             is authorised for BOTH staff_r and sysadm_r by refpolicy's own
+#             users file (`user staff_u roles { staff_r sysadm_r }`), and
+#             `allow staff_r sysadm_r` is already in the policy.
+#
+#   login     stays staff_u:staff_r:staff_t. staff_t is an UNPRIVILEGED user
+#             domain -- it is in the unpriv_userdomain attribute, which is why
+#             sshd may transition into it with ssh_sysadm_login off. So the
+#             session an attacker reaches by stealing an ssh key is still a
+#             confined one; the administrative domain is one authenticated
+#             sudo away, not one login away.
+#
+#   sudo      Defaults:%wheel role=sysadm_r, type=sysadm_t. sudo (built with
+#             SELinux support -- sudo-selinux is in this profile's rebuild set)
+#             calls setexeccon, and the command runs as
+#             staff_u:sysadm_r:sysadm_t.
+#
+# Why NOT map the operator to sysadm_u directly, which is the other textbook
+# option: sysadm_u is authorised for sysadm_r ONLY, so the LOGIN SHELL would be
+# sysadm_t. Everything the operator does over ssh -- reading mail, running a
+# build, opening a file someone sent them -- would run in the domain that may
+# load policy and set enforcing, and the confinement of the interactive session
+# would be gone. It would also require ssh_sysadm_login=on, which is a boolean
+# this arrangement does not need. staff_u keeps the two apart.
+#
+# Idempotent, and safe to re-run: both files are rewritten whole.
+cmd_admin_role() { # cmd_admin_role [--defer-rebuild] [--group NAME] [user...]
+  require_root
+  require_userland
+
+  local defer=0 users=() type store seusers tmp entry
+  while (($#)); do
+    case "$1" in
+      --defer-rebuild) defer=1; shift ;;
+      --group) admin_group="$2"; shift 2 ;;
+      -*)
+        echo "omarchy-server-selinux admin-role: unknown option '$1'" >&2
+        exit 2
+        ;;
+      *) users+=("$1"); shift ;;
+    esac
+  done
+
+  type=$(selinux_type)
+  store="/var/lib/selinux/$type/active"
+  seusers="$store/seusers.local"
+
+  if [[ ! -d $store ]]; then
+    echo "omarchy-server-selinux: no policy store at $store." >&2
+    echo "                        Run: omarchy-server-addon selinux" >&2
+    exit 1
+  fi
+
+  # seusers.local, written directly rather than through `semanage login`, for
+  # the same reason file_contexts.local is: semanage lives in selinux-python,
+  # which together with setools is 45 packages and 453 MiB of scientific Python
+  # and belongs to the separate `selinux-tools` addon. This is the same file in
+  # the same place and the same format; `semodule -B` merges it into the store's
+  # seusers and regenerates /etc/selinux/<type>/seusers from it.
+  #
+  # A `%group` entry is resolved by libselinux at login through getgrnam, and it
+  # is checked AFTER an exact username match and BEFORE __default__. If the
+  # group cannot be resolved the lookup falls through to __default__, i.e. to
+  # the confined user_u -- the failure direction is "less privilege", which is
+  # the right way round for a file that decides who may administer the machine.
+  {
+    echo "# Written by omarchy-server-selinux admin-role."
+    echo "# Members of the '$admin_group' group are the SELinux user staff_u,"
+    echo "# which is authorised for staff_r (their login) and sysadm_r (sudo)."
+    printf '%%%s:staff_u\n' "$admin_group"
+    for entry in "${users[@]}"; do printf '%s:staff_u\n' "$entry"; done
+  } >"$seusers"
+  chmod 600 "$seusers"
+  echo "selinux: seusers.local maps %$admin_group${users:+ and ${users[*]}} to staff_u"
+
+  # The sudoers drop-in. Validated into place rather than written into place:
+  # a sudoers file that does not parse is ignored with a syntax error on every
+  # subsequent sudo, and this one is being installed by a command whose whole
+  # purpose is to keep the operator able to become root.
+  tmp=$(mktemp)
+  chmod 0440 "$tmp"
+  {
+    echo "# Written by omarchy-server-selinux admin-role."
+    echo "#"
+    echo "# sudo changes the SELinux role as well as the Unix identity: a member"
+    echo "# of '$admin_group' logs in as staff_u:staff_r:staff_t and runs sudo as"
+    echo "# staff_u:sysadm_r:sysadm_t. Without this line sudo gives Unix root and"
+    echo "# leaves the confined user context in place, which in enforcing means"
+    echo "# pacman, ufw, systemctl and setenforce are all refused."
+    printf 'Defaults:%%%s role=sysadm_r, type=sysadm_t\n' "$admin_group"
+  } >"$tmp"
+
+  if ! visudo -cqf "$tmp"; then
+    echo "omarchy-server-selinux: the sudoers drop-in did not parse; not installed." >&2
+    rm -f "$tmp"
+    exit 1
+  fi
+  install -m 0440 -o root -g root "$tmp" "$sudoers_role_file"
+  rm -f "$tmp"
+  echo "selinux: $sudoers_role_file installed (role=sysadm_r type=sysadm_t for %$admin_group)"
+
+  if ((defer)); then
+    echo "selinux: the store rebuild is deferred to the caller"
+    return 0
+  fi
+
+  # The store rebuild is what turns seusers.local into the seusers the kernel
+  # side reads, and it also re-runs genhomedircon -- which now names the
+  # administrator's home directory under the staff_u identity instead of the
+  # generic user_u one.
+  echo "selinux: rebuilding the policy store"
+  if ! semodule -s "$type" -B; then
+    echo "omarchy-server-selinux: semodule -B failed; the mapping is not active." >&2
+    exit 1
+  fi
+
+  # And the identity on disk follows. The TYPE does not change -- refpolicy has
+  # one user_home_dir_t for every unprivileged user, not one per prefix -- so
+  # this is not what makes the home directory reachable; UBAC is off in
+  # refpolicy-arch (the ubac_constrained_type attribute has no members), so the
+  # user field of a file context does not gate access here either. It is done
+  # because leaving the disk disagreeing with the policy is what the label-drift
+  # check reports, and a check that is noisy is a check nobody reads.
+  #
+  # The policy store itself is relabelled for a different and less cosmetic
+  # reason. `semodule -B` regenerates a dozen files under
+  # /var/lib/selinux/<type> and /etc/selinux/<type>, and it may NOT set their
+  # context: relabelling policy_config_t is a refpolicy neverallow, and the
+  # rest fail the identity constraint because this process is the
+  # administrator's staff_u and the context the files want is system_u. So they
+  # come out with the right type under the wrong identity. setfiles_t may do
+  # what semanage_t may not; one restorecon puts it right, and leaves the label
+  # drift check clean. omarchy_server.te §22 has the whole reasoning.
+  if [[ -d /sys/fs/selinux ]]; then
+    restorecon -R -F "/var/lib/selinux/$type" "/etc/selinux/$type" 2>/dev/null || true
+    [[ -d /home ]] && restorecon -R -F /home /root 2>/dev/null || true
+  fi
+
+  echo
+  echo "The mapping takes effect on the NEXT login -- an existing session keeps"
+  echo "the context it was given. Verify from a fresh one:"
+  echo "    id -Z          # expect ...:staff_r:staff_t"
+  echo "    sudo id -Z     # expect ...:sysadm_r:sysadm_t"
 }
 
 cmd_relabel() {
@@ -402,6 +622,17 @@ cmd_relabel() {
     echo "omarchy-server-selinux: no file_contexts for policy '$type'." >&2
     exit 1
   fi
+  # No `semodule -B` here, deliberately. It is tempting -- the addon runs in the
+  # install chroot, where the operator's account does not exist yet, so
+  # genhomedircon can only emit the generic /home/[^/]+ entries under the
+  # default identity, and rebuilding on the first boot would expand the
+  # administrative role's %wheel mapping to the real account. It was tried and
+  # reverted: the only thing it changes is the USER field of the home
+  # directory's context (user_u -> staff_u), the type is user_home_dir_t either
+  # way, refpolicy-arch has UBAC off so the user field gates nothing, and the
+  # rebuild drags semanage_t into the relabel path with a statfs of every
+  # mounted filesystem behind it. `admin-role` rebuilds the store and relabels
+  # /home itself, which is where that work belongs.
   if [[ ! -s $dir/file_contexts.homedirs ]]; then
     echo "omarchy-server-selinux: WARNING -- file_contexts.homedirs is missing or" >&2
     echo "                        empty, so nothing here labels /home/<user>, and" >&2
@@ -459,6 +690,17 @@ cmd_disable() {
   rm -f /etc/limine-entry-tool.d/omarchy-lsm-selinux.conf
   echo "Removed /etc/limine-entry-tool.d/omarchy-lsm-selinux.conf"
 
+  # The sudoers role drop-in goes with it. sudo ignores role= and type= when
+  # the kernel has no SELinux, so leaving it would be harmless -- but a machine
+  # that says it is not running SELinux should not carry a sudoers file that
+  # only makes sense under one. The seusers mapping stays: it lives in the
+  # policy store, which this command does not touch, and is inert with the
+  # module off.
+  if [[ -e $sudoers_role_file ]]; then
+    rm -f "$sudoers_role_file"
+    echo "Removed $sudoers_role_file"
+  fi
+
   if command -v limine-update >/dev/null; then
     limine-update
   else
@@ -484,6 +726,11 @@ usage() {
   echo "                      Refuses if the labels or the denial log say the"
   echo "                      machine would lock itself out; --force overrides."
   echo "  relabel             re-apply file contexts across the filesystem"
+  echo "  admin-role [user…]  give the sudo group an administrative SELinux role:"
+  echo "                      %wheel logs in as staff_t and sudo reaches sysadm_t."
+  echo "                      Without it, enforcing is a one-way door over ssh."
+  echo "                      --group NAME uses another group; extra arguments are"
+  echo "                      user names mapped to staff_u on their own."
   echo "  disable             stop initialising SELinux at boot, keep the packages"
 }
 
@@ -493,6 +740,7 @@ case "${1:-status}" in
   permissive) set_mode permissive ;;
   enforcing) shift; set_mode enforcing "${1:-}" ;;
   relabel) cmd_relabel ;;
+  admin-role) shift; cmd_admin_role "$@" ;;
   disable) cmd_disable ;;
   -h | --help | help) usage ;;
   *)

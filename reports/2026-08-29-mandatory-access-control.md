@@ -8,10 +8,14 @@ then in their enforcing mode.
 zero denials under the whole workload, and the machine came back from a reboot
 still confined. SELinux reached permissive cleanly (**28/30**) and then
 **locked the operator out** when it went enforcing — root-caused, fixed in
-code, and re-validated on a fresh install in **§10**.
+code, and re-validated on a fresh install in **§10**. §10 then found a second,
+deeper blocker — `sudo` did not change the SELinux role, so an enforcing
+machine could not be administered and could not be switched back over ssh —
+and **§11 closes it**: the operator is mapped to `staff_u`, `sudo` reaches
+`sysadm_t`, and the whole workload runs in enforcing with zero denials.
 
-Neither is recommended as a default today. §8 says what would change that, and
-**§10.7 revisits it** against what the re-validation measured.
+Neither is recommended as a default today. §8 says what would change that,
+**§10.7 revisits it** against the re-validation, and **§11.5 against §11**.
 
 ---
 
@@ -710,11 +714,9 @@ SELinux would now win it.
 What argues for AppArmor as the default is no longer size. It is three things
 the re-validation put numbers on:
 
-- **The operator has no administrative role.** Until `seusers` and sudo are
-  arranged for a role transition, enforcing means an administrator who cannot
-  run `pacman`, `ufw` or `systemctl` — and cannot turn it back off remotely.
-  That is not a rough edge; it is the machine's own management being confined
-  out of existence.
+- ~~**The operator has no administrative role.**~~ Fixed in §11; what remains
+  of this point is that the fix cost nine more policy blocks, which is the next
+  bullet restated.
 - **The policy is materially behind the userland, and closing the gap is
   open-ended.** Seven rounds to get a *bare boot* to zero denials, with a new
   set of domains appearing at rounds 2 and 4. That is not a one-time cost:
@@ -732,14 +734,16 @@ this machine has. The asymmetry is now stated more precisely than in §8:
 > **SELinux confines everything and costs a maintenance relationship.
 > AppArmor confines one daemon and costs nothing.** The size gap that used to
 > stand between them has closed; the maintenance gap has not, and the
-> administrative-role gap is a hard blocker that has to be fixed before the
-> question is even open.
+> administrative-role gap was a hard blocker — closed in §11, at the price of
+> nine more locally-maintained policy blocks, which is the maintenance gap
+> making the same point again.
 
 What would now change the default, in order:
 
-1. The `staff_u` + `ROLE=sysadm_r` mapping, validated, so an administrator can
-   administer and can get back out of enforcing over ssh. **This is the
-   blocker.**
+1. ~~The `staff_u` + `ROLE=sysadm_r` mapping, validated, so an administrator
+   can administer and can get back out of enforcing over ssh. **This is the
+   blocker.**~~ **Done — §11.** Enforcing is now a two-way door over ssh and
+   the workload passes with zero denials, which leaves only the two below.
 2. A policy pin worth standing behind: either an upstream refpolicy that knows
    systemd 261, or an accepted position that this profile carries a local module
    and updates it on a schedule — with the schedule named.
@@ -776,7 +780,8 @@ and are listed as not compared, rather than counted as passing.
 
 ### 10.9 What this re-validation still does not prove
 
-- The `staff_u` / `sysadm_r` arrangement. Identified, designed, **not built**.
+- ~~The `staff_u` / `sysadm_r` arrangement. Identified, designed, **not
+  built**.~~ Built and validated in **§11**.
 - That the local policy module is complete. It is complete for *this workload
   on this boot*; rounds 2 and 4 are the evidence that another workload finds
   more.
@@ -784,3 +789,226 @@ and are listed as not compared, rather than counted as passing.
   §10.6 is unaddressed.
 - Secure Boot together with SELinux. Still no machine has had both.
 - Anything about a machine that has been up longer than one acceptance run.
+
+---
+
+## 11. Administrative role — the §10.7 blocker, closed
+
+**Date** 2026-08-29, later still · **Scope** the one thing §10.9 listed as
+*"identified, designed, not built"*: an administrative SELinux path, so that
+`sudo` reaches a domain that can administer the machine and can leave enforcing
+again. Built, then validated on a **fresh install from a rebuilt ISO**,
+permissive and then enforcing, against the same workload as §10 plus the paths
+the previous run never reached.
+
+**Environment** — the same lab as §1: `srvsel`, reinstalled from scratch on
+`omarchy-2026.08.29-x86_64-server-local.iso` (3003 MiB, rebuilt from the
+overlay these changes are in), `mkcidata.sh --profile server --mac selinux`.
+Evidence: `pocs/server-install/reference/acceptance-selinux-permissive.txt` and
+`…-enforcing.txt`.
+
+**Result in one line.** `sudo` now lands in `sysadm_t`. The whole workload runs
+in enforcing — ssh, pacman, ufw, systemctl, snapper, docker, both update paths —
+with **45 passed / 0 failed** in permissive and **49 passed / 0 failed** in enforcing, and
+**enforcing is a two-way door over ssh**: back to permissive and forward again,
+from the same session, with no console. The §10.7 blocker is closed.
+
+### 11.1 The arrangement
+
+| | |
+|---|---|
+| `seusers` | `%wheel:staff_u` in the store's `seusers.local`, merged by `semodule -B`. `__default__` stays `user_u` |
+| login | `staff_u:staff_r:staff_t` |
+| `sudo` | `Defaults:%wheel role=sysadm_r, type=sysadm_t` in `/etc/sudoers.d/omarchy-selinux-role` → `staff_u:sysadm_r:sysadm_t` |
+| booleans changed | **none.** `ssh_sysadm_login` off, `allow_ptrace` off |
+| applied by | `omarchy-server-selinux admin-role`, called by the addon at install time and available on any machine afterwards |
+
+Nothing in refpolicy had to be changed for the role transition itself. It is
+already there, and reading it off the machine rather than off documentation is
+what made the design a half-hour rather than a week:
+
+```
+$ sudo seinfo -u -x | grep staff_u
+   user staff_u roles { staff_r sysadm_r };
+$ sudo sesearch --role_allow | grep 'staff_r sysadm_r'
+allow staff_r sysadm_r;
+$ sudo sesearch -A -s staff_sudo_t -t sysadm_t -c process
+allow staff_sudo_t userdomain:process { signal transition };
+```
+
+**`staff_u`, not `sysadm_u`.** `sysadm_u` is authorised for `sysadm_r` only, so
+the *login shell* would be `sysadm_t`: every command the operator runs over ssh,
+including the ones that touch data somebody else sent them, would run in the
+domain that may load policy and set enforcing. There would be no administrative
+boundary left to cross. `staff_u` keeps the confined session and the
+administrative domain apart with an authenticated `sudo` between them — and
+`staff_t` is in refpolicy's `unpriv_userdomain`, which is why sshd may
+transition into it with `ssh_sysadm_login` **off**.
+
+**`%wheel`, not the install user by name**, because that is the group this
+profile already grants sudo to and the group a second administrator is added
+to. libselinux resolves a `%group` entry at login through `getgrnam`; if it
+cannot, the lookup falls through to `__default__`, i.e. to the confined
+`user_u`. The failure direction is *less* privilege.
+
+**`seusers.local` written directly**, the same trick `file_contexts.local`
+already uses: it is the file `semanage login -a` writes, in the same format, at
+the same path, and `semodule -B` merges it. So the administrative role costs no
+`selinux-python` and the `selinux-tools` split of §10.3 survives.
+
+### 11.2 What it cost in policy: eight new blocks, and what they are
+
+The role transition needed no rule. Making the machine *usable* under it needed
+eight new blocks (16-23) and five existing ones widened, and almost all of it is
+one of four patterns.
+
+**The pattern that matters: an administrative command cannot answer the session
+that ran it.** `sudo` with a role change execs through `sesh`, so the command
+runs in a domain of its own — and its stdout is whatever the *session* opened:
+on a non-interactive `ssh host sudo …`, a pipe belonging to `sshd_t` or to the
+login shell, or a file the shell created in `/tmp`. None of those domains is in
+the `unpriv_userdomain` attribute refpolicy grants the sshd pipe to.
+
+The failure mode is the reason this is the most consequential thing in the
+module:
+
+```
+$ sudo id -Z                        # runs, exits 0, prints nothing
+$ sudo sh -c 'id -Z >/tmp/z'; cat /tmp/z
+staff_u:sysadm_r:sysadm_t
+$ sudo ufw status verbose | head    # a working firewall, reported as empty
+$ sudo docker run --rm hello-world  # exit 0, no greeting
+```
+
+An **interactive** session sees none of it: `ssh -t` gives sudo a terminal, and
+sudo relabels a terminal for the target context. This is entirely about
+automation — including this profile's own acceptance run, which is how it was
+found. `omarchy_server.te` §16 is one rule for five domains, and it is the one
+place in the module written wider than the measurement; the file says so.
+
+**Two capabilities that are asked for and not needed.** `sudo` requests
+`CAP_NET_ADMIN` twice on every invocation and authenticates, changes role and
+runs the command with it refused. `systemd-networkd` requests `CAP_SYS_ADMIN`
+seven times a boot on a machine with the docker bridge, because the kernel's
+`bpf_capable()` tries it before `CAP_BPF`, and reports `routable`/`online` with
+it refused. Both are `dontaudit`, not `allow`. A "zero denials in enforcing"
+figure is only worth reading if the way it was reached was not "allow whatever
+appeared".
+
+**Two labels, not two rules.** The same discipline as §10.2:
+
+| Path | Was | Now | The rule it replaced |
+|---|---|---|---|
+| `/etc/pacman.d/gnupg` | `etc_t` | `gpg_secret_t` | `allow gpg_t etc_t:file write` — the domain that parses untrusted signatures, writing anywhere in `/etc` |
+| `/opt/containerd` | `usr_t` | `container_var_lib_t` | `allow dockerd_t usr_t:dir add_name` — the container runtime, writing anywhere in `/opt` and `/usr/share` |
+
+The pacman keyring one is worth its own line, because of how it fails: gpg is
+refused when it updates the trust database, exits non-zero, **pacman carries
+on**, and the trustdb silently stops being maintained. Every `pacman -Sy` did
+this, in permissive and enforcing alike, and no transaction ever reported an
+error.
+
+**One transition, restored.** The `docker` addon installs a package with a
+`sysusers.d` fragment, and an alpm hook runs `systemd-sysusers` to create the
+`docker` group. Under the update timer, pacman is `initrc_t` and refpolicy
+transitions into `systemd_sysusers_t`, which has every rule that needs. Run by
+hand through `sudo`, pacman is `sysadm_t`, there is no transition, and
+`systemd-sysusers` edits `/etc/gshadow` as the administrative domain. The fix is
+five lines that make the transition happen — **not** `allow sysadm_t
+shadow_t:file write`, which is two lines and would retire refpolicy's deliberate
+separation of the account databases from everything an administrator runs.
+
+**And five existing blocks widened**, each because the operator's move from
+`user_t` to `staff_t` brought the same denial back under a different domain
+name. Rules 11 and 14 (the per-user systemd manager) went from `user_systemd_t`
+to the `systemd_user_session_type` attribute; rule 14's `nsfs_t` read went to
+`unpriv_userdomain`; rule 1 went from `daemon` to `domain` after a third
+non-daemon turned up doing the same thing; rules 9 and 13 gained the domains
+that produced the same mechanism from the new path. That is the §10.2 lesson
+arriving a third time: **on this policy, enumerating domains loses.**
+
+### 11.3 The enforcing workload
+
+The table §10.6 could not fill in, on a fresh install from a rebuilt ISO:
+
+| | §10.6 (no admin role) | §11 |
+|---|---|---|
+| ssh key login | works | works |
+| `sudo id -Z` | `user_u:user_r:user_t` | **`staff_u:sysadm_r:sysadm_t`** |
+| `pacman -Sy` | **refused** — cannot create the sync directory | works |
+| `omarchy-server-addon docker` + `docker run hello-world` | **refused** | works, greeting and all |
+| `omarchy-server-update` (by hand) | **refused** | works |
+| `omarchy-server-update` (via `systemctl start`) | not tested | works |
+| `ufw status verbose` | **refused** — "Couldn't determine iptables version" | works |
+| `systemctl is-active` | **refused** — cannot reach the manager bus | works |
+| snapper snapshot | works | works |
+| `enforcing` without `--force` | **refused by the guard, correctly** | **accepted** |
+| `permissive` again, over ssh | **refused by the policy** | works |
+| enforcing survives a reboot | **no** — the write to `/etc/selinux/config` was denied | yes |
+| denials under the workload | 10 | **0** |
+
+Two numbers beside that table, both from the fresh install:
+
+- **boot 1: 23 denials. boot 2: 0.** Boot 1 is the one where the relabel unit
+  runs after PID 1 has already started, so init is still `kernel_t` and the
+  labels are being fixed underneath a running system. It is exactly the state
+  the `enforcing` preflight refuses over, and it is why the sequence is
+  install → boot → relabel → **reboot** → enforcing.
+- **the permissive run also finished with 0 denials under the whole workload.**
+  §10.4 measured 31 on the same workload, all of them the
+  `user_t`-doing-root-work class. Those are gone because the work is no longer
+  being done by `user_t`.
+
+### 11.4 Container label drift, answered rather than repaired
+
+§10.6 recorded 30+ paths under `/var/lib/docker` and `/var/lib/containerd`
+carrying labels the policy disagrees with, and called it drift. Looking at what
+they actually are says it is not:
+
+```
+Would relabel /var/lib/docker/volumes            container_file_t    -> container_var_lib_t
+Would relabel …/snapshotter.v1.overlayfs/snapshots container_var_lib_t -> container_ro_file_t
+```
+
+The runtime sets those on purpose. `container_file_t` on a volume is what lets a
+container write to it; `container_ro_file_t` on a snapshot layer is what makes
+it read-only. `restorecon` there would take a working container apart, and
+refpolicy's static `file_contexts` cannot express "whatever the runtime
+decided" — it is not supposed to.
+
+So the acceptance asks the question that matters instead: **is any of it
+unlabeled, or labelled as something that is not container content.** Measured:
+the whole tree carries exactly two types, `container_file_t` and
+`container_var_lib_t`, and nothing is `unlabeled_t`. The disagreement with the
+static policy is recorded as a number (10 paths) rather than judged.
+
+Everywhere else, the drift check is still zero: `/etc`, `/usr`, `/var`, `/home`
+and `/root`, including after an `admin-role` run and a full relabel on an
+enforcing machine.
+
+### 11.5 What §11 does not prove
+
+- That the local module is complete. It is complete for this workload on this
+  machine; §10.2's rounds 2 and 4 are the standing evidence that another
+  workload finds more, and §11 found eight more blocks itself.
+- A second administrator. `%wheel` is a group mapping and a second member
+  should get the same context, but only one account has been through it.
+- ~~`sudo` with the role drop-in on a machine where SELinux is installed but
+  not active.~~ **Tested**, because it is the one way the arrangement could
+  lock an operator out of root before anyone noticed: with `SELINUX=disabled`
+  and the drop-in in place, `sudo -v` and `sudo -n id -un` both succeed and
+  return `root`. sudo ignores `role=`/`type=` when `is_selinux_enabled()` is
+  false. `disable` removes the drop-in anyway.
+- **An open question this run turned up and did not settle.**
+  `omarchy-server-selinux disable` rebuilds the UKI through `limine-update`,
+  and on the enforcing machine that rebuild printed *"WARNING: errors were
+  encountered during the build"* and *"ERROR: mkinitcpio failed for kernel …,
+  skipping"*, so the drop-in removal did not reach the running command line
+  until a later rebuild. The same `limine-update` run with SELinux off
+  succeeded. **No AVC was logged either time**, so this may not be SELinux at
+  all — but a UKI rebuild is also what a kernel update needs, and the update
+  path was only exercised on a run where no kernel changed. It needs its own
+  measurement before enforcing is recommended anywhere.
+- Anything about `secadm_r`. The administrative role here is `sysadm_r`, which
+  can load policy and set enforcing; splitting policy administration out to a
+  separate role is a different arrangement and is not made.

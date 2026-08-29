@@ -83,6 +83,41 @@ if ! grep -q 'UFW AND DOCKER' /etc/ufw/after.rules; then
   exit 1
 fi
 
+# containerd's plugin directory, created here rather than by containerd.
+#
+# containerd makes /opt/containerd/{bin,lib} the first time it starts. /opt is
+# usr_t, and under SELinux that means the daemon is refused:
+#
+#   comm="containerd" name="containerd" tclass=dir { create add_name }
+#     scontext=system_u:system_r:dockerd_t tcontext=system_u:object_r:usr_t
+#
+# The policy fix would be `allow dockerd_t usr_t:dir { create add_name }` --
+# a container runtime with write access to /opt, /usr/share and everything else
+# usr_t covers, so that it can make two directories it knows the name of.
+# Creating them at install time instead means the runtime only ever works
+# INSIDE a directory that already exists and already carries the right label
+# (install/server/mac/selinux/local-fcontexts gives it container_var_lib_t).
+#
+# Harmless without SELinux: containerd would have created exactly these.
+install -dm755 /opt/containerd/bin /opt/containerd/lib
+
+# And the labels on everything this leaf just wrote. The pacman hook relabels
+# files a PACKAGE installed; nothing relabels files an addon installed, so
+# /etc/docker comes out with the etc_t it inherited from /etc while the policy
+# says container_config_t. Measured as label drift after the addon, which is
+# the check this profile's acceptance runs; it is also a real difference,
+# because container_config_t is what the runtime's own rules are written
+# against.
+#
+# Skipped in the ISO install chroot, where SELinux is not active and there is
+# nothing to read a context from. Nothing is lost there: the addon phase leaves
+# /.autorelabel behind and omarchy-server-selinux-relabel.service covers the
+# whole filesystem on the first boot.
+if [[ -d /sys/fs/selinux ]] && command -v restorecon >/dev/null; then
+  restorecon -RF /opt/containerd /etc/docker \
+    /etc/systemd/resolved.conf.d /etc/systemd/system/docker.service.d
+fi
+
 # docker.socket, not docker.service: the daemon starts on the first client
 # connection instead of at every boot.
 systemctl enable docker.socket

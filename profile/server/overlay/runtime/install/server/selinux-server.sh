@@ -42,6 +42,17 @@
 #               for it: an omarchy_server.te beside local-fcontexts is compiled
 #               with checkmodule and installed with semodule.
 #
+#   admin       the administrative role. Members of `wheel` are mapped to the
+#               SELinux user staff_u (seusers.local) and sudoers is given
+#               `role=sysadm_r, type=sysadm_t` for that group, so the operator
+#               logs in confined as staff_t and reaches sysadm_t through sudo.
+#               Without it, enforcing means an administrator who cannot run
+#               pacman, ufw or systemctl and cannot switch back to permissive
+#               over ssh -- a one-way door, measured in
+#               reports/2026-08-29-mandatory-access-control.md §10.6. The work
+#               is in `omarchy-server-selinux admin-role`, called from here so
+#               the machine is never installed without it.
+#
 #   labels      the filesystem is relabelled HERE, offline, with `setfiles`
 #               over file_contexts + file_contexts.homedirs +
 #               file_contexts.local concatenated. A relabel is minutes of I/O;
@@ -397,6 +408,27 @@ omarchy_selinux_enable_relabel_unit() {
   echo "selinux: omarchy-server-selinux-relabel.service enabled for the first boot"
 }
 
+# The administrative role, applied by the runtime command so there is exactly
+# one implementation of it and `omarchy-server-selinux admin-role` on an
+# already-installed machine does the same thing this install does.
+#
+# --defer-rebuild because omarchy_selinux_rebuild_store below runs `semodule -B`
+# anyway, and that is the step that merges seusers.local into the store; doing
+# it twice would add a minute to every install for nothing.
+#
+# genhomedircon cannot expand `%wheel` here: this runs in the install chroot and
+# the orchestrator creates the operator's account in a later phase. That is why
+# omarchy-server-selinux-relabel.service rebuilds the store again on the first
+# boot, where the account exists, before it relabels.
+omarchy_selinux_apply_admin_role() {
+  if ! "$OMARCHY_PATH/bin/omarchy-server-selinux" admin-role --defer-rebuild; then
+    echo "selinux: WARNING -- the administrative role was not applied." >&2
+    echo "         This machine must NOT be put into enforcing until it is:" >&2
+    echo "             sudo omarchy-server-selinux admin-role" >&2
+    return 1
+  fi
+}
+
 omarchy_selinux_setup() {
   omarchy_mac_require_exclusive selinux || return 1
   omarchy_selinux_require_userland || return 1
@@ -406,6 +438,7 @@ omarchy_selinux_setup() {
   omarchy_selinux_write_cmdline_dropin
   omarchy_selinux_add_fcontexts
   omarchy_selinux_build_local_module || true
+  omarchy_selinux_apply_admin_role || true
   # Before the relabel, not after: the relabel reads what this rebuilds.
   omarchy_selinux_rebuild_store || true
   omarchy_selinux_relabel
@@ -418,6 +451,7 @@ omarchy_selinux_setup() {
   echo "selinux: set up in PERMISSIVE mode. It takes effect on the next boot."
   echo "         After the reboot:"
   echo "             omarchy-server-selinux status     # is the policy loaded"
+  echo "             id -Z; sudo id -Z                 # staff_t, then sysadm_t"
   echo "             omarchy-server-selinux avc        # what would have been denied"
   echo "             sudo omarchy-server-selinux enforcing"
   echo "         Go to enforcing only once \`avc\` is quiet under the workload"
