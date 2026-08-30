@@ -1,5 +1,5 @@
 #!/bin/bash
-# Launch the demo.tui.tools instance from an imported custom
+# Launch the omarchy-server-demo.tui.tools instance from an imported custom
 # image.
 #
 #   ./pocs/image/oci/launch-demo.sh --compartment-id OCID --image-id OCID \

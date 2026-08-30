@@ -199,7 +199,7 @@ accounts:      <reviewer>, <owner>  — key only, no password, sudo NOPASSWD
 --- cloud-init user-data ---
 #cloud-config
 hostname: omarchy-server-demo
-fqdn: demo.tui.tools
+fqdn: omarchy-server-demo.tui.tools
 disable_root: true
 ssh_pwauth: false
 users:
