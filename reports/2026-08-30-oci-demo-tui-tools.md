@@ -142,6 +142,7 @@ Built with `serverlab image build --mac selinux --addons tui-tools` off
 | `pocs/server-install/acceptance-cloud-selinux.sh` | **42 passed, 0 failed** |
 | `pocs/server-install/reboot-check.sh` | clean: no failed units, only `22/tcp` and the local resolver listening |
 | `pkgs/test.sh` (packaging, clean container) | **79 passed, 0 failed** |
+| `omarchy-server-pkgs/scripts/verify.sh` (the signed repository served over HTTP, then re-served hostile) | **13 passed, 0 failed** |
 
 Evidence: `pocs/lab/out-cloudtest/evidence/`, published into
 `pocs/server-install/reference/cloudtest/`.
@@ -178,6 +179,54 @@ Decided and written into `pocs/image/oci/launch-demo.sh`:
 `--demo-user` names the reviewer's account, `--owner-user` the owner's; the
 rendered `#cloud-config` is printed by a run without `--yes`, which creates
 nothing.
+
+A run without `--yes`, with the two public keys the owner placed outside this
+repository (the keys themselves are redacted here, and neither the keys nor
+the tenancy identifiers are ever committed):
+
+```
+=== OCI demo instance ===
+profile:       <the owner's OCI CLI profile>
+display name:  omarchy-server-demo
+hostname:      omarchy-server-demo  (DNS record is dns.md, not this script)
+shape:         VM.Standard.E4.Flex  1 OCPU / 2 GB  baseline BASELINE_1_8
+image:         <image OCID from import.sh>
+subnet:        <an existing public subnet OCID>
+nsg:           <created here: ingress 22/tcp only>
+shielded:      no (see the header of this script)
+accounts:      <reviewer>, <owner>  — key only, no password, sudo NOPASSWD
+
+--- cloud-init user-data ---
+#cloud-config
+hostname: omarchy-server-demo
+fqdn: omarchy-server-demo.quave.one
+disable_root: true
+ssh_pwauth: false
+users:
+  - name: <reviewer>
+    gecos: Omarchy Server demo
+    groups: [ wheel ]
+    sudo: [ "ALL=(ALL) NOPASSWD: ALL" ]
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ssh-ed25519 <REDACTED>
+  - name: <owner>
+    gecos: Omarchy Server owner
+    groups: [ wheel ]
+    sudo: [ "ALL=(ALL) NOPASSWD: ALL" ]
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ssh-rsa <REDACTED>
+---
+
+Plan (nothing has been created):
+  1. oci network nsg create             one NSG in the subnet's VCN
+  2. oci network nsg rules add          ingress 0.0.0.0/0 -> 22/tcp, egress all
+  3. oci compute instance launch        with the user-data above
+  4. wait for RUNNING, print the public IP and the ssh command
+```
 
 ## What this run does not prove
 
