@@ -17,11 +17,12 @@
 # install/server/addons/tui-tools.preflight.sh is what configures the
 # repository and pins its signing key BEFORE any of this is installed.
 #
-# The list is explicit rather than a `tui-tools` metapackage: the metapackage
-# does not exist in the repository yet, and naming the members is also what
-# tells the ISO builder which packages to bundle in its offline mirror. When
-# the metapackage ships, this becomes one line and the preflight stays as it
-# is.
+# The list is explicit rather than the `tui-tools-all` metapackage: naming the
+# members is what tells the ISO builder which packages to bundle in its
+# offline mirror. `tui-tools` itself is the launcher, a dashboard of the
+# family that installs, updates and opens the others through pacman; it
+# depends on none of them, so it is listed like any other member.
+tui-tools
 tui-cert
 tui-containers
 tui-cron
