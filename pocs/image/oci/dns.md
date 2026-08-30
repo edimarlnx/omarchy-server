@@ -1,4 +1,4 @@
-# DNS for `omarchy-server-demo.quave.one`
+# DNS for `demo.tui.tools`
 
 Deliberately not automated. `quave.one` is a production zone shared by things
 that are not this demo, and a script in a lab repository that can write records
@@ -25,8 +25,8 @@ nothing in the profile listens on IPv6 by choice. Add one only after
 ## Verifying it
 
 ```bash
-dig +short omarchy-server-demo.quave.one A
-ssh -i pocs/image/out/demo-guest_ed25519 demo@omarchy-server-demo.quave.one
+dig +short demo.tui.tools A
+ssh -i pocs/image/out/demo-guest_ed25519 demo@demo.tui.tools
 ```
 
 The second command will ask about a host key it has never seen. That is

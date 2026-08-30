@@ -20,7 +20,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 out="$here/../out"
-host="omarchy-server-demo.quave.one"
+host="demo.tui.tools"
 user=demo
 fingerprint_only=0
 
