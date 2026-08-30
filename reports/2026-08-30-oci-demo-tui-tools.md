@@ -26,8 +26,9 @@ turned three loose ends into one run:
    into `pocs/image/oci/launch-demo.sh` rather than into somebody's shell
    history.
 
-No OCI resource was created by this run. The import and the launch are the
-owner's to run, with the exact command lines at the end of this report.
+No OCI resource was created while this was measured; §1–§4 end at a published
+artifact and a script whose plan was rendered and read. The owner then ran the
+import and the launch for real, and §5 is what that found.
 
 ## 1. `fakeroot` in the base
 
@@ -228,11 +229,46 @@ Plan (nothing has been created):
   4. wait for RUNNING, print the public IP and the ssh command
 ```
 
+## 5. What went wrong at the first launch
+
+The scripts were run for real after this report was written, and the first
+instance never booted: an empty serial console, no output at all. It had
+launched with **`firmware = BIOS`**, and this image has no BIOS boot path —
+it is a UKI on an ESP behind Limine, with no MBR to find.
+
+The cause was in `import.sh`, not in the image. `oci compute image get` does
+not accept `--wait-for-state`; the CLI exited 2 with "no such option", and
+under `set -euo pipefail` the script stopped there — right after printing
+`› waiting for AVAILABLE`, which reads like progress — and never reached the
+step that attaches the image capability schema. The import itself had already
+been accepted, so the image went AVAILABLE on its own and looked healthy.
+`oci compute image-capability-schema list --image-id ...` came back empty,
+which was the whole diagnosis. A second defect sat behind the first: the
+create flag is `--global-image-capability-schema-version-name`, not
+`--image-capability-schema-version-name`, so the schema step would have failed
+on its own line anyway.
+
+Creating the schema by hand, with the same JSON the script carries, fixed it;
+the image now reports `Compute.Firmware` default `UEFI_64`.
+
+Changed so that a silent skip cannot happen again:
+
+| Change | Where |
+|---|---|
+| poll `lifecycle-state` instead of the non-existent waiter, tolerating `IMPORTING` for 30 minutes | `import.sh` |
+| the schema step skips an image that already has one, so a re-run finishes a half-done import | `import.sh` |
+| read `Compute.Firmware` back from the API and exit non-zero unless it is `UEFI_64`; print `firmware: UEFI_64 (verified)` | `import.sh` |
+| `--launch-options '{"firmware":"UEFI_64"}'` on the launch, as belt and braces | `launch-demo.sh` |
+| assert the launched instance's `launch-options.firmware`, and **terminate the instance** if it is not `UEFI_64` | `launch-demo.sh` |
+
+The last one is the one that matters commercially: a BIOS VM from this image
+does nothing except bill, and nobody watches a console that shows nothing.
+
 ## What this run does not prove
 
-- **Nothing was launched on OCI.** The import, the instance and the DNS record
-  are the owner's to run; this report ends at a published artifact and a
-  script whose plan was rendered and read.
+- **The report's own measurements stop at the artifact.** Everything above §5
+  is QEMU/KVM. The OCI run described in §5 established the firmware failure
+  mode and its fix, and nothing else about the image's behaviour on a cloud.
 - **SELinux ships permissive.** Taking it to enforcing is
   `reports/2026-08-29-cloud-image-selinux.md`, and it is a deliberate step an
   operator takes, not a default.

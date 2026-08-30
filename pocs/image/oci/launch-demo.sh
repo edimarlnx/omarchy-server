@@ -192,8 +192,11 @@ Plan (nothing has been created):
   2. oci network nsg rules add          ingress 0.0.0.0/0 -> 22/tcp, and
                                         egress all (an instance that cannot
                                         reach the mirrors cannot update)
-  3. oci compute instance launch        with the user-data above
-  4. wait for RUNNING, print the public IP and the ssh command
+  3. oci compute instance launch        with the user-data above, and
+                                        --launch-options firmware=UEFI_64
+  4. wait for RUNNING, assert the instance's firmware really is UEFI_64
+                                        (terminate it if not), then print the
+                                        public IP and the ssh command
 
 Re-run with --yes to do it.
 PLAN
@@ -261,8 +264,39 @@ instance_id=$(oci_cli compute instance launch \
   --nsg-ids "[\"$nsg_id\"]" \
   --assign-public-ip true \
   --metadata "{\"user_data\":\"$(printf '%s' "$user_data" | base64 -w0)\"}" \
+  --launch-options '{"firmware":"UEFI_64"}' \
   --wait-for-state RUNNING --wait-interval-seconds 15 --max-wait-seconds 1800 \
   --query 'data.id' --raw-output)
+
+# ── firmware, asserted ──────────────────────────────────────────────────────
+# The instance's firmware comes from the IMAGE's capability schema, and an
+# imported image has none until import.sh attaches one. An image without it
+# launches BIOS, this image has no boot sector, and the result is a VM that
+# sits at an empty serial console and bills by the hour. --launch-options
+# above asks for UEFI_64 explicitly (LaunchOptions.firmware is accepted for
+# custom images as long as the value is one the image's capability schema
+# permits), but a request is not a guarantee: read it back, and if it is not
+# UEFI_64 destroy the instance rather than leave it running.
+firmware=$(oci_cli compute instance get --instance-id "$instance_id" \
+  --query 'data."launch-options".firmware' --raw-output 2>/dev/null || true)
+
+if [[ $firmware != "UEFI_64" ]]; then
+  echo >&2
+  echo "!! the instance launched with firmware ${firmware:-<unknown>}, not UEFI_64" >&2
+  echo "   terminating it now (a BIOS VM from this image never boots, and bills)" >&2
+  oci_cli compute instance terminate --instance-id "$instance_id" --force \
+    >/dev/null 2>&1 || echo "   TERMINATE FAILED -- kill $instance_id by hand" >&2
+  cat >&2 <<EOF
+
+   Cause: the custom image has no image capability schema declaring
+   Compute.Firmware = UEFI_64. Run import.sh's schema step against the image
+   -- re-running ./pocs/image/oci/import.sh with the same flags is safe, the
+   schema step is idempotent and it verifies the firmware before it exits --
+   then launch again.
+EOF
+  exit 1
+fi
+echo "› firmware: UEFI_64 (verified)"
 
 public_ip=$(oci_cli compute instance list-vnics --instance-id "$instance_id" \
   --query 'data[0]."public-ip"' --raw-output)

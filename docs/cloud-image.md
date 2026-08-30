@@ -451,8 +451,8 @@ Four files in `pocs/image/oci/`, and both scripts refuse to run without
 | File | What |
 |---|---|
 | `make-demo-key.sh` | generates `out/demo-guest_ed25519{,.pub}` (gitignored) and prints the 1Password block |
-| `import.sh` | upload → `image import from-object` → wait AVAILABLE → capability schema |
-| `launch-demo.sh` | NSG (22/tcp only) + instance with cloud-init user-data |
+| `import.sh` | upload → `image import from-object` → wait AVAILABLE → capability schema → verify the firmware is UEFI_64 |
+| `launch-demo.sh` | NSG (22/tcp only) + instance with cloud-init user-data, then asserts the instance's firmware is UEFI_64 |
 | `dns.md`, `reset.md` | the A record, and the three ways to reset the demo |
 
 ### The flags, and why each one
@@ -485,6 +485,47 @@ select emulated hardware.
 The global schema **version name** is discovered at runtime
 (`oci compute global-image-capability-schema-version list`) rather than
 hard-coded: it is a `OCI_x.y.z` string in some tenancies and a UUID in others.
+
+### The failure mode this actually hit
+
+The first real import skipped the schema and nobody noticed until the instance
+booted to an empty serial console. Two defects in `import.sh`, one hiding the
+other:
+
+1. **`oci compute image get` has no `--wait-for-state`.** The waiter flags
+   exist on some compute commands and not on that one, so
+   `--wait-for-state AVAILABLE --wait-interval-seconds 30 --max-wait-seconds
+   3600` made the CLI exit 2 with "no such option". Under `set -euo pipefail`
+   the script died there — after printing `› waiting for AVAILABLE`, which
+   reads exactly like the script is doing its job — and never reached the
+   schema step. The image was already imported and became AVAILABLE on its
+   own, so everything downstream looked fine.
+2. **The create flag is `--global-image-capability-schema-version-name`**, not
+   `--image-capability-schema-version-name`. Had the wait succeeded, the create
+   would have exited 2 on the next line for the same reason.
+
+The instance launched with `firmware = BIOS`, found no boot sector (there is
+none), and sat at a console with no output while billing by the hour.
+`oci compute image-capability-schema list --image-id ...` came back empty,
+which is the one-line diagnosis for anyone who hits this again.
+
+What the scripts do about it now:
+
+* `import.sh` polls `lifecycle-state` itself, tolerating `IMPORTING` for up to
+  30 minutes, and treats any other state as fatal.
+* The schema step is **idempotent** — it skips an image that already has a
+  schema — so re-running `import.sh` against a half-finished import is safe.
+* `import.sh` ends by reading `Compute.Firmware` back out of
+  `image-capability-schema list` and refuses to exit 0 unless the default
+  value is `UEFI_64`. On success it prints `firmware: UEFI_64 (verified)`.
+* `launch-demo.sh` passes `--launch-options '{"firmware":"UEFI_64"}'` as belt
+  and braces (`LaunchOptions.firmware` is accepted for a custom image as long
+  as the value is one the image's capability schema permits — it is a request
+  the API can still ignore or reject, not a substitute for the schema), then
+  reads `launch-options.firmware` back off the launched instance. If it is not
+  `UEFI_64` the instance is **terminated immediately** and the script exits
+  non-zero pointing at `import.sh`. A loud failure costs a minute; a BIOS VM
+  nobody looks at costs a month.
 
 **No `Compute.SecureBootSupported`.** See §6. If a future image is ever built
 against a shim carrying a certificate Oracle's firmware trusts, this is the
@@ -535,11 +576,13 @@ down. `launch-demo.sh` requires an existing **public** subnet OCID.
   A detached signature by the same key that signs `[omarchy-server]` is the
   obvious next step and is not done.
 * **Multi-architecture.** x86_64 only.
-* **No cloud has been touched.** Everything measured is QEMU/KVM with OVMF and a
-  NoCloud seed. `pocs/image/oci/` is written and reviewed and has never been run:
-  no object uploaded, no image imported, no capability schema created, no
-  instance launched. The UEFI_64 claim in §7 is reasoning from OCI's documented
-  behaviour and from this image having no BIOS boot path, not an observation.
+* **Almost nothing is measured on a cloud.** Everything in §1–§6 is QEMU/KVM
+  with OVMF and a NoCloud seed. `pocs/image/oci/` has now been run once against
+  a real tenancy, and the only thing that run established is the failure mode
+  above: an image with no capability schema launches BIOS and never boots, and
+  one with the schema attached reports `Compute.Firmware = UEFI_64`. The
+  UEFI_64 *requirement* is still reasoning from this image having no BIOS boot
+  path rather than a boot measured on OCI.
 * **`--secboot` has not been built as an image.** The first-boot path is written
   and its skip-when-absent behaviour is measured; the image itself is the next
   run. `--mac selinux` no longer belongs in this list — see §6 and

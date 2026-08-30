@@ -8,9 +8,13 @@
 #   1. uploads the qcow2 to an Object Storage bucket you already own
 #   2. `oci compute image import from-object` with --source-image-type QCOW2
 #      and --launch-mode PARAVIRTUALIZED
-#   3. waits for the image to reach AVAILABLE
-#   4. attaches an image capability schema declaring UEFI_64 firmware
-#   5. prints the image OCID launch-demo.sh wants
+#   3. waits for the image to reach AVAILABLE (polling; see the note at the
+#      wait loop for why the CLI's --wait-for-state is not an option here)
+#   4. attaches an image capability schema declaring UEFI_64 firmware, unless
+#      the image already has one
+#   5. reads the firmware back from the API and refuses to finish unless it
+#      is UEFI_64
+#   6. prints the image OCID launch-demo.sh wants
 #
 # Why those choices, because none of them is obvious:
 #
@@ -132,11 +136,14 @@ Plan (nothing has been created):
   2. oci compute image import from-object
                                   --source-image-type QCOW2
                                   --launch-mode PARAVIRTUALIZED
-  3. wait for the image to be AVAILABLE
+  3. wait for the image to be AVAILABLE (up to 30 minutes)
   4. oci compute image-capability-schema create
                                   Compute.Firmware = UEFI_64
                                   Compute.LaunchMode = PARAVIRTUALIZED
-  5. print the image OCID
+                                  (skipped if the image already has a schema)
+  5. oci compute image-capability-schema list
+                                  verify Compute.Firmware is UEFI_64, or fail
+  6. print the image OCID
 
 Re-run with --yes to do it.
 PLAN
@@ -167,26 +174,53 @@ image_id=$(oci_cli compute image import from-object \
   --query 'data.id' --raw-output)
 
 echo "› image: $image_id"
+
+# `oci compute image get` has NO --wait-for-state: the waiter flags exist on
+# some compute commands and not on this one, and passing them makes the CLI
+# exit 2 with "no such option" -- which, under `set -e`, killed this script
+# right here and skipped step 3 entirely. That is exactly how an image gets
+# imported with no capability schema and launches as BIOS. Poll instead.
 echo "› waiting for AVAILABLE (an import is minutes, not seconds)"
-oci_cli compute image get --image-id "$image_id" \
-  --wait-for-state AVAILABLE --wait-interval-seconds 30 --max-wait-seconds 3600 >/dev/null
+wait_deadline=$((SECONDS + 1800))
+image_state=""
+while :; do
+  image_state=$(oci_cli compute image get --image-id "$image_id" \
+    --query 'data."lifecycle-state"' --raw-output)
+  case "$image_state" in
+    AVAILABLE) break ;;
+    IMPORTING | PROVISIONING) ;;
+    *)
+      echo "!! the image entered state $image_state; it will never be AVAILABLE" >&2
+      exit 1
+      ;;
+  esac
+  if ((SECONDS >= wait_deadline)); then
+    echo "!! the image is still $image_state after 30 minutes; giving up" >&2
+    echo "   the image exists ($image_id) -- re-run the schema step by hand" >&2
+    exit 1
+  fi
+  sleep 30
+done
+echo "  state: AVAILABLE"
 
 # ── 3. capability schema ────────────────────────────────────────────────────
 # Without this the instance is launched with BIOS firmware and never finds a
 # boot sector, because there is not one. The schema VERSION name is a value of
 # the tenancy's global schema, so it is discovered rather than hard-coded --
 # it is a UUID in some tenancies and a "OCI_x.y.z" string in others.
-echo "› attaching an image capability schema (UEFI_64)"
-global_schema_id=$(oci_cli compute global-image-capability-schema list \
-  --query 'data[0].id' --raw-output)
-version_name=$(oci_cli compute global-image-capability-schema-version list \
-  --global-image-capability-schema-id "$global_schema_id" \
-  --all --query 'data[-1].name' --raw-output)
-echo "  global schema version: $version_name"
+#
+# Idempotent: an image carries at most one capability schema, and a second
+# create on the same image is an error, so a re-run of this script (or a run
+# that resumes after the wait timed out) must skip a schema that is there.
+existing_schema=$(oci_cli compute image-capability-schema list \
+  --compartment-id "$compartment" --image-id "$image_id" \
+  --query 'data[0].id' --raw-output 2>/dev/null || true)
 
-schema_data=$(mktemp)
-trap 'rm -f "$schema_data"' EXIT
-cat >"$schema_data" <<'JSON'
+schema_data=""
+write_schema_data() {
+  schema_data=$(mktemp)
+  trap 'rm -f "$schema_data"' EXIT
+  cat >"$schema_data" <<'JSON'
 {
   "Compute.Firmware": {
     "descriptorType": "enumstring",
@@ -214,13 +248,59 @@ cat >"$schema_data" <<'JSON'
   }
 }
 JSON
+}
 
-oci_cli compute image-capability-schema create \
-  --compartment-id "$compartment" \
-  --image-id "$image_id" \
-  --image-capability-schema-version-name "$version_name" \
-  --schema-data "file://$schema_data" \
-  --display-name "$display-capabilities" >/dev/null
+if [[ -n $existing_schema && $existing_schema != "null" ]]; then
+  echo "› image capability schema already attached: $existing_schema"
+else
+  echo "› attaching an image capability schema (UEFI_64)"
+  global_schema_id=$(oci_cli compute global-image-capability-schema list \
+    --query 'data[0].id' --raw-output)
+  version_name=$(oci_cli compute global-image-capability-schema-version list \
+    --global-image-capability-schema-id "$global_schema_id" \
+    --all --query 'data[-1].name' --raw-output)
+  echo "  global schema version: $version_name"
+
+  write_schema_data
+
+  # The flag is --global-image-capability-schema-version-name, not
+  # --image-capability-schema-version-name (the API field is named for the
+  # GLOBAL schema the version belongs to). The short name does not exist and
+  # the CLI would exit 2 -- the same way the wait above did.
+  oci_cli compute image-capability-schema create \
+    --compartment-id "$compartment" \
+    --image-id "$image_id" \
+    --global-image-capability-schema-version-name "$version_name" \
+    --schema-data "file://$schema_data" \
+    --display-name "$display-capabilities" >/dev/null
+fi
+
+# ── 4. verify ───────────────────────────────────────────────────────────────
+# Read the firmware back from the API rather than trusting that the create
+# above did what it was asked. A silent BIOS image is a VM that boots to an
+# empty serial console and bills by the hour, so fail loudly instead.
+firmware=$(oci_cli compute image-capability-schema list \
+  --compartment-id "$compartment" --image-id "$image_id" \
+  --query 'data[0]."schema-data"."Compute.Firmware"."default-value"' \
+  --raw-output 2>/dev/null || true)
+
+if [[ $firmware != "UEFI_64" ]]; then
+  cat >&2 <<EOF
+
+!! FIRMWARE IS NOT UEFI_64 -- DO NOT LAUNCH THIS IMAGE
+
+   image:    $image_id
+   firmware: ${firmware:-<no capability schema attached>}
+
+   An instance launched from this image would get BIOS firmware, find no boot
+   sector (this image has none, it boots a UKI from an ESP) and sit at an
+   empty serial console. Attach the schema by hand -- section 3 of this
+   script has the exact commands -- and re-run this script to verify.
+EOF
+  exit 1
+fi
+
+echo "› firmware: UEFI_64 (verified)"
 
 echo
 echo "image OCID: $image_id"
