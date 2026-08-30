@@ -192,13 +192,12 @@ checkouts, the default profile and the VM sizing. Every value in it is also the
 built-in default, so the tool works in this checkout with no configuration at
 all; the file exists for a machine where something lives elsewhere.
 
-An environment variable overrides the file, and the two names the bash scripts
-already read are honoured, so an exported shell keeps working:
+An environment variable overrides the file, and the name the bash scripts
+already read is honoured, so an exported shell keeps working:
 
 | Setting | Env |
 |---|---|
 | `paths.pkgs_repo` | `SERVERLAB_PKGS_DIR`, `OMARCHY_PKGS_DIR` |
-| `paths.tui_tools` | `SERVERLAB_TUI_TOOLS_DIR`, `TUI_TOOLS_DIR` |
 | `defaults.profile` | `SERVERLAB_PROFILE` |
 | `vm.disk_gb` / `data_disk_gb` / `memory_mb` / `cpus` | `SERVERLAB_DISK_GB`, `SERVERLAB_DATA_DISK_GB`, `SERVERLAB_MEM_MB`, `SERVERLAB_CPUS` |
 | the repository root itself | `SERVERLAB_ROOT` |

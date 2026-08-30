@@ -1,26 +1,26 @@
-=== Attack surface — VM 'cloudtest' — 2026-08-29T17:32:00-03:00 ===
+=== Attack surface — VM 'cloudtest' — 2026-08-30T09:03:59-03:00 ===
 
 === packages ===
-installed:  250
-explicit:   24
-dependency: 226
-installed size (MiB): 1428
+installed:  274
+explicit:   57
+dependency: 217
+installed size (MiB): 1594
 linux-firmware (MiB): 408
 
 --- ten biggest packages ---
      147.8 MiB  linux
      132.5 MiB  linux-firmware-intel
      103.5 MiB  linux-firmware-nvidia
+      91.0 MiB  selinux-refpolicy-arch
       73.6 MiB  python
       51.3 MiB  linux-firmware-atheros
       51.1 MiB  boost-libs
       50.7 MiB  glibc
       43.8 MiB  binutils
       43.2 MiB  icu
-      39.5 MiB  systemd
 
 === enabled units ===
-count: 27
+count: 28
   cloud-config.service
   cloud-final.service
   cloud-init-local.service
@@ -30,6 +30,7 @@ count: 27
   limine-snapper-sync.service
   linux-modules-cleanup.service
   omarchy-server-firstboot.service
+  omarchy-server-selinux-relabel.service
   omarchy-tty-palette.service
   sshd.service
   systemd-network-generator.service
@@ -67,12 +68,12 @@ count: 13
 
 === listening sockets ===
 Netid State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
-udp   UNCONN 0      0         127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=422,fd=18))
-udp   UNCONN 0      0      127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=422,fd=16))
-tcp   LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=422,fd=17))
-tcp   LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=4366,fd=6))
-tcp   LISTEN 0      4096      127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=422,fd=19))
-tcp   LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=4366,fd=7))
+udp   UNCONN 0      0         127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=424,fd=18))
+udp   UNCONN 0      0      127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=424,fd=16))
+tcp   LISTEN 0      4096      127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=424,fd=19))
+tcp   LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=424,fd=17))
+tcp   LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=4374,fd=6))
+tcp   LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=4374,fd=7))
 listening tcp+udp: 6
 
 === setuid / setgid binaries ===
@@ -97,11 +98,11 @@ count: 16
 === services running as root ===
   dbus-broker.service
   getty@tty1.service
+  qemu-guest-agent.service
   serial-getty@ttyS0.service
   sshd.service
   systemd-hostnamed.service
   systemd-journald.service
-  systemd-localed.service
   systemd-logind.service
   systemd-udevd.service
   systemd-userdbd.service

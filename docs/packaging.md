@@ -1,8 +1,9 @@
 # Packaging the server profile
 
 The three profile packages (`omarchy-server-keyring`, `omarchy-server-settings`,
-`omarchy-server`) plus the addon packages built from source (`tui-firewall`,
-`tui-systemd`) are built, signed and tested in a clean Arch container.
+`omarchy-server`) are built, signed and tested in a clean Arch container. The
+`tui-tools` terminal UIs used to be built here too; they now come from the
+signed repository the tools publish themselves (§2.4).
 
 ---
 
@@ -117,8 +118,7 @@ because the same files are what GitHub Actions builds the published
 PKGBUILD that disagrees with itself. `pkgs/build.sh` and `iso/build.sh` read
 them from there. See §5.
 
-Three of them build the profile; `tui-firewall` and `tui-systemd` (§2.4) are
-addon packages built from their own upstreams. Common source: the fork
+All three build the profile. Common source: the fork
 `https://github.com/edimarlnx/omarchy.git`, branch `server`, **pinned** at
 commit `468b511249b1a341311c46f5a7cf81aa5bc5af92`, plus
 `profile/server/overlay/` packed as a source tarball. A builder that already
@@ -394,67 +394,50 @@ an unrefreshed system is the partial upgrade Arch warns about.
 | `dev` | base-devel, git, yay, mise-bin | — |
 | `editor` | omarchy-nvim | seeds `~/.config/nvim` for existing users |
 | `net-tools` | inotify-tools, rsync, socat, unzip, whois | — |
-| `tui-firewall` | tui-firewall | — |
-| `tui-systemd` | tui-systemd | — |
+| `tui-tools` | the 14 tui-tools terminal UIs | preflight: configures `[tui-tools]` and pins its signing key |
 | `vm` | qemu-guest-agent | enables `qemu-guest-agent.service` |
 
-`tui-firewall` and `tui-systemd` are the addons whose packages are in no public
-Arch repository: they are built from source by `pkgs/build.sh` and by the ISO
-builder, and reach a machine either through the ISO's offline mirror
-(`mkcidata.sh --addons tui-firewall,tui-systemd`, or `omarchy-server-addon
-tui-firewall` during the install) or from the `[omarchy-server]` repository once
-that is published. On an installed machine with only the Arch and `[omarchy]`
-mirrors configured, `omarchy-server-addon tui-firewall` has nowhere to fetch it
-from and says so.
+`tui-tools` is the addon whose packages are in no Arch repository: they come
+from `https://pkgs.tui.tools/arch/$arch`, signed by the tools' own key. A
+machine gets them from the ISO's offline mirror (`mkcidata.sh --addons
+tui-tools`), where `iso/build.sh` put them after checking every signature, or
+over the network from that repository, which the addon's preflight configures
+with `SigLevel = Required` after verifying the key's fingerprint against the
+one pinned in the profile.
 
 ---
 
-### 2.4 `tui-firewall` and `tui-systemd`, the addon packages built from source
+### 2.4 `tui-tools`, the addon that is not built here
 
-Two terminal UIs from the [`tui-tools`](https://github.com/tui-tools)
+Fourteen terminal UIs from the [`tui-tools`](https://github.com/tui-tools)
 organization, one repository each: `tui-firewall` drives the firewall this
 profile already configures, `tui-systemd` drives the units and reads their
-journal. Both preview the exact command line of every change before running it
-and keep no state of their own — no daemon, no listening socket. Neither is in
-the core: a headless machine does not need a TUI to boot, and the core list is
-what it needs to boot.
+journal, `tui-secure` reviews the machine's security posture, and so on. Each
+is a single static Go binary that shells out to the tool the machine already
+has, previews the exact command line of every change and keeps no state of its
+own — no daemon, no listening socket. None is in the core: a headless machine
+does not need a TUI to boot, and the core list is what it needs to boot.
 
-`tui-firewall` was `fwall`, in the `edimarlnx/tui-tools` monorepo, until the
-tools moved to the organization. The package carries `provides=(fwall)` and
-`replaces=(fwall)`, which is what makes `pacman -Syu` on a machine that has
-`fwall` installed swap it for this package rather than leave both.
+Until 2026-08-29 two of them, `tui-firewall` and `tui-systemd`, were built from
+source here and served out of `[omarchy-server]`. They are not any more. The
+tools publish their own signed pacman repository, and rebuilding somebody
+else's releases to hand them to a user is a maintenance debt with no upside —
+two PKGBUILDs to keep in step with upstream tags, a Go toolchain in the builder,
+and a version in the ISO that nobody could reproduce from a signed source.
 
-`<pkgs-checkout>/pkgbuilds/tui-{firewall,systemd}/PKGBUILD` follow the same
-contract as the others, with the upstream **release tag** (`v0.1.0`, annotated
-and unmoving) where the Omarchy packages have a pinned commit, consumed through
-`git+file://` when a checkout's location is supplied by an environment variable
-(`TUI_FIREWALL_SRC` / `TUI_SYSTEMD_SRC`, `OMARCHY_SRC`'s counterparts;
-`TUI_FIREWALL_GIT_URL` / `TUI_SYSTEMD_GIT_URL` replace the whole URL).
+What this profile owns instead is **which key a machine ends up trusting**:
 
 | Aspect | Choice |
 |---|---|
-| Build | `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$pkgver"` — one static binary, same bytes from the same tag |
-| Modules | `go mod download` in `prepare()`, so `build()` and `check()` are offline; `go.sum` pins what is fetched |
-| `depends` | none: the binaries are static and shell out to `ufw` / `systemctl` rather than linking anything |
-| `optdepends` | `tui-firewall`: `ufw` (the backend), `sudo` (unless started as root); `tui-systemd`: `sudo` |
-| `options` | `!debug !strip` — the ldflags already dropped the symbol and DWARF tables |
-| Files | `/usr/bin/<name>`, `/etc/<name>/config.toml` (`backup=`), the README and the MIT licence |
-| Tests | `check()` runs `go test ./...`; the build fails if they do |
+| Repository | `[tui-tools]`, `Server = https://pkgs.tui.tools/arch/$arch` |
+| `SigLevel` | `Required TrustedOnly` — the repository signs its database and every package, and there is no reason to accept less |
+| Key | `767CFB33 7B01F32F FC073F3F 389120B2 77E4FB44`, **vendored** at `install/server/addons/tui-tools.pubkey.asc` and pinned by fingerprint in the preflight |
+| Where it is set up | `install/server/addons/tui-tools.preflight.sh`, which runs BEFORE the packages are installed — on an installed machine there is nowhere else to fetch them from |
+| Offline install | `iso/build.sh` downloads the packages, verifies each one against that key and drops them into `<pkgs-checkout>/prebuilt/`, so the addon also works on a machine that has never seen the network |
+| Failure mode | a bad or unreachable key is fatal on an installed machine; during an install off the offline mirror it is reported and the install continues, because the packages are already on the medium |
 
-`/etc/tui-firewall/config.toml` is the shipped `examples/config.toml` with
-`backend = "auto"` rewritten to `backend = "ufw"`, and `package()` fails if that
-rewrite did not take. `ufw` is the firewall `install/server/firewall-server.sh`
-configures and the only one the server package list can produce, so leaving the
-autodetection on would only add a way for it to guess wrong.
-`/etc/tui-systemd/config.toml` is the upstream example verbatim: there is
-nothing this profile has to pin, and it is installed so the keys are
-discoverable on the machine.
-
-Both builders need a Go toolchain. Rather than adding one unconditionally,
-`pkgs/build.sh` installs `go` only when one of these packages is in that run,
-and the ISO builder reads each PKGBUILD's `makedepends` out of
-`makepkg --printsrcinfo` and installs exactly those — a general mechanism, since
-`makepkg --nodeps` (deliberate, see §3) otherwise installs nothing at all.
+The fingerprint is checked before `pacman-key --add`: adding a downloaded key
+without that check would trust whatever the network handed over.
 
 ---
 
@@ -690,13 +673,6 @@ Two places, and neither is `[omarchy-server]` yet:
 ./pkgs/build.sh omarchy-server  # just one
 ./pkgs/test.sh                  # install in a clean Arch container and verify
 ```
-
-`tui-firewall` and `tui-systemd` need a checkout each, under `../tui-tools-org`
-by default (`TUI_TOOLS_DIR` moves the directory that holds them). They are bind
-mounted read-only at `/src/tui-firewall` and `/src/tui-systemd`, the way
-`upstream/omarchy` is mounted at `/src/omarchy`, and reached through
-`TUI_FIREWALL_SRC` / `TUI_SYSTEMD_SRC`. Building only the Omarchy packages does
-not need them and does not install a Go toolchain.
 
 `build.sh` runs everything in an `archlinux:latest` container as user
 `builder` (the same design the GitHub Actions workflow in `omarchy-server-pkgs`

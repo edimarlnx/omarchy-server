@@ -3,8 +3,8 @@
 # Every value here is the default serverlab would use with no file at all, so
 # this checkout works unconfigured; the file exists to be edited when something
 # lives somewhere else. An environment variable overrides the file, and the two
-# names the bash scripts already read are honoured (OMARCHY_PKGS_DIR,
-# TUI_TOOLS_DIR), so an exported shell keeps working.
+# name the bash scripts already read is honoured (OMARCHY_PKGS_DIR), so an
+# exported shell keeps working.
 #
 # Relative paths are read against the repository root.
 
@@ -12,10 +12,6 @@
 # The public repository holding the PKGBUILDs and the published, signed
 # [omarchy-server] pacman repository. Env: SERVERLAB_PKGS_DIR, OMARCHY_PKGS_DIR.
 pkgs_repo = "../omarchy-server-pkgs"
-# The directory holding the tui-tools checkouts, one repository per tool
-# (tui-firewall, tui-systemd), from which those addon packages are built.
-# Env: TUI_TOOLS_DIR.
-tui_tools = "../tui-tools-org"
 # Read-only clones of upstream, never modified by anything here.
 upstream_omarchy = "upstream/omarchy"
 upstream_omarchy_iso = "upstream/omarchy-iso"

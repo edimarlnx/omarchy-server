@@ -60,7 +60,7 @@ func isoBuild(s *Session, profile string, fresh, debug bool) error {
 	return s.Run(Step{
 		Label: "iso build",
 		Args:  args,
-		Env:   []string{"OMARCHY_PKGS_DIR=" + cfg.PkgsRepo, "TUI_TOOLS_DIR=" + cfg.TuiTools},
+		Env:   []string{"OMARCHY_PKGS_DIR=" + cfg.PkgsRepo},
 	})
 }
 

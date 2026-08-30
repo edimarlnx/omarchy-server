@@ -56,18 +56,13 @@ git clone https://github.com/basecamp/omarchy.git upstream/omarchy
 git clone https://github.com/omacom-io/omarchy-iso.git upstream/omarchy-iso
 ```
 
-The `tui-firewall` and `tui-systemd` addon packages are built from the
-**tui-tools** checkouts, one repository per tool, expected side by side in a
-directory beside this one (`../tui-tools-org`, or `TUI_TOOLS_DIR`):
-
-```bash
-git clone https://github.com/tui-tools/tui-firewall.git ../tui-tools-org/tui-firewall
-git clone https://github.com/tui-tools/tui-systemd.git ../tui-tools-org/tui-systemd
-```
-
-`tui-firewall` was called `fwall` while the tools lived in one monorepo; the
-package `provides`/`replaces` that name, so a machine that installed it takes
-the rename as an ordinary upgrade.
+The **tui-tools** terminal UIs are not built here. They come from the signed
+pacman repository the tools publish themselves, `https://pkgs.tui.tools/arch/`,
+whose key (`767CFB33 7B01F32F FC073F3F 389120B2 77E4FB44`) is vendored in this
+repository and pinned by the addon's preflight. `iso/build.sh` downloads them,
+verifies every file against that key and drops them into the ISO's offline
+mirror; `omarchy-server-addon tui-tools` installs them and configures the
+repository so an installed machine gets updates from the same place.
 
 Published Omarchy packages: `https://pkgs.omarchy.org/stable/x86_64/`
 (`omarchy.db`). The upstream PKGBUILD repo is private, so the server packages
@@ -131,7 +126,7 @@ ssh and be firewalled, and nothing else. What a machine needs on top comes from
 an addon, bundled in the ISO's offline mirror but not installed:
 
 ```bash
-omarchy-server-addon --list          # cli-tools dev docker editor kexec net-tools secureboot tailscale tui-firewall tui-systemd vm
+omarchy-server-addon --list          # cli-tools dev docker editor kexec net-tools secureboot tailscale tui-tools vm
 omarchy-server-addon docker
 pocs/lab/mkcidata.sh --profile server --addons docker    # or at install time
 ```
@@ -139,7 +134,11 @@ pocs/lab/mkcidata.sh --profile server --addons docker    # or at install time
 An installed machine gets those from the signed `[omarchy-server]` repository,
 which `omarchy-server-settings` enables by shipping
 `/etc/pacman.d/omarchy-server.conf` and including it from every channel's
-`pacman.conf`. `docs/packaging.md` §5 is how that works.
+`pacman.conf`. `docs/packaging.md` §5 is how that works. The `tui-tools` addon
+is the one that comes from somewhere else: its preflight adds `[tui-tools]`
+(`SigLevel = Required`) pointing at `https://pkgs.tui.tools/arch/$arch` and
+locally signs the key that repository publishes, after checking its fingerprint
+against the one pinned in the profile.
 
 ## Updating
 

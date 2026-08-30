@@ -84,10 +84,6 @@ func cmdDoctor(args []string) error {
 	for _, checkout := range []struct{ name, path, marker, remedy string }{
 		{"omarchy-server-pkgs", cfg.PkgsRepo, "pkgbuilds",
 			"git clone https://github.com/edimarlnx/omarchy-server-pkgs.git " + cfg.PkgsRepo},
-		{"tui-firewall", filepath.Join(cfg.TuiTools, "tui-firewall"), ".git",
-			"git clone https://github.com/tui-tools/tui-firewall.git " + filepath.Join(cfg.TuiTools, "tui-firewall")},
-		{"tui-systemd", filepath.Join(cfg.TuiTools, "tui-systemd"), ".git",
-			"git clone https://github.com/tui-tools/tui-systemd.git " + filepath.Join(cfg.TuiTools, "tui-systemd")},
 		{"upstream/omarchy", cfg.UpstreamOmarchy, ".git",
 			"git clone https://github.com/basecamp/omarchy.git " + cfg.UpstreamOmarchy},
 		{"upstream/omarchy-iso", cfg.UpstreamOmarchyISO, ".git",

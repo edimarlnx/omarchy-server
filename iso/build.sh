@@ -158,22 +158,97 @@ else
       -C "$repo_root/profile/server" overlay addons branding
   done
 
-  # Addon packages built from their own upstream get a clone under
-  # <pkgs-checkout>/src/, which the patched builder/build-omarchy-packages.sh
-  # marks safe for git and hands to the PKGBUILD through <NAME>_SRC. A clone
-  # rather than a copy: the working tree's uncommitted state must not decide what
-  # a package contains, and the PKGBUILDs consume a pinned commit anyway.
-  tui_tools_dir=${TUI_TOOLS_DIR:-$repo_root/../tui-tools-org}
-  mkdir -p "$pkgs_scratch/src"
-  for tool in tui-firewall tui-systemd; do
-    if [[ ! -d $tui_tools_dir/$tool/.git ]]; then
-      echo "Error: $tui_tools_dir/$tool is not a git clone; the $tool addon needs it." >&2
-      echo "       Set TUI_TOOLS_DIR to the directory holding the checkouts." >&2
-      exit 1
+  # ── the tui-tools packages ────────────────────────────────────────────────
+  # The `tui-tools` addon's packages are downloaded from the repository the
+  # tools publish themselves and dropped into <pkgs-checkout>/prebuilt/, the
+  # same door the SELinux set comes through. They used to be BUILT here, from
+  # two local checkouts, and served out of [omarchy-server]; rebuilding
+  # somebody else's releases to hand them to a user is a maintenance debt with
+  # no upside, and it also meant the ISO carried a version nobody could
+  # reproduce from a signed source.
+  #
+  # Every file is verified against the repository's signing key -- pinned by
+  # fingerprint below, and the same key the addon's preflight imports into
+  # pacman on the installed machine -- BEFORE it is copied anywhere. The
+  # offline mirror itself is unsigned (see iso/patches/0011), so this download
+  # is the only place the signature can be checked at all, which is why a
+  # failure here is fatal rather than a warning.
+  tui_tools_repo=${TUI_TOOLS_REPO_URL:-https://pkgs.tui.tools/arch/x86_64}
+  tui_tools_key="$repo_root/profile/server/overlay/runtime/install/server/addons/tui-tools.pubkey.asc"
+  tui_tools_fingerprint=767CFB337B01F32FFC073F3F389120B277E4FB44
+  tui_tools_cache="$iso_dir/scratch/tui-tools"
+  mkdir -p "$tui_tools_cache" "$pkgs_scratch/prebuilt"
+
+  # A throwaway keyring holding exactly one key: the verification says "signed
+  # by this key", not "signed by something in the operator's keyring".
+  tui_tools_gnupg=$(mktemp -d)
+  chmod 700 "$tui_tools_gnupg"
+  gpg --quiet --homedir "$tui_tools_gnupg" --import "$tui_tools_key"
+  gpg --quiet --homedir "$tui_tools_gnupg" --list-keys --with-colons |
+    awk -F: '$1 == "fpr" { print $10 }' | grep -qx "$tui_tools_fingerprint" || {
+    echo "Error: $tui_tools_key is not key $tui_tools_fingerprint." >&2
+    exit 1
+  }
+
+  tui_tools_fetch() { # <filename>
+    if [[ ! -f $tui_tools_cache/$1 ]]; then
+      curl -fsSL --retry 3 -o "$tui_tools_cache/$1.part" "$tui_tools_repo/$1" || return 1
+      mv -f "$tui_tools_cache/$1.part" "$tui_tools_cache/$1"
     fi
-    echo "› cloning $tui_tools_dir/$tool into $pkgs_scratch/src/$tool"
-    git clone --quiet --no-hardlinks "$tui_tools_dir/$tool" "$pkgs_scratch/src/$tool"
-  done
+  }
+  tui_tools_verify() { # <filename>, with its detached signature beside it
+    gpg --quiet --homedir "$tui_tools_gnupg" --trust-model always \
+      --verify "$tui_tools_cache/$1.sig" "$tui_tools_cache/$1" 2>/dev/null
+  }
+
+  echo "› fetching the tui-tools packages from $tui_tools_repo"
+  # The database is refreshed on every build: a cached one would pin the ISO to
+  # whatever the repository held the first time this ran. The packages
+  # themselves are content-addressed by version in their filename, so those are
+  # cached across builds.
+  rm -f "$tui_tools_cache/tui-tools.db" "$tui_tools_cache/tui-tools.db.sig"
+  tui_tools_fetch tui-tools.db && tui_tools_fetch tui-tools.db.sig || {
+    echo "Error: cannot download the tui-tools database from $tui_tools_repo." >&2
+    exit 1
+  }
+  tui_tools_verify tui-tools.db || {
+    echo "Error: the tui-tools database is not signed by $tui_tools_fingerprint." >&2
+    exit 1
+  }
+
+  # %FILENAME% per package name, out of the signed database, so the file a
+  # package name resolves to is the one the repository says it is.
+  # bsdtar is what Arch has; a build host may only have GNU tar, which needs to
+  # be told to expand the pattern and can read zstd through its own -I hook.
+  tui_tools_filename() { # <package name>
+    if command -v bsdtar >/dev/null; then
+      bsdtar -xOf "$tui_tools_cache/tui-tools.db" "$1-*/desc" 2>/dev/null
+    else
+      tar --zstd -xOf "$tui_tools_cache/tui-tools.db" --wildcards "$1-*/desc" 2>/dev/null
+    fi | awk '/^%FILENAME%$/ { getline; print; exit }'
+  }
+
+  while read -r tool; do
+    file=$(tui_tools_filename "$tool")
+    [[ -n $file ]] || {
+      echo "Error: $tool is not in the tui-tools repository database." >&2
+      exit 1
+    }
+    tui_tools_fetch "$file" && tui_tools_fetch "$file.sig" || {
+      echo "Error: cannot download $tui_tools_repo/$file." >&2
+      exit 1
+    }
+    tui_tools_verify "$file" || {
+      echo "Error: $file is not signed by $tui_tools_fingerprint." >&2
+      exit 1
+    }
+    # The signature stays behind: the offline mirror is unsigned, and a .sig
+    # from a key the live environment does not trust is worse than none.
+    cp -f "$tui_tools_cache/$file" "$pkgs_scratch/prebuilt/"
+    echo "  ✓ $file"
+  done < <(grep -hv '^#\|^$' "$repo_root/profile/server/addons/tui-tools.packages")
+
+  rm -rf "$tui_tools_gnupg"
 fi
 
 # ── 5. build ────────────────────────────────────────────────────────────────

@@ -210,16 +210,25 @@ func runImageBuild(s *Session, lab *Lab, target string, waitSecs int, keep bool)
 	// 2-4. install the machine. Identical to `lab up`, because a cloud image is
 	//      an ordinary install of this profile plus the removal of everything
 	//      personal — not a separate build path that could drift from it.
-	if _, err := os.Stat(filepath.Join(lab.Out, "vm", lab.Name, "disk.qcow2")); err == nil {
-		s.Skip("vm create", "disk already exists")
-	} else {
-		create := []string{cfg.Script("pocs", "lab", "vm.sh"), lab.Name, "create", "--disk-gb", strconv.Itoa(lab.DiskGB)}
-		if lab.SecureBoot {
-			create = append(create, "--secboot")
-		}
-		if err := s.Run(Step{Label: "vm create", Args: create, Env: lab.env()}); err != nil {
+	// The build VM is a throwaway, and an image built on top of a disk left
+	// behind by an earlier run is the one failure of this pipeline that looks
+	// like a success: the machine boots, generalization works, the artifact is
+	// produced, and it is YESTERDAY's install. So a leftover disk is deleted
+	// rather than reused. (This is not the test VM: `image test` keeps its disk
+	// unless asked to recreate it, which is a different trade.)
+	buildDisk := filepath.Join(lab.Out, "vm", lab.Name, "disk.qcow2")
+	if _, err := os.Stat(buildDisk); err == nil && !cfg.DryRun {
+		s.Printf("removing the build VM left by an earlier run: %s", buildDisk)
+		if err := os.RemoveAll(filepath.Dir(buildDisk)); err != nil {
 			return err
 		}
+	}
+	create := []string{cfg.Script("pocs", "lab", "vm.sh"), lab.Name, "create", "--disk-gb", strconv.Itoa(lab.DiskGB)}
+	if lab.SecureBoot {
+		create = append(create, "--secboot")
+	}
+	if err := s.Run(Step{Label: "vm create", Args: create, Env: lab.env()}); err != nil {
+		return err
 	}
 	if err := s.Run(Step{
 		Label: "vm start",

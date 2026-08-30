@@ -2,7 +2,7 @@ diff --git a/builder/build-iso.sh b/builder/build-iso.sh
 index c7ad72b..1945986 100755
 --- a/builder/build-iso.sh
 +++ b/builder/build-iso.sh
-@@ -58,9 +58,14 @@ case "$OMARCHY_PROFILE" in
+@@ -58,9 +58,13 @@ case "$OMARCHY_PROFILE" in
      OMARCHY_SETTINGS_PACKAGE=omarchy-server-settings
      # No editor package: `nano` comes from the profile's archinstall.packages.
      OMARCHY_NVIM_PACKAGE=""
@@ -12,15 +12,14 @@ index c7ad72b..1945986 100755
 +    # Packages built from the local checkouts that are not the runtime or the
 +    # settings. omarchy-server-keyring signs the future [omarchy-server]
 +    # repository and is a hard dependency of the runtime, so the offline mirror
-+    # has to carry it. tui-firewall and tui-systemd are addon packages built
-+    # from their own source trees (see the *_SRC block in
-+    # build-omarchy-packages.sh): they are bundled in the mirror and installed
-+    # only by `omarchy-server-addon <name>`, never by the base profile.
-+    OMARCHY_EXTRA_PACKAGES="omarchy-server-keyring tui-firewall tui-systemd"
++    # has to carry it. The addon packages that are NOT built here -- the
++    # tui-tools family, the SELinux set -- reach the mirror through
++    # <pkgs-checkout>/prebuilt/ instead (patch 0011).
++    OMARCHY_EXTRA_PACKAGES="omarchy-server-keyring"
      ;;
    *)
      echo "ERROR: unknown profile: $OMARCHY_PROFILE" >&2
-@@ -120,6 +125,28 @@ rm -rf "$build_cache_dir/airootfs/etc/xdg/reflector"
+@@ -120,6 +124,28 @@ rm -rf "$build_cache_dir/airootfs/etc/xdg/reflector"
  
  # Bring in our archiso profile additions.
  cp -r /configs/* "$build_cache_dir/"

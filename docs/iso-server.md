@@ -35,9 +35,11 @@ there. The script:
 3. overlays `iso/overlay/` (whole files; empty today) and applies
    `iso/patches/*.patch` (changes to upstream files);
 4. assembles `iso/scratch/pkgs/` = `pkgs/pkgbuilds/` + `profile/<profile>/` +
-   the overlay tarballs that `pkgs/build.sh` also generates + `src/tui-firewall`
-   and `src/tui-systemd`, clones of the checkouts those addon packages build
-   from. That directory is the second argument of `--local-source`;
+   the overlay tarballs that `pkgs/build.sh` also generates + `prebuilt/`, the
+   packages that are neither built here nor downloadable from a public Arch
+   mirror: the SELinux set, and the `tui-tools` family fetched from
+   `https://pkgs.tui.tools` and verified against its pinned signing key. That
+   directory is the second argument of `--local-source`;
 5. runs `bin/omarchy-iso-make` **from the copy** with
    `--profile server --local-source upstream/omarchy iso/scratch/pkgs`.
 
@@ -65,14 +67,11 @@ That is why the PKGBUILDs honor `OMARCHY_SRC`:
 container the same checkout is at `/omarchy-source`. No other PKGBUILD change
 was needed.
 
-Addon packages built from their own upstream follow the same shape.
-`tui-firewall` reads `TUI_FIREWALL_SRC` and `tui-systemd` reads
-`TUI_SYSTEMD_SRC`, and their checkouts travel inside the pkgs directory
-(`<pkgs-checkout>/src/<name>`) rather than on mounts of their own, because
-`--local-source` takes exactly two paths and adding a third would mean patching
-`bin/omarchy-iso-make`. They are clones, not copies: the working tree's
-uncommitted state must not decide what a package contains, and the PKGBUILDs
-consume a pinned release tag anyway.
+Addon packages built from their own upstream would follow the same shape —
+`<NAME>_SRC` pointing at a checkout inside `<pkgs-checkout>/src/` — and patch
+`0007` still implements it, but nothing uses it today: the `tui-tools` packages
+that used to be built that way now arrive prebuilt and signed from
+`https://pkgs.tui.tools`.
 
 ---
 
@@ -86,8 +85,8 @@ consume a pinned release tag anyway.
 | `0004-orchestrator-server-profile.patch` | `orchestrator/phases_impl.py` | Reads the profile (`OMARCHY_PROFILE` → `/root/profile` from cidata → `/usr/share/omarchy-iso/profile`). With `server`: skips `configure_hibernation` (no swapfile, no `resume=`) and `configure_login` (no display manager); drops `base-devel` and `git` from the early bootstrap packages, which is where a compiler would otherwise enter the install regardless of the package lists; writes `/etc/omarchy-profile` into the target **before** `run_system_finalizer` (named profiles only — a desktop install is left without the marker so its `/etc` is unchanged); exports `OMARCHY_PROFILE` and `OMARCHY_UNATTENDED_UPDATES` into the `arch-chroot` env; does not install nvim/luarocks when the nvim target is empty; prefers `install/<profile>/omarchy-provision-owner.service` over the stock unit; runs `ufw limit 22/tcp` instead of `ufw allow ssh` in `configure_ssh_access`; and adds the `install_addons` phase. |
 | `0005-cidata-profile-and-addons.patch` | `usr/local/bin/omarchy-cidata-load` | Accepts `profile`, `addons` and `unattended-updates` files on the `cidata` drive, next to the other optional inputs, so one ISO can install another profile without a rebuild, an autoinstall can name the optional package sets to apply, and it can ask for the daily update timer. |
 | `0006-orchestrator-addons-phase.patch` | `orchestrator/main.py` | Registers `install_addons` in the phase list, right after `Configuring system`. |
-| `0007-build-packages-makedepends-and-extra-sources.patch` | `builder/build-omarchy-packages.sh` | `makepkg --nodeps` installs nothing at all, including makedepends a package genuinely needs to compile, so each PKGBUILD's `makedepends` are read out of `makepkg --printsrcinfo` and installed — and only those. Also picks up addon packages built from their own upstream: a checkout at `/omarchy-pkgs/src/<name>` gets a `safe.directory` entry and its `<NAME>_SRC` variable (`TUI_FIREWALL_SRC` for `tui-firewall`, `TUI_SYSTEMD_SRC` for `tui-systemd`), the same contract `OMARCHY_SRC` gives the Omarchy PKGBUILDs. |
-| `0008-build-iso-profile-branding-and-addon-packages.patch` | `builder/build-iso.sh` | Adds `tui-firewall` and `tui-systemd` to the server profile's locally built packages, so they land in the offline mirror and are never looked up on the network mirror. **Brands the live medium**: on a named profile the grub, syslinux and `profiledef.sh` labels become `Omarchy <Profile>` — a rename of the menu labels only, leaving the entry ids, the kernel command lines and the installer itself alone. |
+| `0007-build-packages-makedepends-and-extra-sources.patch` | `builder/build-omarchy-packages.sh` | `makepkg --nodeps` installs nothing at all, including makedepends a package genuinely needs to compile, so each PKGBUILD's `makedepends` are read out of `makepkg --printsrcinfo` and installed — and only those. Also picks up addon packages built from their own upstream: a checkout at `/omarchy-pkgs/src/<name>` gets a `safe.directory` entry and its `<NAME>_SRC` variable (the same contract `OMARCHY_SRC` gives the Omarchy PKGBUILDs). No profile uses that door today — the `tui-tools` packages it was written for now arrive prebuilt and signed. |
+| `0008-build-iso-profile-branding-and-addon-packages.patch` | `builder/build-iso.sh` | Names the server profile's extra locally built package (`omarchy-server-keyring`); addon packages that are not built here reach the mirror through `prebuilt/` (patch `0011`). **Brands the live medium**: on a named profile the grub, syslinux and `profiledef.sh` labels become `Omarchy <Profile>` — a rename of the menu labels only, leaving the entry ids, the kernel command lines and the installer itself alone. |
 | `0009-orchestrator-default-hostname.patch` | `orchestrator/context.py` | archinstall defaults `hostname` to `archlinux` and only overrides it when the JSON carries a non-empty value, so an autoinstall drive that says nothing about the hostname produces a machine called `archlinux`. Defaults it to `omarchy` instead — the same default the interactive configurator offers — while leaving an explicit hostname, including `archlinux`, untouched. |
 | `0010-orchestrator-secure-boot.patch` | `omarchy-cidata-load`, `orchestrator/{main,phases_impl}.py` | Secure Boot with the machine's own keys. Accepts a `secureboot` marker file on the `cidata` drive; exports `OMARCHY_SECURE_BOOT` into the chroot env; **prepends the `secureboot` addon** to the requested list so the existing `install_addons` phase does the setup (and so it lands before `finalize_limine_boot`, which the cmdline drop-in requires); and adds one phase, `enroll_secure_boot`, after `validate_boot`. See §2.2 and `docs/secure-boot.md`. |
 | `0011-build-iso-prebuilt-packages.patch` | `builder/build-iso.sh` | Packages that can be neither built here nor downloaded. `<pkgs-checkout>/prebuilt/*.pkg.tar.zst` is copied into the offline mirror, its names are excluded from the online download and added to the prune keep-set, and the `depend =` lines of each package's `.PKGINFO` are added to the download list so the dependency closure comes along. Kept in an array of its own, **not** in `local_package_names`: that list is also what the builder resolves to count the packages the target ends up with, and these are addon packages that replace packages the base installs. This is how the ~19-package SELinux set reaches a machine with no network. See `docs/mac.md` §6. |
@@ -417,8 +416,8 @@ The server cmdline comes from the `omarchy-defaults.conf` shipped by
 | Warm build (cached mirror) | **3m20s** |
 | Offline mirror | **1.5 GiB**, 1156 package files |
 | Packages the target install resolves to | ~220 (shipped in the ISO as the install dashboard's denominator) |
-| Packages built inside the ISO builder | `omarchy-server`, `omarchy-server-settings`, `omarchy-server-keyring`, `tui-firewall`, `tui-systemd` |
-| Warm build after adding `fwall` (now `tui-firewall`) | 3m36s-4m01s (the Go toolchain is installed in the throwaway builder container, ~250 MiB, and the compile itself is seconds) |
+| Packages built inside the ISO builder | `omarchy-server`, `omarchy-server-settings`, `omarchy-server-keyring` |
+| Packages bundled prebuilt | the SELinux set, and the 14 `tui-tools` binaries downloaded from `https://pkgs.tui.tools` and signature-checked before they enter the mirror |
 
 The ISO grew by ~70 MiB while the *install* shrank by 100 packages and 940 MiB.
 That is the addon trade: the base install no longer carries docker, a compiler,
@@ -477,10 +476,10 @@ repository's sources, and that ISO installs a headless machine that looks like
 Omarchy from the bootloader to the shell prompt and passes the whole acceptance
 list (`pocs/server-install/README.md`).
 
-The ISO also carries the `tui-firewall` and `tui-systemd` addon packages, built
-inside its own builder from the `tui-tools` checkouts. They are bundled in the
-offline mirror and installed only on request, so the base install is
-byte-for-byte the same 220 packages it was before.
+The ISO also carries the `tui-tools` terminal UIs, downloaded from the signed
+repository the tools publish themselves and verified against its pinned key
+before they enter the offline mirror. They are installed only on request, so
+the base install is byte-for-byte the same 220 packages it was before.
 
 The update path is non-interactive as of §3.1: `omarchy-server-update`, and the
 opt-in `omarchy-server-update.timer`, run the whole update as root with nothing
@@ -505,11 +504,12 @@ Left over, in rough order of how much they hurt:
    reloaded" and then `omarchy-restart-shell` says the config was not found.
    Cosmetic, and the only piece of the update path left untouched, because
    silencing it means a server branch in a command that has none today.
-5. **`omarchy-server-addon tui-firewall` has no source on an installed
-   machine.** Every other addon installs from the Arch or `[omarchy]` mirrors;
-   `tui-firewall` and `tui-systemd` are built here, so until `[omarchy-server]`
-   is published (item 6) they can only be applied during the install, from the
-   ISO's offline mirror.
+5. ~~**`omarchy-server-addon tui-firewall` has no source on an installed
+   machine.**~~ Closed: the tools publish their own signed repository, and the
+   `tui-tools` addon's preflight configures it (`SigLevel = Required`) and
+   locally signs its key after checking the fingerprint, so the addon works on
+   an installed machine with a network and from the offline mirror without
+   one.
 6. **The `[omarchy]` mirror is still `Optional TrustAll`** and the offline
    mirror `Never`. A signed repository of our own, with
    `/etc/pacman.d/omarchy-server.conf` shipped by the profile, is the next

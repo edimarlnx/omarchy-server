@@ -234,13 +234,14 @@ check "the banner is wired into every login shell" \
   'test -f /etc/profile.d/omarchy-motd.sh && grep -q omarchy-server-motd /etc/profile.d/omarchy-motd.sh && echo motd-wired || echo motd-missing' \
   '^motd-wired$'
 
-# tui-firewall and tui-systemd are addons. On a machine installed without them
-# they are simply absent; on one installed with `--addons tui-firewall,\
-# tui-systemd` they are present but nothing in the base may depend on them,
-# which is what "required-by=None" says. Both states pass, and the evidence
-# records which machine this is.
+# The tui-tools family is an addon. On a machine installed without it they are
+# simply absent; on one installed with `--addons tui-tools` they are present
+# but nothing in the base may depend on them, which is what "required-by=None"
+# says. Both states pass, and the evidence records which machine this is.
+# Three of the fourteen stand for the set: the firewall UI, the security review
+# and the systemd UI.
 check "the tui-* tools are addons, not base dependencies" \
-  'for p in tui-firewall tui-systemd; do
+  'for p in tui-firewall tui-secure tui-systemd; do
      if pacman -Qq $p >/dev/null 2>&1; then
        echo "$p: installed-by-addon, required-by=$(pacman -Qi $p | sed -n "s/^Required By *: //p")"
      else
@@ -259,9 +260,9 @@ check "the tui-* tools are addons, not base dependencies" \
 # On a machine without the addons there is nothing to render and the check says
 # so rather than failing.
 check "an installed tui-* tool renders a frame under a pty" \
-  'installed=$(for p in tui-firewall tui-systemd; do command -v $p >/dev/null 2>&1 && echo $p; done)
+  'installed=$(for p in tui-firewall tui-secure tui-systemd; do command -v $p >/dev/null 2>&1 && echo $p; done)
    if [ -z "$installed" ]; then
-     echo "frames-missing=0 (neither tool is installed on this machine)"
+     echo "frames-missing=0 (none of the tools is installed on this machine)"
    else
      for p in $installed; do
        TERM=xterm-256color COLUMNS=120 LINES=40 \
@@ -275,6 +276,22 @@ check "an installed tui-* tool renders a frame under a pty" \
      echo "frames-missing=$(grep -c no-frame /tmp/tui-frames)"
    fi' \
   '^frames-missing=0'
+
+# Where a machine installed with the tui-tools addon will fetch updates from,
+# and under whose key. The repository is configured by the addon's preflight,
+# and the key it pins has to be locally signed in pacman's keyring or every
+# package from it would be rejected. On a machine without the addon there is
+# nothing to configure and the check says so.
+check "the tui-tools repository is configured and its key trusted" \
+  'if command -v tui-firewall >/dev/null 2>&1; then
+     pacman-conf --repo-list | grep -qx tui-tools && echo "repo=configured" || echo "repo=missing"
+     pacman-conf --repo tui-tools SigLevel | tr "\n" " "; echo
+     pacman-key --list-keys 767CFB337B01F32FFC073F3F389120B277E4FB44 >/dev/null 2>&1 &&
+       echo "key=known" || echo "key=absent"
+   else
+     echo "repo=configured"; echo "key=known"; echo "(the addon is not installed on this machine)"
+   fi' \
+  '^repo=configured$'
 
 # The addon mechanism, end to end: install the docker addon from the ISO's
 # offline mirror and run a container with it. On a VM installed with

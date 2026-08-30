@@ -1,0 +1,38 @@
+# The tui-tools terminal UIs for the things a server administrator does.
+#
+# One addon for the whole family, from the signed pacman repository the tools
+# publish themselves (https://pkgs.tui.tools/arch/$arch). It replaces the
+# per-tool `tui-firewall` and `tui-systemd` addons, which built two of these
+# tools from source inside the ISO builder and served them out of
+# [omarchy-server]: the tools now have a release channel of their own, signed
+# by their own key, and rebuilding somebody else's software to hand it to a
+# user is a maintenance debt with no upside.
+#
+# Every one of them is a single static Go binary that shells out to the tool
+# the machine already has (ufw, systemctl, journalctl, pacman, snapper, ssh,
+# smbd, podman/docker). No daemon, no listening socket, no setuid path: what
+# they add to the attack surface is the code you run when you sit at the
+# console, which is why this is an addon and not part of the base.
+#
+# install/server/addons/tui-tools.preflight.sh is what configures the
+# repository and pins its signing key BEFORE any of this is installed.
+#
+# The list is explicit rather than a `tui-tools` metapackage: the metapackage
+# does not exist in the repository yet, and naming the members is also what
+# tells the ISO builder which packages to bundle in its offline mirror. When
+# the metapackage ships, this becomes one line and the preflight stays as it
+# is.
+tui-cert
+tui-containers
+tui-cron
+tui-disk
+tui-firewall
+tui-logs
+tui-network
+tui-samba
+tui-secure
+tui-snapper
+tui-ssh
+tui-systemd
+tui-update
+tui-users

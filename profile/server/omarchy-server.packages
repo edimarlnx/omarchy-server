@@ -18,6 +18,16 @@
 #     pacman-contrib through its dependencies)
 
 btrfs-progs
+# checkupdates, from pacman-contrib below, is what omarchy-update-available and
+# the update timer ask "is there anything to install?". It builds a throwaway
+# copy of the sync databases and refreshes it as an unprivileged user, which it
+# does by running pacman under fakeroot -- without this package it exits with
+# "cannot find fakeroot binary" and every update check reports nothing to do.
+# fakeroot works by LD_PRELOAD of libfakeroot.so plus a helper daemon in the
+# same session: no setuid bit, no capability, no privilege the caller did not
+# already have. It grants none either -- the pacman it wraps only writes into
+# the temporary database directory it was pointed at.
+fakeroot
 # Required by limine-mkinitcpio-hook: it is the hook that regenerates the UKI,
 # and nothing else in this list pulls mkinitcpio in.
 mkinitcpio
@@ -48,7 +58,8 @@ zram-generator
 # Deliberately NOT in the core, with the addon that brings each one back:
 #   docker docker-compose docker-buildx ufw-docker lazydocker   → docker
 #   tailscale                                                   → tailscale
-#   base-devel yay git mise-bin fakeroot                        → dev
+#   base-devel yay git mise-bin                                 → dev
+#   the tui-tools terminal UIs                                  → tui-tools
 #   btop bat eza fd fzf ripgrep tmux zoxide tldr fastfetch
 #     dua-cli lazygit                                           → cli-tools
 #   omarchy-nvim                                                → editor

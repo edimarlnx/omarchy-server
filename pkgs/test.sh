@@ -195,8 +195,18 @@ EOF
     # The runtime depends are what a pacman install of omarchy-server drags in
     # unconditionally, so this is where the base stops being lean if a desktop
     # dependency creeps back.
-    check "runtime does not depend on git/jq/perl/fakeroot" bash -c \
-      "! pacman -Qi omarchy-server | sed -n \"/^Depends On/,/^Optional Deps/p\" | grep -qE \"(^| )(git|jq|perl|fakeroot)( |$)\""
+    # fakeroot is NOT in this list any more: checkupdates, which
+    # omarchy-update-available and the MOTD call, refuses to run without it.
+    # It is a declared dependency of the runtime as of 4.0.1-14.
+    check "runtime does not depend on git/jq/perl" bash -c \
+      "! pacman -Qi omarchy-server | sed -n \"/^Depends On/,/^Optional Deps/p\" | grep -qE \"(^| )(git|jq|perl)( |$)\""
+    check "runtime depends on fakeroot, which checkupdates needs" bash -c \
+      "pacman -Qi omarchy-server | sed -n \"/^Depends On/,/^Optional Deps/p\" | grep -q fakeroot"
+    # checkupdates exits 0 with updates pending and 2 with none; both mean it
+    # ran. Without fakeroot it dies with 1 and every update check would report
+    # a machine that is up to date when it is not.
+    check "checkupdates runs instead of dying on a missing fakeroot" bash -c \
+      "checkupdates >/dev/null 2>&1; status=\$?; test \$status -eq 0 -o \$status -eq 2"
     check "docker is not installed" bash -c "! pacman -Qq docker >/dev/null 2>&1"
     check "tailscale is not installed" bash -c "! pacman -Qq tailscale >/dev/null 2>&1"
     check "networkmanager is not installed" bash -c \
@@ -223,7 +233,7 @@ EOF
     check "omarchy-server-addon is linked into /usr/bin" bash -c \
       "test -L /usr/bin/omarchy-server-addon"
     check "omarchy-server-addon --list names every addon" bash -c \
-      "for a in cli-tools dev docker editor net-tools secureboot tailscale tui-firewall tui-systemd vm; do omarchy-server-addon --list | grep -qx \"\$a\" || exit 1; done"
+      "for a in cli-tools dev docker editor net-tools secureboot tailscale tui-tools vm; do omarchy-server-addon --list | grep -qx \"\$a\" || exit 1; done"
     check "omarchy-server-addon --help does not touch the system" \
       omarchy-server-addon --help
     check "an unknown addon fails" bash -c \
@@ -252,43 +262,27 @@ EOF
       "test -L /usr/bin/omarchy-server-secureboot && bash -n /usr/share/omarchy/bin/omarchy-server-secureboot"
     check "omarchy-server-secureboot --help does not touch the system" \
       omarchy-server-secureboot --help
-    check "the tui-* tools are addons, not part of the base" bash -c \
-      "grep -qx tui-firewall /usr/share/omarchy/install/server/addons/tui-firewall.packages && grep -qx tui-systemd /usr/share/omarchy/install/server/addons/tui-systemd.packages && ! pacman -Qq tui-firewall >/dev/null 2>&1 && ! pacman -Qq tui-systemd >/dev/null 2>&1"
+    check "the tui-tools addon names the tools and installs none of them" bash -c \
+      "grep -qx tui-firewall /usr/share/omarchy/install/server/addons/tui-tools.packages && grep -qx tui-secure /usr/share/omarchy/install/server/addons/tui-tools.packages && ! pacman -Qq tui-firewall >/dev/null 2>&1 && ! pacman -Qq tui-secure >/dev/null 2>&1"
 
     echo
-    echo "== tui-firewall =="
-    # Installed here rather than through omarchy-server-addon, which would need
-    # sudo and a real firewall; what is being checked is the package.
-    pacman -S --noconfirm tui-firewall >/dev/null
-    check "tui-firewall installs a static binary" bash -c \
-      "test -x /usr/bin/tui-firewall && ! ldd /usr/bin/tui-firewall 2>&1 | grep -q libc.so"
-    check "tui-firewall --version reports the packaged version" bash -c \
-      "tui-firewall --version | grep -q 0.1.0"
-    check "tui-firewall ships a ufw-pinned configuration" bash -c \
-      "grep -qx \"backend = \\\"ufw\\\"\" /etc/tui-firewall/config.toml"
-    # The README is read out of the package file, not the filesystem: the
-    # archlinux container image carries NoExtract = usr/share/doc/* .
-    check "tui-firewall ships its licence and README" bash -c \
-      "test -s /usr/share/licenses/tui-firewall/LICENSE && bsdtar -tf /repo/tui-firewall-*.pkg.tar.zst | grep -qx usr/share/doc/tui-firewall/README.md"
-    # The tool was called fwall until it moved to the tui-tools organization.
-    # A machine that installed the old name has to take this package as an
-    # upgrade rather than a second copy of the same binary.
-    check "tui-firewall replaces the old fwall package" bash -c \
-      "pacman -Qi tui-firewall | grep -q \"^Replaces .*fwall\" && pacman -Qi tui-firewall | grep -q \"^Provides .*fwall\""
-    pacman -Rns --noconfirm tui-firewall >/dev/null
-
-    echo
-    echo "== tui-systemd =="
-    pacman -S --noconfirm tui-systemd >/dev/null
-    check "tui-systemd installs a static binary" bash -c \
-      "test -x /usr/bin/tui-systemd && ! ldd /usr/bin/tui-systemd 2>&1 | grep -q libc.so"
-    check "tui-systemd --version reports the packaged version" bash -c \
-      "tui-systemd --version | grep -q 0.1.0"
-    check "tui-systemd ships the machine-wide configuration it reads" bash -c \
-      "grep -q \"^sudo = \" /etc/tui-systemd/config.toml"
-    check "tui-systemd ships its licence and README" bash -c \
-      "test -s /usr/share/licenses/tui-systemd/LICENSE && bsdtar -tf /repo/tui-systemd-*.pkg.tar.zst | grep -qx usr/share/doc/tui-systemd/README.md"
-    pacman -Rns --noconfirm tui-systemd >/dev/null
+    echo "== tui-tools addon =="
+    # The packages themselves are not built here any more: they come signed
+    # from https://pkgs.tui.tools, and the ISO downloads them into its offline
+    # mirror. What this repository still owns is the preflight that decides
+    # WHICH key a machine ends up trusting, so that is what is asserted.
+    check "the addon ships a preflight that runs before any install" \
+      test -f /usr/share/omarchy/install/server/addons/tui-tools.preflight.sh
+    check "the preflight parses" bash -c \
+      "bash -n /usr/share/omarchy/install/server/addons/tui-tools.preflight.sh"
+    check "the repository is configured Required, not TrustAll" bash -c \
+      "grep -qE \"^SigLevel .*TrustedOnly\" /usr/share/omarchy/install/server/addons/tui-tools.preflight.sh && ! grep -qE \"^SigLevel .*TrustAll\" /usr/share/omarchy/install/server/addons/tui-tools.preflight.sh"
+    check "the signing key is vendored, not fetched blind" bash -c \
+      "test -s /usr/share/omarchy/install/server/addons/tui-tools.pubkey.asc"
+    check "the vendored key is the pinned fingerprint" bash -c \
+      "gpg --show-keys --with-colons /usr/share/omarchy/install/server/addons/tui-tools.pubkey.asc | grep -q 767CFB337B01F32FFC073F3F389120B277E4FB44"
+    check "the preflight pins that same fingerprint" bash -c \
+      "grep -q 767CFB337B01F32FFC073F3F389120B277E4FB44 /usr/share/omarchy/install/server/addons/tui-tools.preflight.sh"
 
     echo
     echo "== measurements =="

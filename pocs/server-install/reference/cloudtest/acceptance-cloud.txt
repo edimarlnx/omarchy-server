@@ -1,4 +1,4 @@
-=== Cloud image acceptance — VM 'cloudtest' — 2026-08-29T17:31:58-03:00 ===
+=== Cloud image acceptance — VM 'cloudtest' — 2026-08-30T09:03:57-03:00 ===
 
 [PASS] cloud-init finished its run
       $ cloud-init status --wait 2>&1 | tail -3; echo "exit=$?"
@@ -44,7 +44,7 @@
    sudo -n passwd -S root
       root field: [!]
       root_locked=yes
-      root L 2026-08-29 -1 -1 -1 -1
+      root L 2026-08-30 -1 -1 -1 -1
 
 [PASS] no build credentials anywhere on the image
       $ ls -la /home/*/.lab-pw /home/*/.lab-sudo /etc/sudoers.d/ 2>&1 | tail -20;
@@ -57,16 +57,16 @@
 [PASS] machine-id was generated on this machine
       $ echo "machine-id: $(cat /etc/machine-id)"; echo "length: $(wc -c </etc/machine-id)";
    sudo -n systemd-id128 machine-id 2>/dev/null | head -1
-      machine-id: 5b08a83112af46099b9a3c188f9b2f36
+      machine-id: 9334877cfa4140b4887b37c63d4ae99a
       length: 33
-      5b08a83112af46099b9a3c188f9b2f36
+      9334877cfa4140b4887b37c63d4ae99a
 
 [PASS] ssh host keys were regenerated at first boot
       $ ls -l --time-style=+%F_%T /etc/ssh/ssh_host_*_key.pub;
    echo "count=$(ls /etc/ssh/ssh_host_*_key 2>/dev/null | wc -l)"
-      -rw-r--r-- 1 root root 185 2026-08-29_17:31:48 /etc/ssh/ssh_host_ecdsa_key.pub
-      -rw-r--r-- 1 root root 105 2026-08-29_17:31:48 /etc/ssh/ssh_host_ed25519_key.pub
-      -rw-r--r-- 1 root root 577 2026-08-29_17:31:48 /etc/ssh/ssh_host_rsa_key.pub
+      -rw-r--r--. 1 root root 185 2026-08-30_09:03:45 /etc/ssh/ssh_host_ecdsa_key.pub
+      -rw-r--r--. 1 root root 105 2026-08-30_09:03:45 /etc/ssh/ssh_host_ed25519_key.pub
+      -rw-r--r--. 1 root root 577 2026-08-30_09:03:45 /etc/ssh/ssh_host_rsa_key.pub
       count=3
 
 [PASS] the first-boot unit ran and said what it did
@@ -74,26 +74,26 @@
    sudo -n journalctl -u omarchy-server-firstboot --no-pager 2>/dev/null | tail -12;
    echo "marker: $(sudo -n cat /var/lib/omarchy/firstboot-done 2>/dev/null)"
       enabled
-      Aug 29 17:31:49 omarchy-cloud-test omarchy-server-firstboot[648]:   -> Running build hook: [fsck]
-      Aug 29 17:31:49 omarchy-cloud-test omarchy-server-firstboot[648]:   -> Running build hook: [btrfs-overlayfs]
-      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[648]: ==> Generating module dependencies
-      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[648]: ==> Creating zstd-compressed initcpio image
-      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[648]:   -> Early uncompressed CPIO image generation successful
-      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[648]: ==> Initcpio image generation successful
-      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[648]: ==> Creating unified kernel image: '/tmp/limine-mkinitcpio.LiNog6/linux.efi'
-      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[648]: ==> Unified kernel image generation successful
-      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[4285]: Updated: /boot/limine.conf
-      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[509]: firstboot: removed the build machine's boot entry (374c2b64738846d28afa702410786a97)
-      Aug 29 17:31:50 omarchy-cloud-test omarchy-server-firstboot[509]: firstboot: done
-      Aug 29 17:31:50 omarchy-cloud-test systemd[1]: Finished Omarchy Server first boot (ssh host keys, Secure Boot keys).
-      marker: 2026-08-29T17:31:50-03:00
+      Aug 30 09:03:47 omarchy-cloud-test omarchy-server-firstboot[649]:   -> Running build hook: [fsck]
+      Aug 30 09:03:47 omarchy-cloud-test omarchy-server-firstboot[649]:   -> Running build hook: [btrfs-overlayfs]
+      Aug 30 09:03:48 omarchy-cloud-test omarchy-server-firstboot[649]: ==> Generating module dependencies
+      Aug 30 09:03:48 omarchy-cloud-test omarchy-server-firstboot[649]: ==> Creating zstd-compressed initcpio image
+      Aug 30 09:03:48 omarchy-cloud-test omarchy-server-firstboot[649]:   -> Early uncompressed CPIO image generation successful
+      Aug 30 09:03:48 omarchy-cloud-test omarchy-server-firstboot[649]: ==> Initcpio image generation successful
+      Aug 30 09:03:48 omarchy-cloud-test omarchy-server-firstboot[649]: ==> Creating unified kernel image: '/tmp/limine-mkinitcpio.eO1upw/linux.efi'
+      Aug 30 09:03:48 omarchy-cloud-test omarchy-server-firstboot[649]: ==> Unified kernel image generation successful
+      Aug 30 09:03:48 omarchy-cloud-test omarchy-server-firstboot[4283]: Updated: /boot/limine.conf
+      Aug 30 09:03:48 omarchy-cloud-test omarchy-server-firstboot[508]: firstboot: removed the build machine's boot entry (f5a908f35ea64857b478c0de422e8252)
+      Aug 30 09:03:48 omarchy-cloud-test omarchy-server-firstboot[508]: firstboot: done
+      Aug 30 09:03:48 omarchy-cloud-test systemd[1]: Finished Omarchy Server first boot (ssh host keys, Secure Boot keys).
+      marker: 2026-08-30T09:03:48-03:00
 
 [PASS] the image's journal mentions nothing of the build machine
       $ echo "boots recorded: $(sudo -n journalctl --list-boots --no-pager 2>/dev/null | wc -l)";
    echo "first entry: $(sudo -n journalctl --no-pager -o short-iso 2>/dev/null | head -1)";
    echo "build_user_mentions=$(sudo -n journalctl --no-pager 2>/dev/null | grep -c 'imgbuild')"
       boots recorded: 2
-      first entry: 2026-08-29T17:31:45-03:00 omarchy-server kernel: Linux version 7.1.11-arch1-1 (linux@archlinux) (gcc (GCC) 16.2.1 20260810, GNU ld (GNU Binutils) 2.47) #1 SMP PREEMPT_DYNAMIC Fri, 28 Aug 2026 03:36:07 +0000
+      first entry: 2026-08-30T09:03:42-03:00 omarchy-server kernel: Linux version 7.1.11-arch1-1 (linux@archlinux) (gcc (GCC) 16.2.1 20260810, GNU ld (GNU Binutils) 2.47) #1 SMP PREEMPT_DYNAMIC Fri, 28 Aug 2026 03:36:07 +0000
       build_user_mentions=0
 
 [PASS] growpart + btrfs resize filled the 40 GiB disk
@@ -108,7 +108,7 @@
                        /home
                        /
       Filesystem      Size  Used Avail Use% Mounted on
-      /dev/vda2        38G  1.2G   37G   3% /
+      /dev/vda2        38G  1.3G   37G   4% /
       --- btrfs ---
       Overall:
           Device size:		  38.00GiB
@@ -120,14 +120,14 @@
 
 [PASS] growpart and resizefs are in the cloud-init log, not assumed
       $ sudo -n grep -hiE "growpart|resizefs|resize" /var/log/cloud-init.log 2>/dev/null | tail -8
-      2026-08-29 20:31:48,187 - modules.py[DEBUG]: Running module resizefs (<module 'cloudinit.config.cc_resizefs' from '/usr/lib/python3.14/site-packages/cloudinit/config/cc_resizefs.py'>) with frequency always
-      2026-08-29 20:31:48,187 - handlers.py[DEBUG]: start: init-network/config-resizefs: running config-resizefs with frequency always
-      2026-08-29 20:31:48,187 - helpers.py[DEBUG]: Running config-resizefs using lock (<cloudinit.helpers.DummyLock object at 0x7f87b431ce10>)
-      2026-08-29 20:31:48,187 - cc_resizefs.py[DEBUG]: resize_info: dev=/dev/vda2 mnt_point=/ path=/
-      2026-08-29 20:31:48,188 - cc_resizefs.py[DEBUG]: Resizing / (btrfs) using btrfs filesystem resize --enqueue max /
-      2026-08-29 20:31:48,188 - subp.py[DEBUG]: Running command ('btrfs', 'filesystem', 'resize', '--enqueue', 'max', '/') with allowed return codes [0] (shell=False, capture=True)
-      2026-08-29 20:31:48,189 - cc_resizefs.py[DEBUG]: Resized root filesystem (type=btrfs, val=True)
-      2026-08-29 20:31:48,189 - handlers.py[DEBUG]: finish: init-network/config-resizefs: SUCCESS: config-resizefs ran successfully and took 0.002 seconds (duration: 0.002s)
+      2026-08-30 12:03:45,427 - modules.py[DEBUG]: Running module resizefs (<module 'cloudinit.config.cc_resizefs' from '/usr/lib/python3.14/site-packages/cloudinit/config/cc_resizefs.py'>) with frequency always
+      2026-08-30 12:03:45,427 - handlers.py[DEBUG]: start: init-network/config-resizefs: running config-resizefs with frequency always
+      2026-08-30 12:03:45,427 - helpers.py[DEBUG]: Running config-resizefs using lock (<cloudinit.helpers.DummyLock object at 0x7f6168458b90>)
+      2026-08-30 12:03:45,427 - cc_resizefs.py[DEBUG]: resize_info: dev=/dev/vda2 mnt_point=/ path=/
+      2026-08-30 12:03:45,428 - cc_resizefs.py[DEBUG]: Resizing / (btrfs) using btrfs filesystem resize --enqueue max /
+      2026-08-30 12:03:45,428 - subp.py[DEBUG]: Running command ('btrfs', 'filesystem', 'resize', '--enqueue', 'max', '/') with allowed return codes [0] (shell=False, capture=True)
+      2026-08-30 12:03:45,429 - cc_resizefs.py[DEBUG]: Resized root filesystem (type=btrfs, val=True)
+      2026-08-30 12:03:45,429 - handlers.py[DEBUG]: finish: init-network/config-resizefs: SUCCESS: config-resizefs ran successfully and took 0.002 seconds (duration: 0.002s)
 
 [PASS] os-release, issue and MOTD still say Omarchy
       $ grep -E "^(NAME|PRETTY_NAME|ID)=" /etc/os-release; echo "--- issue ---";
@@ -150,14 +150,15 @@
       $ echo "profile: $(cat /etc/omarchy-profile)"; echo "version: $(omarchy-version 2>/dev/null)";
    pacman -Q omarchy-server omarchy-server-settings 2>&1
       profile: server
-      version: 4.0.1-10
+      version: 4.0.1-14
       warning: database file for 'core' does not exist (use '-Sy' to download)
       warning: database file for 'extra' does not exist (use '-Sy' to download)
       warning: database file for 'multilib' does not exist (use '-Sy' to download)
       warning: database file for 'omarchy' does not exist (use '-Sy' to download)
       warning: database file for 'omarchy-server' does not exist (use '-Sy' to download)
-      omarchy-server 4.0.1-10
-      omarchy-server-settings 4.0.1-4
+      warning: database file for 'tui-tools' does not exist (use '-Sy' to download)
+      omarchy-server 4.0.1-14
+      omarchy-server-settings 4.0.1-6
 
 [PASS] the update entry point works on a machine nobody logs into
       $ omarchy-server-update status 2>&1 | head -12
@@ -196,16 +197,16 @@
 
 [PASS] the boot is still a server's boot
       $ systemd-analyze 2>&1; systemd-analyze blame 2>/dev/null | head -8
-      Startup finished in 512ms (firmware) + 2.885s (loader) + 785ms (kernel) + 5.428s (userspace) = 9.612s 
-      multi-user.target reached after 5.381s in userspace.
-      2.719s omarchy-server-firstboot.service
-      1.150s dev-vda2.device
-      1.027s systemd-tmpfiles-setup-dev-early.service
-      1.010s systemd-userdbd.service
-       636ms cloud-config.service
-       272ms cloud-init-network.service
-       269ms cloud-init-main.service
-       124ms ufw.service
+      Startup finished in 677ms (firmware) + 7.813s (loader) + 840ms (kernel) + 7.806s (userspace) = 17.138s 
+      multi-user.target reached after 7.748s in userspace.
+      3.972s omarchy-server-firstboot.service
+      1.217s dev-vda2.device
+      1.041s systemd-tmpfiles-setup-dev-early.service
+      1.017s systemd-userdbd.service
+       928ms omarchy-server-selinux-relabel.service
+       437ms cloud-init-network.service
+       303ms cloud-init-main.service
+       139ms ufw.service
 
 [PASS] @factory is present beside @
       $ sudo -n btrfs subvolume list / | awk "{print \$NF}" | grep -E "^@[^/]*$" | sort;

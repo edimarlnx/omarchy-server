@@ -496,9 +496,19 @@ capability to add, together with `Compute.MeasuredBootSupported` and
 
 x86_64, non-negotiable: this is an x86_64 Arch install with an x86_64 UKI, so
 the Ampere A1 shapes are not an option however cheap they are.
-`VM.Standard.E5.Flex` at 2 OCPU / 8 GB is the default and `VM.Standard.E4.Flex`
-the fallback in regions without E5. Both were confirmed present in the target
-region.
+
+The default is the smallest UEFI-capable x86 shape this image fits on:
+**`VM.Standard.E4.Flex`, 1 OCPU / 2 GB, baseline 12.5%** — a burstable
+instance, which is the honest description of a demo box somebody ssh's into
+once a day. `--baseline` takes `12.5` (`BASELINE_1_8`, the default), `50`
+(`BASELINE_1_2`) or `none` (a full, non-burstable OCPU) and it is only
+meaningful on a Flex shape. `VM.Standard.E5.Flex` is the documented
+alternative for a machine expected to do actual work; both shapes were
+confirmed present in the target region.
+
+2 GB is enough because the base install is 194 packages with no desktop and no
+docker: the machine boots into `multi-user.target` using a few hundred MiB,
+and `zram-generator` gives it compressed swap on top.
 
 ### What the scripts refuse to create
 

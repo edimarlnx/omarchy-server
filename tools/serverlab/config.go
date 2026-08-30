@@ -24,7 +24,6 @@ type Config struct {
 	Path string
 
 	PkgsRepo           string // the omarchy-server-pkgs checkout (repo B)
-	TuiTools           string // holds the tui-tools checkouts (tui-firewall, tui-systemd)
 	UpstreamOmarchy    string // upstream/omarchy clone
 	UpstreamOmarchyISO string // upstream/omarchy-iso clone
 
@@ -46,7 +45,6 @@ func defaultConfig(root string) *Config {
 	return &Config{
 		Root:               root,
 		PkgsRepo:           filepath.Join(filepath.Dir(root), "omarchy-server-pkgs"),
-		TuiTools:           filepath.Join(filepath.Dir(root), "tui-tools-org"),
 		UpstreamOmarchy:    filepath.Join(root, "upstream", "omarchy"),
 		UpstreamOmarchyISO: filepath.Join(root, "upstream", "omarchy-iso"),
 		Profile:            "server",
@@ -157,7 +155,6 @@ func (c *Config) applyTOML(sections map[string]map[string]string) error {
 	}
 
 	setString("paths", "pkgs_repo", &c.PkgsRepo)
-	setString("paths", "tui_tools", &c.TuiTools)
 	setString("paths", "upstream_omarchy", &c.UpstreamOmarchy)
 	setString("paths", "upstream_omarchy_iso", &c.UpstreamOmarchyISO)
 	setString("defaults", "profile", &c.Profile)
@@ -188,10 +185,9 @@ func (c *Config) applyEnv() {
 			}
 		}
 	}
-	// OMARCHY_PKGS_DIR and TUI_TOOLS_DIR are the names pkgs/build.sh and
-	// iso/build.sh already read, so an exported shell keeps working.
+	// OMARCHY_PKGS_DIR is the name pkgs/build.sh and iso/build.sh already
+	// read, so an exported shell keeps working.
 	envString(&c.PkgsRepo, "SERVERLAB_PKGS_DIR", "OMARCHY_PKGS_DIR")
-	envString(&c.TuiTools, "SERVERLAB_TUI_TOOLS_DIR", "TUI_TOOLS_DIR")
 	envString(&c.Profile, "SERVERLAB_PROFILE")
 	envInt(&c.DiskGB, "SERVERLAB_DISK_GB")
 	envInt(&c.DataDiskGB, "SERVERLAB_DATA_DISK_GB")
@@ -203,7 +199,7 @@ func (c *Config) applyEnv() {
 // resolvePaths makes every path absolute, reading relative ones against the
 // repository root so a serverlab.toml can say "../omarchy-server-pkgs".
 func (c *Config) resolvePaths() {
-	for _, p := range []*string{&c.PkgsRepo, &c.TuiTools, &c.UpstreamOmarchy, &c.UpstreamOmarchyISO} {
+	for _, p := range []*string{&c.PkgsRepo, &c.UpstreamOmarchy, &c.UpstreamOmarchyISO} {
 		if *p == "" || filepath.IsAbs(*p) {
 			continue
 		}

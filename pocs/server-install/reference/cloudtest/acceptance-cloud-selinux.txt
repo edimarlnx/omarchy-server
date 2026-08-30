@@ -1,0 +1,256 @@
+=== Cloud image SELinux acceptance — VM 'cloudtest' — 2026-08-30T09:03:59-03:00 ===
+mode under test: as shipped
+
+[PASS] cloud-init finished its run
+      $ cloud-init status --wait 2>&1 | tail -3
+      status: done
+
+[PASS] the kernel initialised SELinux from the cmdline baked into the UKI
+      $ ls -d /sys/fs/selinux 2>&1; grep -o "lsm=[^ ]*" /proc/cmdline; echo "in-limine-conf=$(sudo -n grep -c "lsm=" /boot/limine.conf 2>/dev/null)"
+      /sys/fs/selinux
+      lsm=landlock,lockdown,yama,integrity,selinux,bpf
+      in-limine-conf=1
+
+[PASS] the refpolicy-arch policy is loaded
+      $ sestatus
+      SELinux status:                 enabled
+      SELinuxfs mount:                /sys/fs/selinux
+      SELinux root directory:         /etc/selinux
+      Loaded policy name:             refpolicy-arch
+      Current mode:                   permissive
+      Mode from config file:          permissive
+      Policy MLS status:              disabled
+      Policy deny_unknown status:     denied
+      Memory protection checking:     actual (secure)
+      Max kernel policy version:      35
+
+[PASS] the image records the mode it ships in, and the running mode agrees
+      $ echo "running=$(getenforce)"; grep -E "^SELINUX=" /etc/selinux/config
+      running=Permissive
+      SELINUX=permissive
+
+[PASS] the local policy module survived generalization
+      $ sudo -n semodule -l 2>/dev/null | grep -c omarchy_server; echo "modules=$(sudo -n semodule -l 2>/dev/null | wc -l)"
+      1
+      modules=416
+
+[PASS] the cloudinit_growpart boolean is on, or growpart cannot read the disk
+      $ sudo -n getsebool cloudinit_growpart
+      cloudinit_growpart --> on
+
+[PASS] the first-boot relabel ran and cleared its flag
+      $ ls -l /.autorelabel 2>&1; systemctl is-enabled omarchy-server-selinux-relabel.service
+      ls: cannot access '/.autorelabel': No such file or directory
+      enabled
+
+[PASS] and it reported what it did
+      $ sudo -n journalctl -u omarchy-server-selinux-relabel.service -b --no-pager -o cat | tail -6
+      Relabelling the filesystem against refpolicy-arch. This takes a few minutes.
+      Done. A reboot is not required, but is the cleanest way to pick up the
+      new labels in every already-running process.
+      omarchy-server-selinux-relabel.service: Deactivated successfully.
+      Finished Relabel the filesystem for SELinux (one-shot).
+      omarchy-server-selinux-relabel.service: Consumed 614ms CPU time over 928ms wall clock time, 88.3M memory peak.
+
+[PASS] the first boot's relabel cost is recorded
+      $ sudo -n systemd-analyze blame 2>/dev/null | grep -E "relabel|firstboot" ;
+   echo "relabel=$(sudo -n systemctl show -p ExecMainStartTimestampMonotonic -p ExecMainExitTimestampMonotonic omarchy-server-selinux-relabel.service | tr "\n" " ")"
+      3.972s omarchy-server-firstboot.service
+       928ms omarchy-server-selinux-relabel.service
+      relabel=ExecMainStartTimestampMonotonic=7642078 ExecMainExitTimestampMonotonic=8570571 
+
+[PASS] init is in init_t on the FIRST boot of the image, not kernel_t
+      $ sudo -n sh -c "tr -d \"\\0\" </proc/1/attr/current"
+      system_u:system_r:init_t
+
+[PASS] sshd runs in a domain of its own
+      $ sudo -n sh -c "for p in \$(pgrep -x sshd); do tr -d \"\\0\" </proc/\$p/attr/current; echo; done | sort -u"
+      system_u:system_r:sshd_t
+
+[PASS] the home directory cloud-init created is user_home_dir_t
+      $ ls -Zd /home /home/*
+        system_u:object_r:home_root_t /home
+      user_u:object_r:user_home_dir_t /home/demo
+
+[PASS] the authorized_keys cloud-init wrote is ssh_home_t
+      $ ls -Zd /home/demo/.ssh /home/demo/.ssh/authorized_keys
+      user_u:object_r:ssh_home_t /home/demo/.ssh
+      user_u:object_r:ssh_home_t /home/demo/.ssh/authorized_keys
+
+[PASS] nothing under /home or /root disagrees with the policy
+      $ sudo -n restorecon -nvR /home /root 2>&1 | head -10; echo "wrong=$(sudo -n restorecon -nvR /home /root 2>/dev/null | wc -l)"
+      wrong=0
+
+[PASS] the sudoers drop-in cloud-init wrote carries a policy label
+      $ sudo -n ls -Z /etc/sudoers.d/
+      system_u:object_r:etc_t 90-cloud-init-users
+      system_u:object_r:etc_t omarchy-passwd-tries
+      system_u:object_r:etc_t omarchy-selinux-role
+      system_u:object_r:etc_t omarchy-tzupdate
+
+[PASS] cloud-init's own state directory is labelled, not unlabeled
+      $ sudo -n ls -Zd /var/lib/cloud /var/lib/cloud/instance 2>&1
+      system_u:object_r:cloud_init_state_t /var/lib/cloud
+      system_u:object_r:cloud_init_state_t /var/lib/cloud/instance
+
+[PASS] the regenerated ssh host keys are sshd_key_t, not etc_t
+      $ sudo -n ls -Z /etc/ssh/ssh_host_*; echo "wrong=$(sudo -n ls -Z /etc/ssh/ssh_host_* | grep -vc sshd_key_t)"
+      system_u:object_r:sshd_key_t /etc/ssh/ssh_host_ecdsa_key
+      system_u:object_r:sshd_key_t /etc/ssh/ssh_host_ecdsa_key.pub
+      system_u:object_r:sshd_key_t /etc/ssh/ssh_host_ed25519_key
+      system_u:object_r:sshd_key_t /etc/ssh/ssh_host_ed25519_key.pub
+      system_u:object_r:sshd_key_t /etc/ssh/ssh_host_rsa_key
+      system_u:object_r:sshd_key_t /etc/ssh/ssh_host_rsa_key.pub
+      wrong=0
+
+[PASS] and the first-boot unit is the one that made them
+      $ sudo -n journalctl -u omarchy-server-firstboot.service -b --no-pager -o cat | grep -E "ssh host keys|SHA256" | head -5
+      Starting Omarchy Server first boot (ssh host keys, Secure Boot keys)...
+      firstboot: ssh host keys 0 -> 4
+      firstboot: 256 SHA256:mgTa9Lw97YJEHeJsKFXNcklWMmuiOJ3EqbzjlUdsBQg root@omarchy-server (ECDSA)
+      firstboot: 256 SHA256:qK11aGPL90Hk+Grfb3AsCmXxUf/YoJOUfIXTxJfcoFY root@omarchy-server (ED25519)
+      firstboot: 256 SHA256:BDsTVWJ0rlnpX8+GQ92l4mfpydoo1W+MLqOdPV5vZcE root@omarchy-server (MLDSA44-ED25519)
+
+[PASS] growpart and the btrfs resize filled the disk
+      $ df -h --output=size,used,avail / | tail -1; echo "root_gib=$(df --output=size -BG / | tail -1 | tr -dc "0-9")"
+        38G  1.3G   37G
+      root_gib=38
+
+[PASS] and they are in the cloud-init log rather than assumed
+      $ sudo -n grep -hE "config-(growpart|resizefs): SUCCESS" /var/log/cloud-init.log | tail -2
+      2026-08-30 12:03:45,427 - handlers.py[DEBUG]: finish: init-network/config-growpart: SUCCESS: config-growpart ran successfully and took 0.020 seconds (duration: 0.020s)
+      2026-08-30 12:03:45,429 - handlers.py[DEBUG]: finish: init-network/config-resizefs: SUCCESS: config-resizefs ran successfully and took 0.002 seconds (duration: 0.002s)
+
+[PASS] cloud-init finished with an empty error list, not merely 'done'
+      $ sudo -n cloud-init status --long | sed -n "1,12p"
+      status: done
+      extended_status: done
+      boot_status_code: enabled-by-generator
+      last_update: Thu, 01 Jan 1970 00:00:08 +0000
+      detail: DataSourceNoCloud [seed=/dev/sr0]
+      errors: []
+      recoverable_errors: {}
+
+[PASS] qemu-guest-agent is running, in a domain, on the virtio channel
+      $ systemctl is-active qemu-guest-agent.service; ls -l /dev/virtio-ports/ 2>&1 | tail -2;
+   sudo -n sh -c "for p in \$(pgrep -x qemu-ga); do tr -d \"\\0\" </proc/\$p/attr/current; echo; done"
+      active
+      total 0
+      lrwxrwxrwx. 1 root root 11 Aug 30 09:03 org.qemu.guest_agent.0 -> ../vport2p1
+      system_u:system_r:initrc_t
+
+[PASS] the host can freeze and thaw the guest through the agent
+      ping:    {"return": {}}
+      freeze:  {"return": 1}
+      status:  {"return": "frozen"}
+      thaw:    {"return": 1}
+      status:  {"return": "thawed"}
+
+[PASS] the cloud-init account logs in as staff_t, not the default user_t
+      $ id -Z; id -nG
+      staff_u:staff_r:staff_t
+      demo wheel
+
+[PASS] and sudo lands in sysadm_t, which is what makes the machine administrable
+      $ sudo -n id -Z
+      staff_u:sysadm_r:sysadm_t
+
+[PASS] the mapping is %wheel -> staff_u in the policy store's seusers
+      $ grep -Ev "^#|^$" /etc/selinux/refpolicy-arch/seusers
+      root:root
+      __default__:user_u
+      %wheel:staff_u
+
+[PASS] and sudoers carries the role transition for that same group
+      $ sudo -n cat /etc/sudoers.d/omarchy-selinux-role
+      # Written by omarchy-server-selinux admin-role.
+      #
+      # sudo changes the SELinux role as well as the Unix identity: a member
+      # of 'wheel' logs in as staff_u:staff_r:staff_t and runs sudo as
+      # staff_u:sysadm_r:sysadm_t. Without this line sudo gives Unix root and
+      # leaves the confined user context in place, which in enforcing means
+      # pacman, ufw, systemctl and setenforce are all refused.
+      Defaults:%wheel role=sysadm_r, type=sysadm_t
+
+[PASS] no file under /etc /usr /var has a label the policy disagrees with
+      $ sudo -n restorecon -nvR -e /var/lib/docker -e /var/lib/containerd /etc /usr /var 2>&1 | head -20;
+   echo "wrong=$(sudo -n restorecon -nvR -e /var/lib/docker -e /var/lib/containerd /etc /usr /var 2>/dev/null | wc -l)"
+      Can't stat exclude path "/var/lib/docker", No such file or directory - ignoring.
+      Can't stat exclude path "/var/lib/containerd", No such file or directory - ignoring.
+      wrong=0
+
+--- AVC denials of the FIRST boot (cloud-init, firstboot, qemu-ga) ---
+
+
+[PASS] the first boot's denial count was measured
+      0 AVC records on the boot that ran cloud-init
+
+[PASS] the denials are attributed to a domain, not left as a number
+      $ sudo -n dmesg | grep -oE 'scontext=[^ ]+' | sort | uniq -c | sort -rn | head -10; echo 'attributed'
+      attributed
+
+[PASS] sudo works and reaches root
+      $ sudo -n id -un
+      root
+
+[PASS] pacman can run a transaction
+      $ sudo -n pacman -Sy --noconfirm >/dev/null 2>&1; echo "pacman-exit=$?"; sudo -n pacman -Q pacman-contrib
+      pacman-exit=0
+      pacman-contrib 1.13.1-1
+
+[PASS] a snapper snapshot can be taken
+      $ sudo -n snapper -c root create -d cloud-selinux-acceptance --print-number
+      1
+
+[PASS] the firewall still answers
+      $ sudo -n ufw status verbose | head -6
+      Status: active
+      Logging: on (low)
+      Default: deny (incoming), allow (outgoing), disabled (routed)
+      New profiles: skip
+      
+      To                         Action      From
+
+[PASS] the update entry point runs the way its timer runs it
+      $ sudo -n systemctl start omarchy-server-update.service; sudo -n systemctl show -p Result -p ExecMainStatus omarchy-server-update.service
+      Result=success
+      ExecMainStatus=0
+
+[PASS] the boot entry still points at a UKI that exists
+      $ sudo -n grep -c "EFI/Linux" /boot/limine.conf; sudo -n ls -l /boot/EFI/Linux/
+      1
+      total 38308
+      -rwx------. 1 root root 39224320 Aug 30 09:00 omarchy_linux.efi
+
+--- rebooting ---
+boot id before: 63f7873e-2202-4d81-86d1-6c1c80d220b0
+boot id after:  27051825-6fdd-4650-843d-5d335d6a7c0b
+
+[PASS] the machine came back over ssh after a reboot
+      boot_id 63f7873e-2202-4d81-86d1-6c1c80d220b0 -> 27051825-6fdd-4650-843d-5d335d6a7c0b
+
+[PASS] SELinux is in the mode the machine was left in
+      $ getenforce
+      Permissive
+
+[PASS] cloud-init did not redo its once-per-instance work
+      $ cloud-init status --wait 2>&1 | tail -2; uname -n; ls -Zd /home/*
+      status: done
+      omarchy-cloud-test
+      user_u:object_r:user_home_dir_t /home/demo
+
+--- AVC denials of the SECOND boot ---
+
+
+[PASS] the second boot's denial count was measured
+      0 AVC records this boot
+
+[PASS] the home directory is still user_home_dir_t after the reboot
+      $ ls -Zd /home/*
+      user_u:object_r:user_home_dir_t /home/demo
+
+[PASS] and the root filesystem is still the grown one
+      $ echo "root_gib=$(df --output=size -BG / | tail -1 | tr -dc "0-9")"
+      root_gib=38
+
+=== 42 passed, 0 failed ===

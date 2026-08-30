@@ -15,8 +15,12 @@
 #
 # The shape must be x86_64: this image is an x86_64 Arch install with an
 # x86_64 UKI, so the Ampere A1 shapes (VM.Standard.A1.Flex) are not an option
-# however cheap they are. VM.Standard.E5.Flex at 2 OCPU / 8 GB is the default;
-# E4.Flex is the fallback in regions without E5.
+# however cheap they are. The default is the smallest UEFI-capable x86 shape
+# that can hold this image: VM.Standard.E4.Flex, 1 OCPU / 2 GB, with the OCPU
+# baseline at 12.5% (`BASELINE_1_8`) -- a burstable instance, which is what a
+# demo somebody ssh's into once a day is. VM.Standard.E5.Flex is the
+# documented alternative for a machine expected to do work; --baseline none
+# turns bursting off and bills the full OCPU.
 #
 # Not shielded, and this is a decision rather than an omission: a Shielded
 # Instance enforces Secure Boot against Oracle's key set, and this image's
@@ -34,9 +38,11 @@ nsg_id=""
 demo_key=""
 demo_user="demo"
 owner_key=""
-shape="VM.Standard.E5.Flex"
-ocpus=2
-memory=8
+owner_user="edimar"
+shape="VM.Standard.E4.Flex"
+ocpus=1
+memory=2
+baseline="12.5"
 hostname="omarchy-server-demo"
 display=""
 availability_domain=""
@@ -52,11 +58,15 @@ Usage: launch-demo.sh --compartment-id OCID --image-id OCID --subnet-id OCID
   --subnet-id OCID        an existing PUBLIC subnet (required; not created here)
   --demo-key PATH         public key for the demo account (required)
   --demo-user NAME        name of the demo account (default: demo)
-  --owner-key PATH        public key for the `omarchy` owner account (optional)
+  --owner-key PATH        public key for the owner account (optional)
+  --owner-user NAME       name of the owner account (default: edimar)
   --nsg-id OCID           reuse an NSG instead of creating one
-  --shape NAME            default: VM.Standard.E5.Flex
-  --ocpus N               default: 2
-  --memory-gb N           default: 8
+  --shape NAME            default: VM.Standard.E4.Flex
+                          (VM.Standard.E5.Flex is the documented alternative)
+  --ocpus N               default: 1
+  --memory-gb N           default: 2
+  --baseline PCT          OCPU baseline on a Flex shape: 12.5 | 50 | none
+                          (default: 12.5 — burstable)
   --hostname NAME         default: omarchy-server-demo
   --availability-domain N default: the first one in the compartment
   --profile NAME          OCI CLI profile (default: $OCI_CLI_PROFILE or DEFAULT)
@@ -73,9 +83,11 @@ while (($#)); do
     --demo-key) demo_key="$2"; shift 2 ;;
     --demo-user) demo_user="$2"; shift 2 ;;
     --owner-key) owner_key="$2"; shift 2 ;;
+    --owner-user) owner_user="$2"; shift 2 ;;
     --shape) shape="$2"; shift 2 ;;
     --ocpus) ocpus="$2"; shift 2 ;;
     --memory-gb) memory="$2"; shift 2 ;;
+    --baseline) baseline="$2"; shift 2 ;;
     --hostname) hostname="$2"; shift 2 ;;
     --availability-domain) availability_domain="$2"; shift 2 ;;
     --profile) profile="$2"; shift 2 ;;
@@ -93,33 +105,62 @@ command -v oci >/dev/null || { echo "the OCI CLI is not installed" >&2; exit 1; 
 [[ -f $demo_key ]] || { echo "no such public key: $demo_key" >&2; exit 1; }
 [[ -z $owner_key || -f $owner_key ]] || { echo "no such public key: $owner_key" >&2; exit 1; }
 
+# A Flex shape can run below a full OCPU and burst above it. OCI calls that the
+# baseline utilization, and it is what makes the difference between paying for
+# one core and paying for an eighth of one. The API takes an enum, not a
+# percentage, so the flag speaks percentages and this translates.
+case "$baseline" in
+  12.5) baseline_value=BASELINE_1_8 ;;
+  50) baseline_value=BASELINE_1_2 ;;
+  none | 100) baseline_value="" ;;
+  *) echo "--baseline takes 12.5, 50 or none, not '$baseline'" >&2; exit 2 ;;
+esac
+
+# The shape config is assembled here so the plan prints exactly what is sent.
+# baselineOcpuUtilization is only meaningful on a Flex shape, and only when the
+# instance is meant to burst; without it the instance runs (and bills) at a
+# full OCPU.
+shape_config="{\"ocpus\":$ocpus,\"memoryInGBs\":$memory"
+if [[ -n $baseline_value ]]; then
+  shape_config+=",\"baselineOcpuUtilization\":\"$baseline_value\""
+fi
+shape_config+="}"
+
 display="${display:-$hostname}"
 oci_cli() { oci --profile "$profile" "$@"; }
 
 # ── the user-data ───────────────────────────────────────────────────────────
-# Two accounts and no third. `demo` is the demo account the link in 1Password
-# hands out; `omarchy` is the owner's, and it is the image's own default user
-# name, so a key given here lands on the account the platform would have used
-# anyway. Both are key-only and password-locked: the image ships no password
-# and nothing here introduces one.
+# Two accounts and no third: the reviewer's (--demo-user, --demo-key) and the
+# owner's (--owner-user, --owner-key). Both are in `wheel`, both get a sudoers
+# drop-in of their own with NOPASSWD -- a reviewer who cannot sudo cannot look
+# at anything a server is interesting for -- and both are key-only:
+# `lock_passwd` leaves the account with no password at all, `ssh_pwauth: false`
+# refuses password authentication, and `disable_root` keeps root unreachable
+# over ssh. The image ships no password and nothing here introduces one.
+#
+# cloud-init writes each `sudo:` line into /etc/sudoers.d/90-cloud-init-users,
+# so the rule is per-user and visible on the machine rather than an implicit
+# %wheel grant nobody can see.
 user_data=$(
   echo "#cloud-config"
   echo "hostname: $hostname"
   echo "fqdn: $hostname.quave.one"
+  echo "disable_root: true"
+  echo "ssh_pwauth: false"
   echo "users:"
   echo "  - name: ${demo_user}"
   echo "    gecos: Omarchy Server demo"
   echo "    groups: [ wheel ]"
-  echo "    sudo: [ \"ALL=(ALL:ALL) NOPASSWD:ALL\" ]"
+  echo "    sudo: [ \"ALL=(ALL) NOPASSWD: ALL\" ]"
   echo "    shell: /bin/bash"
   echo "    lock_passwd: true"
   echo "    ssh_authorized_keys:"
   printf '      - %s\n' "$(cat "$demo_key")"
   if [[ -n $owner_key ]]; then
-    echo "  - name: omarchy"
+    echo "  - name: ${owner_user}"
     echo "    gecos: Omarchy Server owner"
     echo "    groups: [ wheel ]"
-    echo "    sudo: [ \"ALL=(ALL:ALL) NOPASSWD:ALL\" ]"
+    echo "    sudo: [ \"ALL=(ALL) NOPASSWD: ALL\" ]"
     echo "    shell: /bin/bash"
     echo "    lock_passwd: true"
     echo "    ssh_authorized_keys:"
@@ -131,12 +172,12 @@ echo "=== OCI demo instance ==="
 echo "profile:       $profile"
 echo "display name:  $display"
 echo "hostname:      $hostname  (DNS record is dns.md, not this script)"
-echo "shape:         $shape  ${ocpus} OCPU / ${memory} GB"
+echo "shape:         $shape  ${ocpus} OCPU / ${memory} GB  baseline ${baseline_value:-full OCPU}"
 echo "image:         $image_id"
 echo "subnet:        $subnet_id"
 echo "nsg:           ${nsg_id:-<created here: ingress 22/tcp only>}"
 echo "shielded:      no (see the header of this script)"
-echo "accounts:      demo${owner_key:+, omarchy}  — key only, no password"
+echo "accounts:      ${demo_user}${owner_key:+, $owner_user}  — key only, no password, sudo NOPASSWD"
 echo
 echo "--- cloud-init user-data ---"
 echo "$user_data"
@@ -214,7 +255,7 @@ instance_id=$(oci_cli compute instance launch \
   --display-name "$display" \
   --hostname-label "$hostname" \
   --shape "$shape" \
-  --shape-config "{\"ocpus\":$ocpus,\"memoryInGBs\":$memory}" \
+  --shape-config "$shape_config" \
   --image-id "$image_id" \
   --subnet-id "$subnet_id" \
   --nsg-ids "[\"$nsg_id\"]" \
@@ -234,6 +275,6 @@ echo "The first boot regenerates the ssh host keys and applies the metadata."
 echo "Read the fingerprint from the console before trusting it:"
 echo "  oci --profile $profile compute instance-console-connection create --instance-id $instance_id ..."
 echo
-echo "  ssh -i out/demo-guest_ed25519 demo@$public_ip"
+echo "  ssh -i <the key from make-demo-key.sh> $demo_user@$public_ip"
 echo
 echo "Next: dns.md (an A record for $hostname.quave.one -> $public_ip)."
