@@ -95,13 +95,17 @@ check "the loaded ruleset drops input by default" \
   "~/.lab-sudo nft list ruleset" \
   "type filter hook input priority filter; policy drop"
 
-check "the WAN exposes SSH (22/tcp) and nothing else on tcp" \
+# This VM has one NIC and no WAN/LAN roles assigned, so the ruleset is the
+# safe-mode one: reachable on SSH from any interface (the scoped, role-named
+# ruleset is proven on the two-network tui-lab). That the acceptance can ssh in
+# at all is itself the proof it did not lock itself out.
+check "the unconfigured router accepts SSH, staying reachable to be configured" \
   "~/.lab-sudo nft list ruleset" \
-  'iifname "wan0" tcp dport 22 accept'
+  "tcp dport 22 accept"
 
-check "the WAN exposes WireGuard (51820/udp)" \
+check "the router accepts WireGuard (51820/udp)" \
   "~/.lab-sudo nft list ruleset" \
-  'iifname "wan0" udp dport 51820 accept'
+  "udp dport 51820 accept"
 
 check "the forward chain drops by default (LAN-to-WAN is the only opening)" \
   "~/.lab-sudo nft list ruleset" \
@@ -130,9 +134,9 @@ check "the WireGuard port config is present (default 51820)" \
   "cat /etc/omarchy/router/wireguard.env" \
   "WG_PORT=51820"
 
-check "the NIC-role config exists (empty until the operator maps MACs)" \
+check "the role config exists (assign WAN/LAN by name or MAC, reassignable)" \
   "cat /etc/omarchy/router/roles.conf" \
-  "WAN_MAC=|LAN_MAC="
+  "WAN_(IF|MAC)=|LAN_(IF|MAC)="
 
 check "tui-firewall, the tool that manages the ruleset, is installed" \
   "command -v tui-firewall || echo MISSING" \

@@ -1,29 +1,28 @@
 #!/bin/bash
 
-# omarchy:summary=Assign the WAN and LAN roles to physical NICs by MAC
-# omarchy:args=[--apply] [--preview]
+# omarchy:summary=Show the WAN/LAN role-to-interface mapping and apply it
+# omarchy:args=[--preview] [--apply]
 # omarchy:examples=omarchy router-nics --preview | omarchy router-nics --apply
 # omarchy:requires-sudo=true
 
-# Turn /etc/omarchy/router/roles.conf (WAN_MAC=/LAN_MAC=) into the systemd
-# .link files that rename those NICs to the stable role names wan0 and lan0,
-# which install/router/network-router.sh's .network units match on.
+# Roles, not renamed interfaces. /etc/omarchy/router/roles.conf assigns the WAN
+# and LAN roles to real interfaces -- by name (WAN_IF=/LAN_IF=) or by MAC
+# (WAN_MAC=/LAN_MAC=, matched to the interface that carries it now). The
+# physical NIC keeps its kernel name; the .network units and the firewall are
+# scoped to that name, the way OPNsense scopes a rule to the port a role points
+# at. Nothing is ever renamed, so reassigning a role never strands an ssh
+# session on a link that vanished out from under networkd.
 #
-# Why roles, not interface names: a router's config has to survive being moved
-# to different hardware and has to be written before the hardware is known (an
-# autoinstall drive). "The NIC with this MAC is the WAN" is portable; "enp1s0
-# is the WAN" is not. The MAC is the one identifier that belongs to the card.
-#
-# --preview (the default) prints what would change and touches nothing.
-# --apply writes the .link files. It does NOT rename a live interface -- a
-# rename takes effect when the link is next brought up (a reboot, or
-# `udevadm trigger`), because renaming an interface out from under a running
-# networkd is how you strand an ssh session. The command says so.
+# --preview (the default) resolves the roles and prints the mapping, touching
+# nothing. --apply rewrites the .network units for the current mapping (through
+# install/router/network-router.sh) and reloads networkd. The firewall is a
+# separate apply: `omarchy-router-firewall` rescopes /etc/nftables.conf.
 
 set -uo pipefail
 
+OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
+OMARCHY_INSTALL="${OMARCHY_INSTALL:-$OMARCHY_PATH/install}"
 roles_conf=/etc/omarchy/router/roles.conf
-net_dir=/etc/systemd/network
 mode=preview
 
 case "${1:-}" in
@@ -32,8 +31,9 @@ case "${1:-}" in
   -h | --help)
     echo "Usage: omarchy-router-nics [--preview|--apply]"
     echo
-    echo "Reads $roles_conf and writes the .link files that name the WAN and"
-    echo "LAN NICs wan0 and lan0. --preview (default) only shows the plan."
+    echo "Reads $roles_conf, resolves the WAN and LAN roles to interfaces, and"
+    echo "prints the mapping. --apply rewrites the .network units and reloads"
+    echo "networkd. Run omarchy-router-firewall to rescope the firewall."
     exit 0
     ;;
   *)
@@ -48,47 +48,41 @@ if [[ ! -r $roles_conf ]]; then
   exit 1
 fi
 
-WAN_MAC="" LAN_MAC=""
+WAN_IFS="" LAN_IFS="" WAN_MACS="" LAN_MACS=""
 # shellcheck disable=SC1090
 source "$roles_conf"
 
-valid_mac() { [[ ${1,,} =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]]; }
-
-# link file for one role: 05- so it sorts before any distro default, .link so
-# udev applies it at match time.
-link_body() { # <role name> <mac>
-  cat <<EOF
-# Omarchy Router: name the NIC with MAC $2 "$1". Written by omarchy-router-nics
-# from $roles_conf. Edit that file and re-run, not this one.
-[Match]
-MACAddress=${2,,}
-
-[Link]
-Name=$1
-EOF
+resolve_set() { # resolve_set "<ifs>" "<macs>" -> space-separated device names
+  local ifs="$1" macs="$2" out=() name mac d
+  for name in $ifs; do out+=("$name"); done
+  for mac in $macs; do
+    mac="${mac,,}"
+    for d in /sys/class/net/*; do
+      [[ -r $d/address ]] || continue
+      [[ "$(cat "$d/address" 2>/dev/null)" == "$mac" ]] && { out+=("$(basename "$d")"); break; }
+    done
+  done
+  printf '%s' "${out[*]}"
 }
 
-plan=()
-for role in wan lan; do
-  mac_var="${role^^}_MAC"
-  mac="${!mac_var}"
-  target="$net_dir/05-omarchy-$role.link"
-  if [[ -z $mac ]]; then
-    plan+=("skip  $role0: no ${mac_var} set in $roles_conf")
-    continue
+show_role() { # show_role <label> "<ifs>" "<macs>"
+  local label="$1" devs
+  devs="$(resolve_set "$2" "$3")"
+  if [[ -z $devs ]]; then
+    printf '%-4s unassigned\n' "$label"
+  else
+    printf '%-4s %s\n' "$label" "$devs"
   fi
-  if ! valid_mac "$mac"; then
-    echo "omarchy-router-nics: ${mac_var}='$mac' is not a MAC address." >&2
-    exit 1
-  fi
-  plan+=("write $target  ->  rename MAC ${mac,,} to ${role}0")
-done
+}
 
-printf '%s\n' "${plan[@]}"
+show_role WAN "$WAN_IFS" "$WAN_MACS"
+show_role LAN "$LAN_IFS" "$LAN_MACS"
+lan_count=$(resolve_set "$LAN_IFS" "$LAN_MACS" | wc -w)
+((lan_count > 1)) && echo "     (the LAN ports are bridged into br-lan)"
 
 if [[ $mode == preview ]]; then
   echo
-  echo "Preview only. Re-run with --apply to write the .link files."
+  echo "Preview only. Re-run with --apply to write the .network units and reload."
   exit 0
 fi
 
@@ -96,17 +90,19 @@ if ((EUID != 0)); then
   exec sudo -E "$0" --apply
 fi
 
-install -d -m 0755 "$net_dir"
-for role in wan lan; do
-  mac_var="${role^^}_MAC"
-  mac="${!mac_var}"
-  [[ -n $mac ]] || continue
-  link_body "${role}0" "$mac" >"$net_dir/05-omarchy-$role.link"
-  chmod 0644 "$net_dir/05-omarchy-$role.link"
-  echo "wrote $net_dir/05-omarchy-$role.link"
-done
+# Rewrite the .network units for the current mapping. network-router.sh is a
+# sourced leaf (no shebang, no exit), the same way omarchy-router-firewall
+# delegates to firewall-router.sh.
+net_script="$OMARCHY_INSTALL/router/network-router.sh"
+if [[ -r $net_script ]]; then
+  # shellcheck disable=SC1090
+  source "$net_script"
+else
+  echo "omarchy-router-nics: $net_script not found; cannot rewrite the units." >&2
+  exit 1
+fi
 
+networkctl reload 2>/dev/null || systemctl reload systemd-networkd 2>/dev/null || true
 echo
-echo "Done. The rename takes effect on the next boot, or now with:"
-echo "  udevadm control --reload && udevadm trigger --action=add --subsystem-match=net"
-echo "Renaming a live interface can drop an ssh session, so it is not automatic."
+echo "Applied. The firewall is separate: run 'omarchy-router-firewall' to"
+echo "rescope /etc/nftables.conf to the WAN and LAN interfaces."
