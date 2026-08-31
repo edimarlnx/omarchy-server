@@ -78,9 +78,13 @@ check "nftables.service is enabled" \
   "systemctl is-enabled nftables.service 2>&1" \
   "^enabled$"
 
-check "nftables.service is active" \
-  "systemctl is-active nftables.service 2>&1" \
-  "^active$"
+# nftables.service is a load-and-exit oneshot, so it reads "inactive (dead)"
+# after it has applied the ruleset -- what matters is that the ruleset is in the
+# kernel, which the checks below read from `nft list ruleset`. Prove the loader
+# actually loaded the router table.
+check "the router ruleset is loaded in the kernel (inet tui)" \
+  "~/.lab-sudo nft list ruleset" \
+  "table inet tui"
 
 check "ufw is not the active firewall" \
   "systemctl is-active ufw.service 2>&1 || true" \
@@ -136,7 +140,7 @@ check "the WireGuard port config is present (default 51820)" \
 
 check "the role config exists (assign WAN/LAN by name or MAC, reassignable)" \
   "cat /etc/omarchy/router/roles.conf" \
-  "WAN_(IF|MAC)=|LAN_(IF|MAC)="
+  "WAN_(IFS|MACS)=|LAN_(IFS|MACS)="
 
 check "tui-firewall, the tool that manages the ruleset, is installed" \
   "command -v tui-firewall || echo MISSING" \

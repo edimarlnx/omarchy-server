@@ -88,3 +88,37 @@ Next: make `serverlab lab up --profile router` reboot into the installed disk
 scoped many-interface ruleset (multiple WAN uplinks, bridged LAN) is proven on
 the two-network tui-lab; this clean-machine leg proves the profile installs and
 comes up reachable.
+
+## RESOLVED — validated via the cloud image, no ISO (17/17)
+
+The install-from-ISO path was the wrong tool for a clean-machine acceptance: it
+carries the OVMF post-install boot-order handoff that turned into a rabbit hole.
+The right path is the one omarchy-server already ships — the **cloud image**,
+which boots directly with a NoCloud seed and no install ISO at all.
+
+Since the router is the server runtime plus a layer, the acceptance is:
+
+1. Boot a **server cloud image directly** (`serverlab image test` / `vm.sh
+   create --from-image`, `iso=no`) — reachable over ssh in ~2 minutes, the same
+   path the OCI demo uses.
+2. **Apply the router layer** on the running machine — run the profile's own
+   `install/router/network-router.sh` and `firewall-router.sh` (the redesigned,
+   role-as-interface-sets ones). With no roles assigned they write the safe-mode
+   ruleset, so ssh stays reachable.
+3. Run `acceptance-router.sh`.
+
+Result: **17 passed, 0 failed.** The router firewall (`inet tui`) is loaded and
+scoped, the unconfigured machine accepts ssh and WireGuard and drops the rest,
+the forward chain drops by default, forwarding is persisted, nothing web
+listens, roles.conf carries the sets model, and tui-firewall is present.
+
+Two suite bugs were fixed along the way: the `roles.conf` check still matched
+the old singular `WAN_IF=` instead of the sets `WAN_IFS=`, and the
+"nftables.service is active" check was wrong for a load-and-exit oneshot (which
+reads inactive after applying the ruleset) — replaced with a check that the
+`inet tui` table is actually in the kernel.
+
+The many-to-many redesign is now validated end to end: the two-network tui-lab
+proves the scoped routing (multi-uplink failover, DHCP, WireGuard), and this
+cloud-image leg proves the profile comes up correct and reachable on a clean
+machine.
