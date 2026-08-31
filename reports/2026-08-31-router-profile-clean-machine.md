@@ -59,3 +59,32 @@ Recommendation: **(2)** as the safety fix (a remote install you can't reach is
 worse than one that accepts SSH until you scope it), plus **(1)**'s two-NIC lab
 path for the full acceptance. Until decided, the acceptance suite is ready and
 the ISO is proven; only the reachable install is pending.
+
+## Update — the install works; the SSH handoff is the remaining item
+
+After the role/alias redesign (interface SETS, safe-mode when unassigned), the
+router ISO was rebuilt and `serverlab lab up --profile router` was run. The
+autoinstall was inspected from the resulting disk with guestfs (no boot needed):
+
+- **archinstall base: completed without errors** — omarchy-server, kernel,
+  limine + a unified kernel image, btrfs subvolumes, the EFI boot files.
+- **the omarchy phase completed** (`/var/log/omarchy-install.log`): every router
+  leaf ran and completed — `identity-router.sh`, `network-router.sh` (the
+  redesigned one), `enable-services-router.sh`, `firewall-router.sh` (the
+  redesigned one). Limine EFI update and UKI build succeeded. The only diagnostic
+  is a benign `xdg-user-dirs-update: command not found` in the desktop-oriented
+  user provisioning, which a server hits too.
+
+So the router profile **installs correctly** and the redesigned scripts run clean
+in a real archinstall chroot. What blocked the acceptance is the post-install
+handoff: the VM booted the live installer (the ISO/DVD) again rather than the
+installed disk, so `wait-ssh` never reached the installed system. That is a
+serverlab lab-up boot-order/reboot detail for the `--profile router` path, which
+had never been run before this session (the mkcidata `router` branch was added
+here to enable it) -- not a defect in the profile or the redesign.
+
+Next: make `serverlab lab up --profile router` reboot into the installed disk
+(the same handoff the `server` profile gets), then the acceptance suite runs. The
+scoped many-interface ruleset (multiple WAN uplinks, bridged LAN) is proven on
+the two-network tui-lab; this clean-machine leg proves the profile installs and
+comes up reachable.
