@@ -169,6 +169,22 @@ EOF
     fi
   } >/etc/systemd/network/20-omarchy-lan.network
   chmod 0644 /etc/systemd/network/20-omarchy-lan.network
+
+  # The LAN's DHCP hands out this router as the client resolver
+  # (DNS=_server_address above). resolved's stub answers only on 127.0.0.53 by
+  # default, so without this LAN clients would get a DNS server that never
+  # replies. Bind an extra stub listener on the LAN gateway address; resolved
+  # forwards those queries upstream, which the router reaches over the WAN NAT.
+  if [[ $lan_dhcp == yes ]]; then
+    mkdir -p /etc/systemd/resolved.conf.d
+    cat >/etc/systemd/resolved.conf.d/30-omarchy-router.conf <<EOF
+# Omarchy Router: answer LAN DNS on the gateway address, forward upstream.
+# Written by install/router/network-router.sh.
+[Resolve]
+DNSStubListenerExtra=${lan_address%%/*}
+EOF
+    chmod 0644 /etc/systemd/resolved.conf.d/30-omarchy-router.conf
+  fi
 fi
 
 # Unconfigured (or half-configured): every interface with no role takes a DHCP
@@ -222,3 +238,11 @@ systemctl disable iwd.service 2>/dev/null || true
 # does not wait on anyone.
 systemctl disable systemd-networkd-wait-online.service 2>/dev/null || true
 systemctl mask systemd-networkd-wait-online.service 2>/dev/null || true
+
+# When re-applied on a running machine (not the install chroot), pick up the
+# resolved drop-in written above: DNSStubListenerExtra only binds on restart,
+# not on reload. Skipped where resolved is not running, so the ISO install is
+# left untouched and boot brings it up normally.
+if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+  systemctl restart systemd-resolved 2>/dev/null || true
+fi
