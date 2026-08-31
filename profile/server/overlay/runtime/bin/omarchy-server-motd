@@ -18,15 +18,28 @@ set -uo pipefail
 OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
 LOGO="$OMARCHY_PATH/logo.txt"
 
-if command -v fastfetch >/dev/null 2>&1; then
-  exec fastfetch
-fi
-
 esc=$'\033'
 green="${esc}[32m"
 bold="${esc}[1;32m"
 dim="${esc}[2m"
 reset="${esc}[0m"
+
+# The router edition labels the banner "Omarchy Router"; the server edition and
+# a machine with no profile marker keep "Omarchy Server", byte for byte as
+# before. /etc/omarchy-profile is written by the ISO for every non-desktop
+# install and is what omarchy-apply-system routed the setup tree on.
+profile=""
+[[ -r /etc/omarchy-profile ]] && profile=$(tr -d '[:space:]' </etc/omarchy-profile 2>/dev/null)
+edition="Omarchy Server"
+[[ $profile == router ]] && edition="Omarchy Router"
+
+if command -v fastfetch >/dev/null 2>&1; then
+  # fastfetch renders the full card and replaces this process; prefix the
+  # edition first so the router still says so on a machine that added the
+  # cli-tools addon.
+  [[ $profile == router ]] && printf '\n  %s%s%s\n' "$bold" "$edition" "$reset"
+  exec fastfetch
+fi
 
 # The logo is 81 columns, 83 with the indent below. On anything narrower it
 # would wrap into nonsense, so a narrow terminal gets the wordmark alone.
@@ -45,8 +58,9 @@ if ((columns >= 83)) && [[ -r $LOGO ]]; then
   printf '%s' "$green"
   sed 's/^/  /' "$LOGO"
   printf '%s\n' "$reset"
+  [[ $profile == router ]] && printf '  %sRouter%s\n' "$dim" "$reset"
 else
-  printf '%s  Omarchy Server%s\n\n' "$bold" "$reset"
+  printf '%s  %s%s\n\n' "$bold" "$edition" "$reset"
 fi
 
 field() { # field <label> <value>
@@ -92,4 +106,18 @@ field "packages" "${packages:+$packages installed${last_upgrade:+, last upgrade 
 field "updates" "$( ((pending > 0)) && echo "$pending pending" || echo "none pending" )"
 field "memory" "$memory"
 field "ip" "$address"
+
+# Router facts, only on the router edition: the two role interfaces, whether
+# forwarding is on, and the ports the WAN answers on. Read from /proc and the
+# profile's own config so the banner needs no extra package.
+if [[ $profile == router ]]; then
+  forward=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)
+  wan_ip=$(ip -4 -oneline address show dev wan0 scope global 2>/dev/null | awk '{print $4; exit}')
+  lan_ip=$(ip -4 -oneline address show dev lan0 2>/dev/null | awk '{print $4; exit}')
+  wg_port=$(sed -n 's/^WG_PORT=\([0-9]\{1,\}\).*/\1/p' /etc/omarchy/router/wireguard.env 2>/dev/null | tail -n 1)
+  field "wan" "${wan_ip:-wan0 (no lease)}"
+  field "lan" "${lan_ip:-lan0}"
+  field "forward" "$( [[ $forward == 1 ]] && echo "on" || echo "off" )"
+  field "exposed" "22/tcp, ${wg_port:-51820}/udp wireguard"
+fi
 echo

@@ -1,0 +1,59 @@
+# Mandatory access control with SELinux.
+#
+# The kernel side costs nothing: the stock Arch kernel is built with
+# CONFIG_SECURITY_SELINUX=y and CONFIG_SECURITY_SELINUX_BOOTPARAM=y, but
+# CONFIG_LSM lists only "landlock,lockdown,yama,integrity,bpf", so SELinux is
+# compiled in and inactive until `lsm=` on the kernel command line names it.
+# install/server/selinux-server.sh writes that drop-in. No kernel is rebuilt.
+#
+# The userland is a different story, and this is the honest cost of the route:
+# the first block is additive, the second REPLACES packages the base already
+# has. Every one of them is built from https://github.com/archlinuxhardened/
+# selinux at a pinned commit and signed into [omarchy-server];
+# omarchy-server-pkgs/pkgbuilds/selinux.manifest records why each is in the
+# set and why the ones that are not are not.
+#
+# Mutually exclusive with the `apparmor` addon: both are major LSMs and the
+# kernel runs one of them at a time. The setup leaf refuses to install over the
+# other one.
+
+# --- additive: nothing here replaces a stock package -------------------------
+libsepol
+libselinux
+checkpolicy
+secilc
+libsemanage
+semodule-utils
+policycoreutils
+# NOT here, on purpose: `setools` and `selinux-python`. They carry semanage,
+# audit2allow and sesearch, and they drag python-networkx in, which in Arch
+# hard-depends on python-scipy, python-pandas, python-matplotlib and
+# python-numpy. Measured on an installed machine: those two packages and their
+# closure are 45 packages and 453 MiB -- 82% of what this route used to cost.
+# They now live in the `selinux-tools` addon, which is what a workstation that
+# AUTHORS policy installs. A machine that only RUNS it does not need them: the
+# policy loads, restorecon/setfiles/semodule/checkmodule all work, and the
+# profile's own file contexts are written straight into the policy store's
+# file_contexts.local by install/server/selinux-server.sh.
+selinux-alpm-hook
+selinux-refpolicy-arch
+
+# --- replacements: each provides= and conflicts= its stock counterpart -------
+# pacman will not resolve a conflict under --noconfirm on its own, so this
+# addon carries selinux.pacman-args, which adds `--ask=4` to pre-answer the
+# replacement question. omarchy-server-addon reads that file.
+pambase-selinux
+pam-selinux
+coreutils-selinux
+# util-linux-libs-selinux is the other half of util-linux's split build, and it
+# replaces util-linux-libs, which the base has. Named explicitly rather than
+# left to dependency resolution, because the ISO reads this list to decide what
+# to bundle in its offline mirror.
+util-linux-libs-selinux
+util-linux-selinux
+shadow-selinux
+sudo-selinux
+openssh-selinux
+systemd-selinux
+systemd-libs-selinux
+systemd-sysvcompat-selinux

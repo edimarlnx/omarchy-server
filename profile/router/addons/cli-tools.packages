@@ -1,0 +1,15 @@
+# The interactive toolbelt of the desktop edition. Nothing in the server
+# runtime path calls any of it, so it is opt-in for the machines somebody
+# actually works on.
+bat
+btop
+dua-cli
+eza
+fastfetch
+fd
+fzf
+lazygit
+ripgrep
+tldr
+tmux
+zoxide

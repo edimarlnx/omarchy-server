@@ -1,0 +1,89 @@
+# Omarchy router core package list pacstrapped by the ISO (profile: router).
+# Router counterpart of profile/server/omarchy-server.packages: the router
+# profile is the server base with two changes at the package level, and a
+# router setup tree layered on top by the shared omarchy-server runtime package
+# (install/router/, see below).
+#
+# The rule is the server rule: a package earns its place by being needed to
+# boot, update, snapshot, reach, forward or firewall a headless machine.
+# Everything else is an addon (profile/router/addons/*.packages, installed on
+# demand with `omarchy-server-addon <name>`), so the running system carries no
+# code it was not asked for.
+#
+# Differences from the server core list:
+#   - ufw is replaced by nftables. A router's packet path is forward and NAT,
+#     not just host-local input, and its firewall is the tui-firewall tool's
+#     own `inet tui` nftables table (install/router/firewall-router.sh seeds
+#     it, nftables.service loads it at boot, `omarchy-server-addon tui-tools`
+#     installs the tool that edits it). ufw's iptables-restore front end and
+#     the tool's native nftables table are two managers of the same subsystem;
+#     the router runs one.
+#   - wireguard-tools is added. It is one of the two ports the router answers
+#     on from the WAN (the other is 22/tcp), so the userspace half of the
+#     tunnel belongs in the base rather than in an addon that the WAN rule
+#     already assumes is present. The kernel side is in-tree; no module
+#     package is needed.
+#
+# Not listed here, because the ISO installs them earlier:
+#   - profile/router/archinstall.packages: base linux linux-firmware
+#     amd-ucode intel-ucode efibootmgr limine nano omarchy-keyring openssh
+#     snapper
+#   - early bootstrap: limine efibootmgr omarchy-keyring
+#     omarchy-server-settings
+#   - runtime: omarchy-server (which pulls omarchy-server-keyring, gum and
+#     pacman-contrib through its dependencies, and carries install/router/)
+
+btrfs-progs
+# checkupdates, from pacman-contrib below (see the server list for the full
+# note): every update check runs pacman under fakeroot.
+fakeroot
+# Required by limine-mkinitcpio-hook: it is the hook that regenerates the UKI,
+# and nothing else in this list pulls mkinitcpio in.
+mkinitcpio
+limine-mkinitcpio-hook
+limine-snapper-sync
+# Rebuild out-of-tree modules and keep the running kernel's modules readable
+# after a kernel upgrade until the next reboot.
+kernel-modules-hook
+# The router's console. Not implied by anything else, and
+# enable-services-router.sh fails hard on `systemctl enable sshd.service`
+# without it.
+openssh
+nano
+sudo
+# The firewall of a router is nftables, not ufw. The default `inet tui` table
+# is written by install/router/firewall-router.sh and loaded by
+# nftables.service; tui-firewall (the `tui-tools` addon) is its editor.
+nftables
+# The WAN answers on exactly two ports: 22/tcp and the WireGuard UDP port.
+# wireguard-tools is the userspace for the second one.
+wireguard-tools
+# paccache, used by omarchy-update-pkg-prune and by
+# install/server/prune-pkg-cache-server.sh.
+pacman-contrib
+# The one deliberate exception, shared with the server profile: the Omarchy
+# prompt is part of the edition's identity. A single static binary, no daemon,
+# no listening socket, no privileged path.
+starship
+tzupdate
+zram-generator
+
+# Deliberately NOT in the core, with the addon that brings each one back:
+#   the tui-tools terminal UIs (tui-firewall, tui-network, ...)     → tui-tools
+#   docker docker-compose docker-buildx ufw-docker lazydocker       → docker
+#   tailscale                                                       → tailscale
+#   base-devel yay git mise-bin                                     → dev
+#   btop bat eza fd fzf ripgrep tmux zoxide tldr fastfetch
+#     dua-cli lazygit                                               → cli-tools
+#   omarchy-nvim                                                    → editor
+#   rsync socat whois unzip inotify-tools                           → net-tools
+#   qemu-guest-agent                                                → vm
+#
+# Dropped outright, with no addon (same as the server profile):
+#   networkmanager  the router runs systemd-networkd + systemd-resolved with
+#                   role-named links (install/router/network-router.sh)
+#   ufw             replaced by nftables above
+#   plocate expac perl less man-db inetutils bash-completion
+#   dosfstools exfatprogs
+#                   see profile/server/omarchy-server.packages for the audit;
+#                   the router keeps the same lean surface.

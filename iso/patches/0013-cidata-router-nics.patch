@@ -1,0 +1,24 @@
+diff --git a/configs/airootfs/usr/local/bin/omarchy-cidata-load b/configs/airootfs/usr/local/bin/omarchy-cidata-load
+index fd75348..5564d65 100755
+--- a/configs/airootfs/usr/local/bin/omarchy-cidata-load
++++ b/configs/airootfs/usr/local/bin/omarchy-cidata-load
+@@ -49,6 +49,10 @@ mount -o ro "$device" "$mnt" || exit 1
+ # per line; the server ISO bundles them all in its offline mirror.
+ # `unattended-updates` is a marker file: its presence turns on the server
+ # profile's daily update timer, which ships disabled. Its content is not read.
++# `router-nics` is the router profile's NIC-role hint: WAN_MAC=/LAN_MAC= lines
++# that install/router/network-router.sh copies to
++# /etc/omarchy/router/roles.conf so an autoinstalled router comes up with its
++# wan0/lan0 links already named. Its content is read there, not here.
+ # `secureboot` is a marker file too: its presence makes the install generate
+ # this machine's own Secure Boot keys, sign the boot chain with them and enroll
+ # them when the firmware is in Setup Mode. Its content is not read.
+@@ -56,7 +60,7 @@ mount -o ro "$device" "$mnt" || exit 1
+ # profile's mandatory-access-control addon of that name, in its permissive /
+ # complain mode. They are mutually exclusive, and the addon refuses the second
+ # one rather than silently installing a module the kernel will not run.
+-optional_inputs=(user_credentials.json defer-provisioning user_full_name.txt user_email_address.txt user_encrypt_installation.txt authorized_keys tailscale_authkey profile addons unattended-updates secureboot selinux apparmor)
++optional_inputs=(user_credentials.json defer-provisioning user_full_name.txt user_email_address.txt user_encrypt_installation.txt authorized_keys tailscale_authkey profile addons unattended-updates secureboot selinux apparmor router-nics)
+ for file in user_configuration.json "${optional_inputs[@]}"; do
+   rm -f "$dest/$file"
+ done

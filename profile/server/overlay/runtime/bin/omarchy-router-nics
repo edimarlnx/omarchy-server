@@ -1,0 +1,112 @@
+#!/bin/bash
+
+# omarchy:summary=Assign the WAN and LAN roles to physical NICs by MAC
+# omarchy:args=[--apply] [--preview]
+# omarchy:examples=omarchy router-nics --preview | omarchy router-nics --apply
+# omarchy:requires-sudo=true
+
+# Turn /etc/omarchy/router/roles.conf (WAN_MAC=/LAN_MAC=) into the systemd
+# .link files that rename those NICs to the stable role names wan0 and lan0,
+# which install/router/network-router.sh's .network units match on.
+#
+# Why roles, not interface names: a router's config has to survive being moved
+# to different hardware and has to be written before the hardware is known (an
+# autoinstall drive). "The NIC with this MAC is the WAN" is portable; "enp1s0
+# is the WAN" is not. The MAC is the one identifier that belongs to the card.
+#
+# --preview (the default) prints what would change and touches nothing.
+# --apply writes the .link files. It does NOT rename a live interface -- a
+# rename takes effect when the link is next brought up (a reboot, or
+# `udevadm trigger`), because renaming an interface out from under a running
+# networkd is how you strand an ssh session. The command says so.
+
+set -uo pipefail
+
+roles_conf=/etc/omarchy/router/roles.conf
+net_dir=/etc/systemd/network
+mode=preview
+
+case "${1:-}" in
+  --apply) mode=apply ;;
+  --preview | "") mode=preview ;;
+  -h | --help)
+    echo "Usage: omarchy-router-nics [--preview|--apply]"
+    echo
+    echo "Reads $roles_conf and writes the .link files that name the WAN and"
+    echo "LAN NICs wan0 and lan0. --preview (default) only shows the plan."
+    exit 0
+    ;;
+  *)
+    echo "omarchy-router-nics: unknown option '$1'. Try --help." >&2
+    exit 2
+    ;;
+esac
+
+if [[ ! -r $roles_conf ]]; then
+  echo "omarchy-router-nics: $roles_conf not found." >&2
+  echo "It is written by install/router/network-router.sh at install time." >&2
+  exit 1
+fi
+
+WAN_MAC="" LAN_MAC=""
+# shellcheck disable=SC1090
+source "$roles_conf"
+
+valid_mac() { [[ ${1,,} =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]]; }
+
+# link file for one role: 05- so it sorts before any distro default, .link so
+# udev applies it at match time.
+link_body() { # <role name> <mac>
+  cat <<EOF
+# Omarchy Router: name the NIC with MAC $2 "$1". Written by omarchy-router-nics
+# from $roles_conf. Edit that file and re-run, not this one.
+[Match]
+MACAddress=${2,,}
+
+[Link]
+Name=$1
+EOF
+}
+
+plan=()
+for role in wan lan; do
+  mac_var="${role^^}_MAC"
+  mac="${!mac_var}"
+  target="$net_dir/05-omarchy-$role.link"
+  if [[ -z $mac ]]; then
+    plan+=("skip  $role0: no ${mac_var} set in $roles_conf")
+    continue
+  fi
+  if ! valid_mac "$mac"; then
+    echo "omarchy-router-nics: ${mac_var}='$mac' is not a MAC address." >&2
+    exit 1
+  fi
+  plan+=("write $target  ->  rename MAC ${mac,,} to ${role}0")
+done
+
+printf '%s\n' "${plan[@]}"
+
+if [[ $mode == preview ]]; then
+  echo
+  echo "Preview only. Re-run with --apply to write the .link files."
+  exit 0
+fi
+
+if ((EUID != 0)); then
+  exec sudo -E "$0" --apply
+fi
+
+install -d -m 0755 "$net_dir"
+for role in wan lan; do
+  mac_var="${role^^}_MAC"
+  mac="${!mac_var}"
+  [[ -n $mac ]] || continue
+  link_body "${role}0" "$mac" >"$net_dir/05-omarchy-$role.link"
+  chmod 0644 "$net_dir/05-omarchy-$role.link"
+  echo "wrote $net_dir/05-omarchy-$role.link"
+done
+
+echo
+echo "Done. The rename takes effect on the next boot, or now with:"
+echo "  udevadm control --reload && udevadm trigger --action=add --subsystem-match=net"
+echo "Renaming a live interface can drop an ssh session, so it is not automatic."

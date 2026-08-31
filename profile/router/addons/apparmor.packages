@@ -1,0 +1,14 @@
+# Mandatory access control with AppArmor.
+#
+# One package from Arch's own repositories, and the kernel side costs nothing:
+# the stock Arch kernel is built with CONFIG_SECURITY_APPARMOR=y and
+# CONFIG_SECURITY_APPARMOR_BOOTPARAM_VALUE=1, but CONFIG_LSM lists only
+# "landlock,lockdown,yama,integrity,bpf", so AppArmor is compiled in and
+# inactive until `lsm=` on the kernel command line names it. That is a one-line
+# limine-entry-tool drop-in, which is what install/server/apparmor-server.sh
+# writes. No kernel is rebuilt and no package is replaced.
+#
+# Mutually exclusive with the `selinux` addon: both are major LSMs and the
+# kernel runs one of them at a time. The setup leaf refuses to install over the
+# other one.
+apparmor

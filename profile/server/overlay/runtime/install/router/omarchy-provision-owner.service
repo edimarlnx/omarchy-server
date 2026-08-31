@@ -1,0 +1,27 @@
+# Router variant of install/provisioning/omarchy-provision-owner.service, used
+# by deferred-provisioning installs of the router profile. The ISO's
+# stage_provisioning_state phase prefers install/<profile>/ over
+# install/provisioning/ when copying the unit into the target, so a router
+# install gets this one rather than the desktop unit that orders itself before
+# a display manager it does not have.
+#
+# Identical to the server variant (no display-manager ordering, no plymouth, no
+# tty1 conflict on a headless machine) except that it declares the router
+# profile, so a re-apply on the installed machine takes the router setup tree.
+[Unit]
+Description=Omarchy first boot setup (router profile)
+ConditionPathExists=/var/lib/omarchy/provisioning/pending
+ConditionPathExists=!/var/lib/omarchy/provisioning/wipe-pending
+After=systemd-user-sessions.service omarchy-system-factory-reset-finish.service
+Before=getty@tty1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=OMARCHY_PROFILE=router
+ExecStart=/usr/bin/omarchy-provision-owner
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

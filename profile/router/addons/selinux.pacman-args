@@ -1,0 +1,12 @@
+# Extra pacman flags for this addon, read by omarchy-server-addon.
+#
+# --ask=4: ALPM's "conflicting package" question, pre-answered yes. Ten of the
+# packages in selinux.packages `provides=` and `conflicts=` a package the base
+# already has (systemd, coreutils, util-linux, shadow, sudo, openssh, pam,
+# pambase), so the transaction is a replacement, not an addition. Under plain
+# --noconfirm pacman takes the default answer to "X and Y are in conflict.
+# Remove Y?", which is no, and the whole transaction fails as an unresolvable
+# conflict. 4 is ALPM's QUESTION_CONFLICT_PKG bit; it answers that one question
+# and nothing else -- in particular it does not pre-answer the corrupted-package
+# or untrusted-key questions, which must keep failing.
+--ask=4
