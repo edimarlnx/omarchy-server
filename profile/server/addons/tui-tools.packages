@@ -37,3 +37,6 @@ tui-ssh
 tui-systemd
 tui-update
 tui-users
+tui-vpn
+tui-traffic
+tui-dc
