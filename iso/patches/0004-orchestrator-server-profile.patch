@@ -2,7 +2,7 @@ diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py 
 index 6d48624..87fa246 100644
 --- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
 +++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
-@@ -117,6 +117,38 @@ def _omarchy_nvim_package() -> str:
+@@ -117,6 +117,52 @@ def _omarchy_nvim_package() -> str:
      return _package_targets()["nvim"]
  
  
@@ -34,6 +34,20 @@ index 6d48624..87fa246 100644
 +    return DEFAULT_PROFILE
 +
 +
++# True for the headless editions: the server profile and the router profile,
++# which is the server base with a router layered on. Every phase gated below --
++# the lean early package set, no hibernation, no display manager, the addon
++# mechanism -- is a headless concern the router shares. The one router-specific
++# piece, the WAN/LAN network and the inet tui firewall, lives in the target's
++# install/router/ tree reached through OMARCHY_PROFILE, not in these phases.
++def _is_headless_profile() -> bool:
++    return _install_profile() in ("server", "router")
++
++
++# The server profile alone. Kept distinct from _is_headless_profile because the
++# secure-boot (iso/patches/0010) and mandatory-access-control (0012) phases gate
++# on this one, and extending them to the router edition is a separate, later
++# decision than shipping the router's network and firewall.
 +def _is_server_profile() -> bool:
 +    return _install_profile() == "server"
 +
@@ -47,7 +61,7 @@ index 6d48624..87fa246 100644
  def _early_bootstrap_packages() -> list[str]:
 -    return [*EARLY_BOOTSTRAP_BASE_PACKAGES, _omarchy_settings_package()]
 +    packages = list(EARLY_BOOTSTRAP_BASE_PACKAGES)
-+    if _is_server_profile():
++    if _is_headless_profile():
 +        # A lean server carries no build toolchain: base-devel is ~220 MiB of
 +        # compiler and a compiler is a tool for whoever gets in. Neither the
 +        # settings package nor anything the target setup runs needs either of
@@ -125,7 +139,7 @@ index 6d48624..87fa246 100644
      Limine UKI build still happens later in finalize_limine_boot after this
      writes the resume hook and kernel cmdline drop-in.
      """
-+    if _is_server_profile():
++    if _is_headless_profile():
 +        # No swapfile, so no resume= and nothing to hibernate to: the server
 +        # profile runs on zram alone.
 +        info("› server profile: skipping hibernation")
@@ -223,7 +237,7 @@ index 6d48624..87fa246 100644
 +
 +
 +def install_addons(ctx: InstallContext) -> None:
-+    if not _is_server_profile():
++    if not _is_headless_profile():
 +        return
 +
 +    addons = _requested_addons()
@@ -283,7 +297,7 @@ index 6d48624..87fa246 100644
  # ─────────────────────────────────────────────────────────────────────────────
  
  def configure_login(ctx: InstallContext) -> None:
-+    if _is_server_profile():
++    if _is_headless_profile():
 +        # No display manager is installed; the login path is sshd plus the
 +        # serial/VT getty enabled by install/server/enable-services-server.sh.
 +        info("› server profile: skipping display manager setup")
@@ -292,12 +306,21 @@ index 6d48624..87fa246 100644
      sddm_dir = ctx.target / "etc" / "sddm.conf.d"
      sddm_dir.mkdir(parents=True, exist_ok=True)
      (sddm_dir / "99-omarchy-login.conf").write_text(
-@@ -1499,13 +1669,31 @@ def configure_ssh_access(ctx: InstallContext) -> None:
+@@ -1499,13 +1669,40 @@ def configure_ssh_access(ctx: InstallContext) -> None:
      # what ufw.service loads on first boot. So the exit status is the wrong
      # thing to check here; the rule landing in the file is the thing that
      # matters.
 -    info("› allowing SSH through ufw")
 -    subprocess.run(["arch-chroot", str(ctx.target), "ufw", "allow", "ssh"], check=False)
++    # The router edition has no ufw: its firewall is the nftables inet tui
++    # table (install/router/firewall-router.sh), and the WAN's SSH exposure is
++    # a rule in that table's input chain, not a ufw rule. There is no
++    # user.rules to write and nothing to assert on, so the ufw path below is
++    # skipped. The authorized keys were installed earlier in this function.
++    if _install_profile() == "router":
++        info("› router profile: SSH exposure is in the nftables firewall, not ufw")
++        return
++
 +    # `limit` on the server profile, matching what
 +    # install/server/firewall-server.sh already wrote: ufw keeps one rule per
 +    # (port, protocol, direction), so a plain `allow` here would replace the
@@ -308,7 +331,7 @@ index 6d48624..87fa246 100644
 +    # The rule a `limit` generates is a jump to ufw-user-limit-accept rather
 +    # than a direct ACCEPT, so the assertion below checks that port 22 was
 +    # recorded at all instead of matching the accept form.
-+    if _is_server_profile():
++    if _is_headless_profile():
 +        info("› rate-limiting SSH through ufw")
 +        subprocess.run(
 +            ["arch-chroot", str(ctx.target), "ufw", "limit", "22/tcp"], check=False

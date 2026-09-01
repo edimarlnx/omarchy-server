@@ -1,0 +1,30 @@
+# Cloud-image guest integration: a machine that configures itself from the
+# metadata its platform hands it, instead of from an autoinstall drive.
+#
+# This is the addon a *generalized image* carries. The autoinstall `cidata`
+# drive answers the same questions at install time and is what the lab uses;
+# cloud-init answers them at FIRST BOOT, which is the only moment a shared
+# image has to work with: one qcow2 is copied to many machines, and everything
+# that makes a machine itself -- hostname, users, ssh keys, the size of the
+# root filesystem, the ssh host identity -- has to be decided after the copy.
+#
+# Three packages, and each one earns its place:
+#
+#   cloud-init          the agent. Reads NoCloud/ConfigDrive/OpenStack/Oracle/
+#                       Ec2 metadata and applies it once per instance-id.
+#   cloud-guest-utils   `growpart`, which is what cloud-init's growpart module
+#                       shells out to. Without it the root partition stays the
+#                       size of the image and a 200 GiB boot volume presents
+#                       itself as a 40 GiB one.
+#   qemu-guest-agent    graceful shutdown and host-side freeze/thaw, which is
+#                       what a hypervisor's "stop instance" and its volume
+#                       backups go through. Also in the `vm` addon; installing
+#                       both is a no-op.
+#
+# The setup leaf is install/server/cloud-server.sh: the datasource list, the
+# refusal to create a user the metadata did not ask for, and the first-boot
+# unit that regenerates the machine's ssh host identity and, when the image was
+# built for it, its Secure Boot keys.
+cloud-init
+cloud-guest-utils
+qemu-guest-agent

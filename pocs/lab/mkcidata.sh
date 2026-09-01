@@ -102,6 +102,17 @@ case "$profile" in
     # does not ask for them either on this profile.
     early_packages='"omarchy-keyring"'
     ;;
+  router)
+    # The router is the server runtime with a router layer: same packages, same
+    # lean base. The `profile` file written below (value "router") is what
+    # routes the install to install/router/. A router-nics hint, when the lab
+    # passes one, maps the machine's NICs to the wan0/lan0 roles the firewall
+    # opens; without it the machine comes up un-roled.
+    runtime_pkg=omarchy-server
+    settings_pkg=omarchy-server-settings
+    audio_config='null'
+    early_packages='"omarchy-keyring"'
+    ;;
   *) echo "unknown profile: $profile" >&2; exit 1 ;;
 esac
 

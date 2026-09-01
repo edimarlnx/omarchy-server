@@ -1,0 +1,7 @@
+# Networking and file-transfer conveniences. Every one of them is a tool an
+# intruder would otherwise have to bring along, so they are opt-in.
+inotify-tools
+rsync
+socat
+unzip
+whois

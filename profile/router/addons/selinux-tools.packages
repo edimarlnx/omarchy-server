@@ -1,0 +1,29 @@
+# The SELinux policy AUTHORING tools, split out of the `selinux` addon.
+#
+# `semanage`, `audit2allow`, `audit2why`, `sesearch`, `seinfo`. Everything
+# needed to turn a denial into a rule and to ask the loaded policy what it
+# allows. None of it is needed to RUN a confined machine: the policy loads,
+# `restorecon`, `setfiles`, `semodule`, `checkmodule` and `semodule_package`
+# are all in the base `selinux` addon, and the profile's own file contexts are
+# written straight into the policy store's file_contexts.local rather than
+# through semanage.
+#
+# Why it is a separate addon, and this is the whole reason:
+#
+#   setools depends on python-networkx, and Arch's python-networkx lists
+#   python-scipy, python-pandas, python-matplotlib and python-numpy as HARD
+#   dependencies rather than optional ones. Measured on an installed machine,
+#   these two packages and everything that arrives with them are 45 packages
+#   and 453 MiB -- 82% of what the SELinux route used to cost. A headless
+#   fleet machine was getting a scientific Python stack so that somebody could
+#   run audit2allow on it once.
+#
+# The workflow the split assumes: a machine runs `selinux` and reports its
+# denials with `omarchy-server-selinux avc`; the rule is authored somewhere
+# with `selinux-tools` installed, and ships as an omarchy_server.te in the
+# profile, which every machine compiles locally with checkmodule.
+#
+# Installing this on a machine that has never installed `selinux` will pull the
+# SELinux userland as a dependency and do nothing useful; the preflight says so.
+setools
+selinux-python

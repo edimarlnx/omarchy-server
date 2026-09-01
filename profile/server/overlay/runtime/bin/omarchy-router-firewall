@@ -1,0 +1,100 @@
+#!/bin/bash
+
+# omarchy:summary=Preview and apply the router's default nftables firewall
+# omarchy:args=[--preview] [--apply] [--regenerate]
+# omarchy:examples=omarchy router-firewall --preview | omarchy router-firewall --apply
+# omarchy:requires-sudo=true
+
+# The router's firewall is the `inet tui` nftables table at /etc/nftables.conf,
+# seeded by install/router/firewall-router.sh and managed live by tui-firewall
+# (the `tui-tools` addon). This command is the previewed apply the profile
+# promises: it shows the exact ruleset, then loads it into the kernel on
+# confirm -- the same command-preview-then-confirm contract the tui-tools use.
+#
+#   --preview (default)  print the ruleset and the one command that applies it,
+#                        change nothing.
+#   --apply              show the ruleset, ask once, then `nft -f`.
+#   --regenerate         rebuild /etc/nftables.conf from the current
+#                        WireGuard port and role names before previewing.
+#                        Delegates to install/router/firewall-router.sh so the
+#                        seed and the regenerate can never diverge.
+#
+# nftables.service already loads this file at every boot, so a router is never
+# open while it waits for someone to run this. The command exists for the
+# operator who edited the ports or the roles and wants to apply the change
+# without a reboot, and for the reviewer who wants to read the ruleset before
+# trusting it.
+
+set -uo pipefail
+
+OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
+OMARCHY_INSTALL="${OMARCHY_INSTALL:-$OMARCHY_PATH/install}"
+ruleset=/etc/nftables.conf
+mode=preview
+
+case "${1:-}" in
+  --apply) mode=apply ;;
+  --regenerate) mode=regenerate ;;
+  --preview | "") mode=preview ;;
+  -h | --help)
+    echo "Usage: omarchy-router-firewall [--preview|--apply|--regenerate]"
+    echo
+    echo "Previews (default) or applies $ruleset, the router's inet tui table."
+    exit 0
+    ;;
+  *)
+    echo "omarchy-router-firewall: unknown option '$1'. Try --help." >&2
+    exit 2
+    ;;
+esac
+
+if [[ $mode == regenerate ]]; then
+  if ((EUID != 0)); then exec sudo -E "$0" --regenerate; fi
+  # firewall-router.sh is a sourced leaf: no shebang, no exit. Give it the
+  # helpers it expects to find and run it in this shell.
+  # shellcheck disable=SC1090
+  source "$OMARCHY_INSTALL/router/firewall-router.sh"
+  echo "Regenerated $ruleset. Preview it with: omarchy-router-firewall --preview"
+  exit 0
+fi
+
+if [[ ! -r $ruleset ]]; then
+  echo "omarchy-router-firewall: $ruleset not found." >&2
+  echo "Generate it with: omarchy-router-firewall --regenerate" >&2
+  exit 1
+fi
+
+echo "── $ruleset ─────────────────────────────────────────────"
+cat "$ruleset"
+echo "─────────────────────────────────────────────────────────"
+echo
+echo "Exposed to the WAN: 22/tcp and the WireGuard UDP port only. Default"
+echo "forward policy: drop, with LAN → WAN allowed and masqueraded out wan0."
+echo
+
+if [[ $mode == preview ]]; then
+  echo "Preview only. Apply it with:"
+  echo "  omarchy-router-firewall --apply      (or: sudo nft -f $ruleset)"
+  exit 0
+fi
+
+# --apply
+if ((EUID != 0)); then exec sudo -E "$0" --apply; fi
+
+# A dry-run parse first: nft -c checks the file without touching the live
+# ruleset, so a typo is caught before the flush in the file wipes what is
+# loaded.
+if ! nft -c -f "$ruleset"; then
+  echo "omarchy-router-firewall: $ruleset did not parse; not applying." >&2
+  exit 1
+fi
+
+read -r -p "Load this ruleset into the kernel now? [y/N] " reply
+case "${reply,,}" in
+  y | yes) ;;
+  *) echo "Aborted; nothing changed."; exit 0 ;;
+esac
+
+nft -f "$ruleset"
+echo "Applied. Live table:"
+nft list table inet tui

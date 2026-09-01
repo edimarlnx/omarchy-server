@@ -1,0 +1,12 @@
+# Secure Boot with keys the machine generates and owns.
+#
+# sbctl is the whole addon: an 11 MiB static Go binary, no daemon, no listening
+# socket, no privileged path. It is what limine-entry-tool and mkinitcpio
+# already look for when they decide whether to sign what they just wrote, so
+# installing it (and creating keys) is what turns the existing boot pipeline
+# into a signing one. Doing the same with sbsign from sbsigntools would mean
+# writing and maintaining three hooks to replace code that already ships.
+#
+# Not in the core: a machine whose firmware cannot or will not enforce Secure
+# Boot carries no signing tool.
+sbctl

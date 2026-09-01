@@ -1,0 +1,32 @@
+# Router variant of omarchy-iso/builder/archinstall.packages: the package set
+# pacstrap installs into the target before the Omarchy runtime, and the seed of
+# the ISO's offline mirror.
+#
+# Identical to profile/server/archinstall.packages. The router profile differs
+# from the server profile in its core list (omarchy-router.packages: nftables
+# instead of ufw, plus wireguard-tools) and in its setup tree (install/router/),
+# not in what pacstrap lays down first. Kept as its own file rather than a
+# symlink so the two profiles stay independently editable.
+#
+# Differences from the desktop list are the server ones:
+#   - dropped: pipewire, alsa-firmware, sof-firmware (no audio stack).
+#   - dropped: base-devel (no compiler in the base; `omarchy-server-addon dev`
+#     brings it back).
+#   - dropped: tailscale (bundled through the `tailscale` addon instead).
+#   - added: nano (`base` ships no editor).
+#
+# This file only seeds the offline mirror; the packages that must land in the
+# target are in omarchy-router.packages, which the orchestrator reads back.
+#
+# Both microcode packages stay: the mirror must be able to serve either CPU.
+amd-ucode
+base
+efibootmgr
+intel-ucode
+limine
+linux
+linux-firmware
+nano
+omarchy-keyring
+openssh
+snapper

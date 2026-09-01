@@ -1,0 +1,18 @@
+# Reboot without the firmware: load the next kernel from the running one.
+#
+# kexec-tools is one static-ish package with no daemon, no unit and no
+# listening socket. It exists so `omarchy-server-update --kexec` can turn a
+# required reboot into a jump straight into the signed UKI, skipping POST,
+# device init, option ROMs and the bootloader menu -- on a virtual machine that
+# is most of the reboot, and on real server hardware with a slow BMC it is
+# nearly all of it.
+#
+# Not in the core, on the owner's premise that a package the machine does not
+# need is a package it does not carry. A machine that reboots twice a year
+# gains nothing from it; a fleet that updates nightly gains the difference
+# between a five second gap and a ninety second one.
+#
+# omarchy-server-update-restart uses it only when it is present: with the addon
+# absent, a required reboot is left as the upstream reboot-required marker and
+# the operator's next window, exactly as before.
+kexec-tools

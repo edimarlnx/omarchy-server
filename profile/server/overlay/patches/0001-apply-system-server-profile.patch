@@ -1,17 +1,18 @@
-# Route omarchy-apply-system through install/server/all.sh when the active
-# profile is 'server' (OMARCHY_PROFILE env or /etc/omarchy-profile).
-# Everything else — argument parsing, the exported environment, logging,
-# and the whole desktop path — is untouched.
+# Route omarchy-apply-system through install/<profile>/all.sh for the headless
+# editions ('server' and 'router'), selected by the OMARCHY_PROFILE env or
+# /etc/omarchy-profile. The router tree reuses the server leaves and adds only
+# its network and firewall. Everything else — argument parsing, the exported
+# environment, logging, and the whole desktop path — is untouched.
 --- a/bin/omarchy-apply-system	2026-08-28 19:05:44.787994582 -0300
 +++ b/bin/omarchy-apply-system	2026-08-28 19:05:53.704544439 -0300
-@@ -85,18 +85,36 @@
+@@ -85,18 +85,37 @@
  export OMARCHY_INSTALL_LOG_FILE="${OMARCHY_INSTALL_LOG_FILE:-/var/log/omarchy-install.log}"
  export PATH="$OMARCHY_PATH/bin:$PATH"
  
 +# The profile decides which setup tree runs. It comes from the environment
 +# (the ISO exports OMARCHY_PROFILE) or from /etc/omarchy-profile, written into
-+# the target by the server profile of the ISO. Anything other than "server"
-+# keeps the stock desktop path.
++# the target by the headless editions of the ISO. Anything other than a
++# headless edition keeps the stock desktop path.
 +profile="${OMARCHY_PROFILE:-}"
 +if [[ -z $profile && -r /etc/omarchy-profile ]]; then
 +  profile=$(tr -d '[:space:]' </etc/omarchy-profile)
@@ -25,12 +26,13 @@
 -
 -if (( defer_provisioning )); then
 -  omarchy-apply-hardware --defer-provisioning
-+if [[ $profile == "server" ]]; then
-+  # install/server/all.sh replaces config/all.sh, omarchy-apply-hardware
++if [[ $profile == "server" || $profile == "router" ]]; then
++  # install/<profile>/all.sh replaces config/all.sh, omarchy-apply-hardware
 +  # (38 of its 40 scripts are laptop/GPU/audio fixes), login/all.sh (no
 +  # display manager) and post-install/all.sh, whose pacman step needs a
-+  # server variant.
-+  source "$OMARCHY_INSTALL/server/all.sh"
++  # headless variant. The router tree sources the server leaves for everything
++  # but its own network and firewall, so the two cannot drift.
++  source "$OMARCHY_INSTALL/$profile/all.sh"
  else
 -  omarchy-apply-hardware --install-user "$install_user"
 -fi
