@@ -24,7 +24,11 @@ default=/etc/nftables.conf
 
 if [[ -s $saved ]]; then
   if { echo "flush ruleset"; cat "$saved"; } | nft -c -f - 2>/dev/null; then
-    { echo "flush ruleset"; cat "$saved"; } | exec nft -f -
+    # Not `exec` here: the right side of a pipeline runs in a subshell, so an
+    # exec there would return control to this script, which would then load
+    # the default over the state it just restored. Load, then leave.
+    { echo "flush ruleset"; cat "$saved"; } | nft -f -
+    exit $?
   fi
   echo "omarchy-router-firewall-load: $saved does not parse; loading the default" >&2
 fi
