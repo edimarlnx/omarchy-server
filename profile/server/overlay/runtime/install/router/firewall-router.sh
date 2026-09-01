@@ -174,6 +174,21 @@ chmod 0755 /etc/nftables.conf
 # the first second -- reachable, not open -- before any operator logs in.
 systemctl enable nftables.service
 
+# A drop-in points the service at the profile's loader, which prefers the
+# ruleset tui-firewall saved (/etc/omarchy/router/tui-firewall.nft) and falls
+# back to the default above. This is what makes TUI-managed rules survive a
+# reboot; without a saved file nothing changes.
+mkdir -p /etc/systemd/system/nftables.service.d
+cat >/etc/systemd/system/nftables.service.d/50-omarchy-router.conf <<'DROPIN'
+# Omarchy Router: load tui-firewall's saved ruleset when present, else the
+# default /etc/nftables.conf. Written by install/router/firewall-router.sh.
+[Service]
+ExecStart=
+ExecStart=/usr/share/omarchy/bin/omarchy-router-firewall-load
+DROPIN
+chmod 0644 /etc/systemd/system/nftables.service.d/50-omarchy-router.conf
+systemctl daemon-reload 2>/dev/null || true
+
 # The router has no ufw. If a dependency ever dragged it in, a masked unit
 # cannot start and cannot be pulled in by another unit's Wants=.
 systemctl mask ufw.service 2>/dev/null || true

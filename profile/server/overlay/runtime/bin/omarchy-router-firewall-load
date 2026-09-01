@@ -1,0 +1,35 @@
+#!/bin/bash
+
+# omarchy:summary=Load the router firewall at boot, preferring tui-firewall's saved state
+# omarchy:args=(none)
+# omarchy:requires-sudo=true
+
+# nftables.service runs this instead of `nft -f /etc/nftables.conf`. The
+# precedence is the point: when the operator has saved a managed ruleset from
+# tui-firewall (/etc/omarchy/router/tui-firewall.nft, a serialized
+# `nft list table inet tui`), THAT is the machine's firewall and it must
+# survive a reboot -- otherwise every rule added in the TUI silently reverts
+# to the profile's default, which is the "it looked like it worked" failure
+# the manage-not-view requirement bans. With no saved state, the default
+# rendered by install/router/firewall-router.sh loads exactly as before.
+#
+# The saved file carries only the table (no `flush ruleset`), so the flush is
+# prepended here: the load is atomic either way, and a syntax error in the
+# saved file falls back to the default rather than leaving the box open.
+
+set -uo pipefail
+
+saved=/etc/omarchy/router/tui-firewall.nft
+default=/etc/nftables.conf
+
+if [[ -s $saved ]]; then
+  if { echo "flush ruleset"; cat "$saved"; } | nft -c -f - 2>/dev/null; then
+    # Not `exec` here: the right side of a pipeline runs in a subshell, so an
+    # exec there would return control to this script, which would then load
+    # the default over the state it just restored. Load, then leave.
+    { echo "flush ruleset"; cat "$saved"; } | nft -f -
+    exit $?
+  fi
+  echo "omarchy-router-firewall-load: $saved does not parse; loading the default" >&2
+fi
+exec nft -f "$default"
