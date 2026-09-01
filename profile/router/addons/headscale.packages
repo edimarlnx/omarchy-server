@@ -1,0 +1,11 @@
+# The headscale coordination server, the self-hosted control plane the router's
+# WireGuard mesh registers against. Managed from the console by tui-vpn.
+#
+# The package comes from the same signed tui-tools repository the tools do
+# (https://pkgs.tui.tools/arch/$arch) -- a mirror built FROM SOURCE by
+# tui-tools/headscale and re-released under the family's own signature, so the
+# provenance chain is ours from commit to package, not a re-signed upstream
+# binary. install/server/addons/headscale.preflight.sh configures that
+# repository first, and skips the whole install when the machine already has a
+# headscale: an existing install, from any source, is the operator's to keep.
+headscale
