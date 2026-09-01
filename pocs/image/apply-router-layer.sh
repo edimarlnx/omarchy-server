@@ -28,7 +28,10 @@ export OMARCHY_INSTALL=/usr/share/omarchy/install
 profile_dir=/usr/share/omarchy/profile
 
 echo "› 1. runtime update"
-omarchy-server-update run --no-reboot || true
+# stdin closed for every long-running child: when this script arrives over
+# `ssh ... bash -s`, a child that reads stdin (the updater's shell restart does)
+# swallows the rest of the script and the layer silently stops after step 1.
+omarchy-server-update run --no-reboot </dev/null || true
 [[ -d $OMARCHY_INSTALL/router ]] || { echo "install/router tree missing after update: runtime too old" >&2; exit 1; }
 
 echo "› 2. router package delta"
@@ -45,15 +48,15 @@ else
   add=(nftables wireguard-tools); drop=(ufw)
 fi
 echo "  install: ${add[*]:-none}   remove: ${drop[*]:-none}"
-((${#add[@]})) && OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -S --needed --noconfirm "${add[@]}"
+((${#add[@]})) && OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -S --needed --noconfirm "${add[@]}" </dev/null
 for p in "${drop[@]:-}"; do
-  [[ -n $p ]] && pacman -Q "$p" >/dev/null 2>&1 && { systemctl disable --now "$p" 2>/dev/null || true; OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Rns --noconfirm "$p"; }
+  [[ -n $p ]] && pacman -Q "$p" >/dev/null 2>&1 && { systemctl disable --now "$p" 2>/dev/null || true; OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Rns --noconfirm "$p" </dev/null; }
 done
 
 echo "› 3. router setup leaves"
 cd "$OMARCHY_INSTALL/router"
 for leaf in identity-router.sh network-router.sh enable-services-router.sh firewall-router.sh; do
-  echo "  $leaf"; bash "$leaf"
+  echo "  $leaf"; bash "$leaf" </dev/null
 done
 
 echo "› 4. boot firewall"
