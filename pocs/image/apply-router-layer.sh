@@ -65,6 +65,8 @@ systemctl restart nftables.service
 
 echo "› 5. sanity"
 grep -q "table inet tui" /etc/nftables.conf || { echo "router ruleset not on disk" >&2; exit 1; }
-nft list ruleset | grep -q "table inet tui" || { echo "router ruleset not loaded" >&2; exit 1; }
+# No pipe into grep -q here: under pipefail, grep exiting on the first match
+# hands nft a SIGPIPE and the pipeline reports 141 -- a false "not loaded".
+nft list table inet tui >/dev/null 2>&1 || { echo "router ruleset not loaded" >&2; exit 1; }
 command -v wg >/dev/null || { echo "wireguard-tools missing" >&2; exit 1; }
 echo "router layer applied: $(pacman -Q omarchy-server nftables wireguard-tools | tr '\n' ' ')"
