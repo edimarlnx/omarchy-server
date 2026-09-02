@@ -17,9 +17,11 @@
 # Steps, all idempotent:
 #   1. update through the profile's own updater (direct pacman is guarded);
 #   2. install the router package delta, remove the server-only ufw;
-#   3. run the router setup leaves in the order install/router/all.sh uses;
+#   3. write the profile marker, then run the router setup leaves in the order
+#      install/router/all.sh uses;
 #   4. make nftables the boot firewall (unit enabled, ufw disabled);
-#   5. sanity: the router table is on disk and loads.
+#   5. sanity: the router table is on disk and loads, and the router addon
+#      lists are the ones this machine offers.
 set -euo pipefail
 
 [[ $EUID -eq 0 ]] || { echo "run as root" >&2; exit 1; }
@@ -53,7 +55,18 @@ for p in "${drop[@]:-}"; do
   [[ -n $p ]] && pacman -Q "$p" >/dev/null 2>&1 && { systemctl disable --now "$p" 2>/dev/null || true; OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Rns --noconfirm "$p" </dev/null; }
 done
 
-echo "› 3. router setup leaves"
+echo "› 3. profile marker and router setup leaves"
+# On the ISO path the installer writes /etc/omarchy-profile before anything
+# reads it. This path starts from a booted SERVER image, whose marker says
+# `server` -- and the marker is not decoration: omarchy-apply-system routes on
+# it, omarchy-server-motd labels the banner from it, and omarchy-server-addon
+# reads it to decide WHICH addon lists this machine offers. Left at `server`,
+# a router has no `headscale` addon and a `tui-tools` set without tui-router.
+# The file is in the settings package's
+# backup=(), so this edit survives every upgrade.
+echo router >/etc/omarchy-profile
+chmod 0644 /etc/omarchy-profile
+
 cd "$OMARCHY_INSTALL/router"
 for leaf in identity-router.sh network-router.sh enable-services-router.sh firewall-router.sh; do
   echo "  $leaf"; bash "$leaf" </dev/null
@@ -69,4 +82,15 @@ grep -q "table inet tui" /etc/nftables.conf || { echo "router ruleset not on dis
 # hands nft a SIGPIPE and the pipeline reports 141 -- a false "not loaded".
 nft list table inet tui >/dev/null 2>&1 || { echo "router ruleset not loaded" >&2; exit 1; }
 command -v wg >/dev/null || { echo "wireguard-tools missing" >&2; exit 1; }
+[[ $(tr -d '[:space:]' </etc/omarchy-profile) == router ]] || { echo "profile marker is not router" >&2; exit 1; }
+# The addon sets a router is offered. A runtime older than the profile-aware
+# lookup ships no install/router/addons, so this says which half is missing
+# rather than leaving it to be discovered on the installed machine.
+if [[ -d $OMARCHY_INSTALL/router/addons ]]; then
+  omarchy-server-addon --list | grep -qx headscale ||
+    { echo "router addon lists are installed but headscale is not among them" >&2; exit 1; }
+else
+  echo "  note: this runtime ships no install/router/addons (omarchy-server pkgrel < 19);"
+  echo "        the router addon sets appear after the next update."
+fi
 echo "router layer applied: $(pacman -Q omarchy-server nftables wireguard-tools | tr '\n' ' ')"

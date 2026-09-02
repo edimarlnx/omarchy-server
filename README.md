@@ -21,7 +21,9 @@ upstream is modified in place.
 ```
 pkgs/            build.sh (Docker) and test.sh for the packages; the signing key
 profile/server/  package list, addons, services, overlay (install/server/*,
-                 settings) and patches applied on top of the upstream tree
+                 install/router/*, settings) and patches applied on top of the
+                 upstream tree
+profile/router/  the router profile: its package list and its addon lists
 iso/             build.sh + overlay/patches for the ISO --profile server
 pocs/            lab scripts and measured results (QEMU/OVMF, cidata autoinstall);
                  pocs/image/ builds and validates the cloud image, pocs/image/oci/
@@ -29,6 +31,7 @@ pocs/            lab scripts and measured results (QEMU/OVMF, cidata autoinstall
 tools/serverlab/ the Go driver that runs all of the above in order (make serverlab)
 docs/            technical docs: packaging.md, iso-server.md, secure-boot.md, mac.md,
                  transactional.md, cloud-image.md, serverlab.md, screenshots/
+test/            shell tests for the profile's runtime commands (make shell-test)
 ```
 
 The **PKGBUILDs are not here**. They live in
@@ -130,6 +133,11 @@ omarchy-server-addon --list          # cli-tools dev docker editor kexec net-too
 omarchy-server-addon docker
 pocs/lab/mkcidata.sh --profile server --addons docker    # or at install time
 ```
+
+The sets are per profile: `omarchy-server-addon` reads `/etc/omarchy-profile`
+(or `$OMARCHY_PROFILE`) and looks in `install/<profile>/addons/` before
+`install/server/addons/`. A router is additionally offered `headscale`, and its
+`tui-tools` set carries `tui-router` on top of the server list.
 
 An installed machine gets those from the signed `[omarchy-server]` repository,
 which `omarchy-server-settings` enables by shipping

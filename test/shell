@@ -1,0 +1,48 @@
+#!/bin/bash
+
+# Run every shell test under test/shell.d/. Same runner, same conventions and
+# same output as upstream's test/shell (upstream/omarchy/test/shell): a test
+# file exits at its first failed assertion, and the runner keeps going so one
+# failing file cannot hide the ones after it.
+#
+#   ./test/shell                 every file
+#   ./test/shell addon-lookup    only files whose name contains this
+#
+# What belongs here: the profile's own runtime commands, exercised against a
+# fixture tree rather than a machine. Anything that needs a real pacman, a real
+# systemd or a real disk belongs in pkgs/test.sh (a container) or in the
+# acceptance lists under pocs/ (a VM).
+
+set -euo pipefail
+
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+TEST_DIR="$ROOT/test/shell.d"
+filter="${1:-}"
+
+shopt -s nullglob
+tests=()
+for test in "$TEST_DIR"/*-test.sh; do
+  [[ $(basename "$test") == "base-test.sh" ]] && continue
+  [[ -n $filter && $test != *"$filter"* ]] && continue
+  tests+=("$test")
+done
+shopt -u nullglob
+
+if ((${#tests[@]} == 0)); then
+  echo "No shell tests found in $TEST_DIR${filter:+ matching '$filter'}" >&2
+  exit 1
+fi
+
+failed=()
+for test in "${tests[@]}"; do
+  printf '==> %s\n' "${test#"$ROOT"/}"
+  bash "$test" || failed+=("${test#"$ROOT"/}")
+done
+
+if ((${#failed[@]} > 0)); then
+  printf '\n%d of %d test files failed:\n' "${#failed[@]}" "${#tests[@]}" >&2
+  printf '  %s\n' "${failed[@]}" >&2
+  exit 1
+fi
+
+printf '\nAll %d test files passed.\n' "${#tests[@]}"

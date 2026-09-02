@@ -1,4 +1,5 @@
-# The tui-tools terminal UIs for the things a server administrator does.
+# The tui-tools terminal UIs for the things a router administrator does: the
+# server list, plus tui-router, which only means anything on a router.
 #
 # One addon for the whole family, from the signed pacman repository the tools
 # publish themselves (https://pkgs.tui.tools/arch/$arch). It replaces the
@@ -37,6 +38,14 @@ tui-ssh
 tui-systemd
 tui-update
 tui-users
+
+# tui-router is what this list has and the server list does not, and it is the
+# reason the two lists exist separately: it drives the nftables `inet tui`
+# ruleset and the WAN/LAN links install/router/ sets up, neither of which a
+# server has. The other three are on both lists -- a mesh, a traffic view and a
+# domain controller are useful on any machine -- and tui-vpn is additionally
+# what manages the coordination server the `headscale` addon installs, which is
+# offered on this profile only.
 tui-router
 tui-vpn
 tui-traffic
