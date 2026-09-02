@@ -24,12 +24,22 @@
 # operator who edited the ports or the roles and wants to apply the change
 # without a reboot, and for the reviewer who wants to read the ruleset before
 # trusting it.
+#
+# The summary printed under the ruleset is READ OUT OF THE RULESET ABOVE IT: the
+# interfaces, the ports and the forward policy come from the file that was just
+# printed, never from a fixed sentence. A summary that describes a different
+# ruleset than the one on screen is worse than no summary at all, and the fixed
+# one this used to print named a `wan0` that the profile never creates -- it
+# does not rename NICs, the roles resolve to real names like enp1s0.
 
 set -uo pipefail
 
 OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
 OMARCHY_INSTALL="${OMARCHY_INSTALL:-$OMARCHY_PATH/install}"
-ruleset=/etc/nftables.conf
+# Both paths are overridable so the shell tests can run this command against a
+# fixture tree, with no root and no machine.
+ruleset="${OMARCHY_ROUTER_RULESET:-/etc/nftables.conf}"
+roles_conf="${OMARCHY_ROUTER_ROLES:-/etc/omarchy/router/roles.conf}"
 mode=preview
 
 case "${1:-}" in
@@ -64,12 +74,123 @@ if [[ ! -r $ruleset ]]; then
   exit 1
 fi
 
+# ── reading the ruleset back ────────────────────────────────────────────────
+#
+# Everything the summary says is parsed out of $ruleset, the file printed just
+# above it. The two rulesets the profile generates are recognised by their
+# rules, not by their comment header, so a file an operator edited by hand still
+# gets an honest summary (or none, when it is neither shape).
+
+# quoted_names turns an nftables interface set -- `{ "enp1s0", "enp3s0" }` or a
+# bare `"enp1s0"` -- into a space-separated list of device names.
+quoted_names() {
+  grep -oE '"[^"]+"' <<<"$1" | tr -d '"' | tr '\n' ' '
+}
+
+# human_list renders device names the way a sentence needs them:
+# `enp1s0`, `enp1s0 and enp3s0`, `enp1s0, enp2s0 and enp3s0`.
+human_list() {
+  local names=("$@") count=$#
+  case $count in
+    0) printf '' ;;
+    1) printf '%s' "${names[0]}" ;;
+    2) printf '%s and %s' "${names[0]}" "${names[1]}" ;;
+    *)
+      local head=("${names[@]:0:count-1}")
+      local IFS=', '
+      printf '%s and %s' "${head[*]}" "${names[count - 1]}"
+      ;;
+  esac
+}
+
+# lan_phrase names the LAN side. More than one LAN port is bridged into a single
+# interface by install/router/network-router.sh, and the ruleset then matches
+# the BRIDGE, not the members -- so name the bridge, and name the ports behind
+# it from roles.conf when they can be read, because "br-lan" alone tells the
+# operator nothing about which sockets it means.
+lan_phrase() {
+  local ifaces=("$@") members=()
+
+  if [[ ${#ifaces[@]} == 1 && ${ifaces[0]} == br-* ]]; then
+    if [[ -r $roles_conf ]]; then
+      local LAN_IFS="" LAN_MACS=""
+      # shellcheck disable=SC1090 -- a KEY=value file, read for LAN_IFS only.
+      source "$roles_conf" 2>/dev/null
+      read -r -a members <<<"$LAN_IFS"
+    fi
+    if ((${#members[@]} > 1)); then
+      printf 'bridge %s: %s' "${ifaces[0]}" "$(human_list "${members[@]}")"
+      return
+    fi
+    printf 'bridge %s' "${ifaces[0]}"
+    return
+  fi
+
+  human_list "${ifaces[@]}"
+}
+
+# summarize_ruleset prints the sentence under the printed file.
+summarize_ruleset() {
+  local body wan_chunk lan_chunk masq_chunk ssh_port wg_port
+  body=$(cat "$ruleset")
+
+  masq_chunk=$(sed -n 's/.*oifname \(.*\) masquerade.*/\1/p' <<<"$body" | head -n1)
+  local forward_rule
+  forward_rule=$(grep -E 'iifname .* oifname .* accept' <<<"$body" | head -n1)
+  lan_chunk=$(sed -n 's/.*iifname \(.*\) oifname .*/\1/p' <<<"$forward_rule")
+  wan_chunk=$(sed -n 's/.*oifname \(.*\) accept.*/\1/p' <<<"$forward_rule")
+
+  local wan_ifaces=() lan_ifaces=()
+  read -r -a wan_ifaces <<<"$(quoted_names "${wan_chunk:-$masq_chunk}")"
+  read -r -a lan_ifaces <<<"$(quoted_names "$lan_chunk")"
+
+  ssh_port=$(sed -n 's/.*tcp dport \([0-9]\+\) accept.*/\1/p' <<<"$body" | head -n1)
+  wg_port=$(sed -n 's/.*udp dport \([0-9]\+\) accept.*/\1/p' <<<"$body" | head -n1)
+
+  # The open ports, named from the rules rather than assumed.
+  local ports="${ssh_port:-22}/tcp"
+  [[ -n $wg_port ]] && ports+=" and $wg_port/udp (WireGuard)"
+
+  # The scoped router ruleset: it forwards from the LAN role to the WAN role and
+  # masquerades out of the WAN.
+  if ((${#wan_ifaces[@]} > 0 && ${#lan_ifaces[@]} > 0)) && [[ -n $masq_chunk ]]; then
+    local wan lan
+    wan=$(human_list "${wan_ifaces[@]}")
+    lan=$(lan_phrase "${lan_ifaces[@]}")
+    echo "Exposed on the WAN: $ports only."
+    echo "Default forward policy: drop, with LAN → WAN allowed and masqueraded"
+    echo "out of the WAN. On this machine:"
+    echo "  WAN  $wan"
+    echo "  LAN  $lan"
+    return
+  fi
+
+  # The unconfigured safe-mode ruleset: no roles assigned yet, so it forwards
+  # nothing and accepts ssh on every interface. Saying so is the whole point --
+  # this is the file an operator sees right after the roles wizard, and the old
+  # fixed summary described the OTHER ruleset here.
+  if [[ -z $masq_chunk ]] && grep -qE '^\s*chain forward' <<<"$body" &&
+    ! grep -qE 'iifname .* oifname .* accept' <<<"$body"; then
+    echo "This is the UNCONFIGURED ruleset: no WAN/LAN roles are in force, so"
+    echo "$ports are accepted on EVERY interface,"
+    echo "and nothing is forwarded or masqueraded."
+    echo
+    echo "Assign the roles in $roles_conf (or run 'tui-router'), then:"
+    echo "  omarchy-router-firewall --regenerate   rewrite $ruleset for the roles"
+    echo "  omarchy-router-firewall --apply        print it, ask once, load it"
+    return
+  fi
+
+  # Neither shape: an edited or a tui-firewall-saved ruleset. Do not guess.
+  echo "This ruleset is not one of the two the profile generates; read it above."
+  echo "Regenerate the profile default with: omarchy-router-firewall --regenerate"
+}
+
 echo "── $ruleset ─────────────────────────────────────────────"
 cat "$ruleset"
 echo "─────────────────────────────────────────────────────────"
 echo
-echo "Exposed to the WAN: 22/tcp and the WireGuard UDP port only. Default"
-echo "forward policy: drop, with LAN → WAN allowed and masqueraded out wan0."
+summarize_ruleset
 echo
 
 if [[ $mode == preview ]]; then
