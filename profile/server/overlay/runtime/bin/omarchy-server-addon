@@ -7,19 +7,70 @@
 
 # The server base carries only what a headless machine needs to boot, update,
 # snapshot, be reached and be firewalled. Everything else lives in an addon:
-# a package list at install/server/addons/<name>.packages and an optional
+# a package list at install/<profile>/addons/<name>.packages and an optional
 # setup leaf at install/server/addons/<name>.sh, sourced after the install.
 #
 # The ISO bundles every addon's packages in its offline mirror without
 # installing them, so `omarchy-server-addon docker` works on a machine that has
 # never seen the network, and an `addons` file on the autoinstall drive applies
 # them during the install itself.
+#
+# ── the package lists are per profile ───────────────────────────────────────
+#
+# The profiles do not offer the same sets. A router has addons a server has no
+# use for (`headscale`, the coordination server its mesh registers against) and
+# its `tui-tools` set carries tui-router, which only means something on a
+# machine that routes. So the lists are looked up along a search path, most
+# specific first:
+#
+#   install/<profile>/addons/   the active profile's lists, when it has any
+#   install/server/addons/      the server lists, and the setup leaves
+#
+# The setup and preflight leaves live in install/server/addons/ for every
+# profile: they are shell, they are shared, and duplicating them per profile is
+# how the two copies drift. The search path finds them there anyway, so a
+# profile that needs its own leaf can still ship one beside its list.
 
 set -euo pipefail
 
 OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
 OMARCHY_INSTALL="${OMARCHY_INSTALL:-$OMARCHY_PATH/install}"
-addons_dir="$OMARCHY_INSTALL/server/addons"
+
+# The profile the machine was installed as. The ISO exports OMARCHY_PROFILE
+# while it applies addons inside the target chroot, where /etc is the target's
+# but the marker may not be written yet; on an installed machine the variable
+# is unset and /etc/omarchy-profile is the answer -- the same two sources, in
+# the same order, that omarchy-apply-system reads.
+active_profile() {
+  local profile="${OMARCHY_PROFILE:-}"
+  if [[ -z $profile && -r /etc/omarchy-profile ]]; then
+    profile=$(tr -d '[:space:]' </etc/omarchy-profile 2>/dev/null || true)
+  fi
+  # The name becomes a path component, and one of its two sources is a file
+  # anybody with root can write. Anything that is not a plain profile name is
+  # not a profile.
+  [[ $profile =~ ^[a-z0-9][a-z0-9-]*$ ]] || profile=server
+  printf '%s' "$profile"
+}
+
+profile=$(active_profile)
+addons_dirs=()
+if [[ $profile != server && -d $OMARCHY_INSTALL/$profile/addons ]]; then
+  addons_dirs+=("$OMARCHY_INSTALL/$profile/addons")
+fi
+addons_dirs+=("$OMARCHY_INSTALL/server/addons")
+
+# The first directory on the search path that holds this file, if any.
+addon_file() {
+  local name="$1" dir
+  for dir in "${addons_dirs[@]}"; do
+    if [[ -f $dir/$name ]]; then
+      printf '%s' "$dir/$name"
+      return 0
+    fi
+  done
+  return 1
+}
 
 # The ISO applies addons inside the target chroot, where the only repository
 # that exists is the bundled offline mirror. It points this at the offline
@@ -28,20 +79,26 @@ addons_dir="$OMARCHY_INSTALL/server/addons"
 pacman_args=()
 [[ -n ${OMARCHY_ADDON_PACMAN_CONF:-} ]] && pacman_args+=(--config "$OMARCHY_ADDON_PACMAN_CONF")
 
+# Every list on the search path, each addon named once: a profile that
+# overrides a server list offers one addon, not two.
 available_addons() {
-  local file
-  for file in "$addons_dir"/*.packages; do
-    [[ -f $file ]] || continue
-    local name="${file##*/}"
-    printf '%s\n' "${name%.packages}"
-  done
+  local dir file name
+  for dir in "${addons_dirs[@]}"; do
+    for file in "$dir"/*.packages; do
+      [[ -f $file ]] || continue
+      name="${file##*/}"
+      printf '%s\n' "${name%.packages}"
+    done
+  done | sort -u
 }
 
 usage() {
   echo "Usage: omarchy-server-addon <name>"
   echo "       omarchy-server-addon --list"
   echo
-  echo "Available addons:"
+  # Which profile's lists these are, because "the addon I want is not here" is
+  # the question this command gets asked, and the profile is the answer.
+  echo "Available addons ($profile profile):"
   local name
   while read -r name; do
     printf '  %-14s %s\n' "$name" "$(addon_summary "$name")"
@@ -51,7 +108,9 @@ usage() {
 # The first non-empty comment line of the package list doubles as the addon's
 # description, so there is one place to write it down.
 addon_summary() {
-  sed -n 's/^# \(.*\)/\1/p' "$addons_dir/$1.packages" 2>/dev/null | head -n 1
+  local list
+  list=$(addon_file "$1.packages") || return 0
+  sed -n 's/^# \(.*\)/\1/p' "$list" 2>/dev/null | head -n 1
 }
 
 case "${1:-}" in
@@ -76,10 +135,9 @@ if (($#)); then
   exit 2
 fi
 
-packages_file="$addons_dir/$addon.packages"
-if [[ ! -f $packages_file ]]; then
+if ! packages_file=$(addon_file "$addon.packages"); then
   echo "omarchy-server-addon: no such addon: $addon" >&2
-  echo "Available: $(available_addons | tr '\n' ' ')" >&2
+  echo "Available ($profile profile): $(available_addons | tr '\n' ' ')" >&2
   exit 1
 fi
 
@@ -100,8 +158,7 @@ mapfile -t packages < <(grep -v '^#\|^$' "$packages_file")
 # pre-answered yes. The file is a list, one flag per line, comments allowed,
 # so what an addon asks for is readable beside the packages it asks for.
 extra_pacman_args=()
-extra_args_file="$addons_dir/$addon.pacman-args"
-if [[ -f $extra_args_file ]]; then
+if extra_args_file=$(addon_file "$addon.pacman-args"); then
   mapfile -t extra_pacman_args < <(grep -v '^#\|^$' "$extra_args_file")
 fi
 if ((${#packages[@]} == 0)); then
@@ -115,8 +172,7 @@ fi
 # packages had already been installed on a machine that is not going to use
 # them. Same convention as the setup leaf -- sourced, no shebang -- but this one
 # may exit, and exiting is how it refuses.
-preflight="$addons_dir/$addon.preflight.sh"
-if [[ -f $preflight ]]; then
+if preflight=$(addon_file "$addon.preflight.sh"); then
   # shellcheck disable=SC1090
   source "$preflight"
 fi
@@ -149,8 +205,7 @@ else
   pacman -Syu --needed --noconfirm "${extra_pacman_args[@]}" "${packages[@]}"
 fi
 
-setup="$addons_dir/$addon.sh"
-if [[ -f $setup ]]; then
+if setup=$(addon_file "$addon.sh"); then
   echo "Running addon setup: ${setup##*/}"
   # Sourced, with no shebang and no exit, the same convention every leaf under
   # install/ follows (agents/skills/install-scripts.md).

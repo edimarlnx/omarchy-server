@@ -73,10 +73,23 @@ fingerprint=$(<"$pkgs_dir/keys/fingerprint")
 # and neither should own a second copy. `branding/` carries the Limine
 # wallpaper, which the settings package installs and the ESP receives at
 # install time.
+#
+# `router-addons/` is profile/router/addons, the router profile's package
+# lists. It is staged under a name of its own because both profiles call the
+# directory `addons` and the tarball is flat: the runtime package unpacks it to
+# install/router/addons/, which is where omarchy-server-addon looks first on a
+# router. Without it a router machine only ever saw the server lists -- no
+# `headscale`, and a `tui-tools` set without tui-router.
 overlay_tarball_name=omarchy-server-overlay.tar.gz
+overlay_stage=$(mktemp -d)
+trap 'rm -rf "$overlay_stage"' EXIT
+cp -a "$repo_root/profile/server/overlay" "$overlay_stage/overlay"
+cp -a "$repo_root/profile/server/addons" "$overlay_stage/addons"
+cp -a "$repo_root/profile/server/branding" "$overlay_stage/branding"
+cp -a "$repo_root/profile/router/addons" "$overlay_stage/router-addons"
 for package in omarchy-server-settings omarchy-server; do
   tar -czf "$pkgbuilds_dir/$package/$overlay_tarball_name" \
-    -C "$repo_root/profile/server" overlay addons branding
+    -C "$overlay_stage" overlay addons branding router-addons
 done
 
 install -d "$pkgs_dir/out" "$pkgs_dir/repo"

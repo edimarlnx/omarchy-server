@@ -197,7 +197,7 @@ why in its own header:
 | `etc-overrides/nsswitch.conf` | no `mdns_minimal` (Avahi/nss-mdns are gone) |
 | `etc/fastfetch/config.jsonc` | MOTD without gpu/display/wm/de/terminal/theme; with shell and local ip |
 | `etc/profile.d/omarchy-path.sh` | explicit `OMARCHY_PATH` export |
-| `etc/omarchy-profile` | `server` marker read by `omarchy-apply-system` |
+| `etc/omarchy-profile` | `server` marker read by `omarchy-apply-system`, `omarchy-server-motd` and `omarchy-server-addon` (the ISO writes `router` on a router install) |
 | `etc/profile.d/omarchy-motd.sh` | prints the login banner once per login shell |
 | `etc/issue.net` | two plain lines, for an admin who wants an ssh `Banner` |
 | `etc/systemd/system/serial-getty@.service.d/10-omarchy-issue.conf` | points agetty at `/etc/issue.serial` on the serial line |
@@ -361,23 +361,42 @@ server.
 - `prune-pkg-cache-server.sh`: `paccache -rk1` + `-ruk0` at the end, so the
   `@factory` snapshot is taken without the install cache.
 
-#### Addons (`install/server/addons/` + `bin/omarchy-server-addon`)
+#### Addons (`install/<profile>/addons/` + `bin/omarchy-server-addon`)
 
 The core list is small enough to be useless for some machines on purpose, so
 the profile needs a supported way to add things back. An addon is a package
 list plus an optional setup leaf:
 
 ```
-profile/server/addons/<name>.packages          the packages
+profile/<profile>/addons/<name>.packages       the packages, per profile
 profile/server/overlay/runtime/install/server/addons/<name>.sh   optional setup
 ```
 
-Both end up in the runtime package under `install/server/addons/`, and
-`pkgs/build.sh` packs `profile/server/addons/` into the same overlay tarball as
-the rest, because the ISO builder reads those `.packages` files directly to
-fill the offline mirror. One source of truth, two consumers.
+The **lists are per profile, the leaves are shared.** A router is offered sets
+a server has no use for — `headscale`, the coordination server its mesh
+registers against — and its `tui-tools` list carries `tui-router`, which only
+means something on a router. The setup and preflight leaves are the same shell
+for both, so they live once in `install/server/addons/` and a router reaches
+them there.
 
-`omarchy-server-addon <name>` reads the list, installs it and sources the leaf.
+Both sets end up in the runtime package, `profile/server/addons/` under
+`install/server/addons/` and `profile/router/addons/` under
+`install/router/addons/`; `pkgs/build.sh` stages the router lists as
+`router-addons/` in the overlay tarball, because both directories are called
+`addons` in this repository and the tarball is flat. The ISO builder reads the
+same `profile/<profile>/addons/*.packages` directly to fill the offline mirror.
+One source of truth, two consumers.
+
+`omarchy-server-addon <name>` looks the file up along a search path, most
+specific first — `install/<profile>/addons/`, then `install/server/addons/` —
+where `<profile>` is `$OMARCHY_PROFILE` or, unset, `/etc/omarchy-profile`: the
+same two sources, in the same order, `omarchy-apply-system` reads. A name that
+is not a plain profile name falls back to `server` rather than becoming a path.
+`--list` and `--help` name the profile they are listing, because "the addon I
+want is not here" is the question this command gets asked and the profile is
+the answer.
+
+It reads the list, installs it and sources the leaf.
 It re-execs under sudo rather than sprinkling `sudo` through the setup, so the
 leaf runs as root exactly the way `install/server/*.sh` does during the ISO
 install. `OMARCHY_ADDON_PACMAN_CONF` points it at another `pacman.conf`, which
@@ -394,7 +413,8 @@ an unrefreshed system is the partial upgrade Arch warns about.
 | `dev` | base-devel, git, yay, mise-bin | — |
 | `editor` | omarchy-nvim | seeds `~/.config/nvim` for existing users |
 | `net-tools` | inotify-tools, rsync, socat, unzip, whois | — |
-| `tui-tools` | the 14 tui-tools terminal UIs | preflight: configures `[tui-tools]` and pins its signing key |
+| `tui-tools` | the tui-tools terminal UIs, plus `tui-router` on the router profile | preflight: configures `[tui-tools]` and pins its signing key |
+| `headscale` | headscale (**router profile only**) | preflight: skips an existing install, otherwise reuses the `tui-tools` preflight for the repository and key; leaf enables `headscale.service` |
 | `vm` | qemu-guest-agent | enables `qemu-guest-agent.service` |
 
 `tui-tools` is the addon whose packages are in no Arch repository: they come

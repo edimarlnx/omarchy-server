@@ -199,6 +199,41 @@ case "${action:-run}" in
     offset=0
     [[ -r /var/log/pacman.log ]] && offset=$(stat -c %s /var/log/pacman.log)
 
+    # ── the stale reboot-required marker ─────────────────────────────────────
+    #
+    # omarchy-server-update-restart sets upstream's reboot-required marker when
+    # a transaction really needs a reboot, and upstream's omarchy-update-restart
+    # -- which runs inside the omarchy-update below -- reads it. Nothing on a
+    # server ever clears it: the only command that does is omarchy-system-reboot,
+    # which schedules the reboot through the USER systemd manager and then closes
+    # the Hyprland windows. A headless machine reboots with `systemctl reboot`,
+    # so the marker outlives the reboot it asked for.
+    #
+    # The symptom is a pair of lines that contradict each other in the same run:
+    #
+    #   Updates require reboot. Ready? (not rebooting: unattended update)
+    #   ...
+    #   reboot required: no
+    #
+    # The first is upstream reading a marker left by an update three weeks ago,
+    # the second is this profile's classifier reporting on the transaction that
+    # just happened. Both are honest; together they are noise, and noise in an
+    # unattended log is how a real "reboot required" stops being read.
+    #
+    # A marker OLDER than the current boot asked for a reboot that has since
+    # been taken, and that is the whole test -- the machine, not the log. A
+    # marker written since this boot is a reboot that is genuinely still owed,
+    # and it is left exactly where it is.
+    marker="${HOME:-/root}/.local/state/omarchy/reboot-required"
+    if [[ -f $marker ]]; then
+      uptime_seconds=$(cut -d. -f1 </proc/uptime)
+      boot_epoch=$(($(date +%s) - uptime_seconds))
+      if (($(stat -c %Y "$marker") < boot_epoch)); then
+        echo "clearing a reboot-required marker from before this boot: the reboot was taken"
+        rm -f "$marker"
+      fi
+    fi
+
     update_rc=0
     env OMARCHY_NONINTERACTIVE=1 \
       OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}" \

@@ -242,6 +242,24 @@ EOF
       "grep -qx docker /usr/share/omarchy/install/server/addons/docker.packages && grep -qx ufw-docker /usr/share/omarchy/install/server/addons/docker.packages"
     check "docker addon setup leaf ships with it" \
       test -f /usr/share/omarchy/install/server/addons/docker.sh
+
+    # The addon lists are per profile, and the runtime ships both sets: a
+    # router machine is offered the router lists (headscale, and a tui-tools
+    # set carrying tui-router), a server is offered the server ones.
+    # omarchy-server-addon reads OMARCHY_PROFILE, then /etc/omarchy-profile,
+    # which in this container says server.
+    check "the router addon lists ship beside the server ones" \
+      test -f /usr/share/omarchy/install/router/addons/headscale.packages
+    check "the router tui-tools list carries the router tools" bash -c \
+      "for t in tui-router tui-vpn tui-traffic tui-dc; do grep -qx \"\$t\" /usr/share/omarchy/install/router/addons/tui-tools.packages || exit 1; done"
+    check "the server profile is not offered the router-only addons" bash -c \
+      "! omarchy-server-addon --list | grep -qx headscale"
+    check "the router profile is offered headscale" bash -c \
+      "OMARCHY_PROFILE=router omarchy-server-addon --list | grep -qx headscale"
+    check "the router profile keeps the server addons it shares" bash -c \
+      "for a in docker selinux tui-tools; do OMARCHY_PROFILE=router omarchy-server-addon --list | grep -qx \"\$a\" || exit 1; done"
+    check "the leaves for a router-only addon are on the shared search path" bash -c \
+      "test -f /usr/share/omarchy/install/server/addons/headscale.sh && test -f /usr/share/omarchy/install/server/addons/headscale.preflight.sh"
     echo
     echo "== secure boot =="
     check "the secureboot addon is sbctl and nothing else" bash -c \
