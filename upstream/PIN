@@ -1,0 +1,18 @@
+# The upstream trees this repository is derived from. Written by
+# tools/upstream-bump.sh; the PKGBUILD's _commit in omarchy-server-pkgs must
+# name the same omarchy commit.
+#
+# This first pin was written by hand, from what the repository was already
+# derived from before the file existed: the PKGBUILD's _commit and the commit
+# the ISO patches were rebased onto. Neither is a release tag -- both are
+# commits on the upstream default branch, which is why the channel below says
+# `edge`. The first `tools/upstream-bump.sh --channel tags` run is what moves
+# this onto a tagged release.
+channel=edge
+omarchy_repo=basecamp/omarchy
+omarchy_ref=quattro
+omarchy_commit=468b511249b1a341311c46f5a7cf81aa5bc5af92
+omarchy_iso_repo=omacom-io/omarchy-iso
+omarchy_iso_ref=quattro
+omarchy_iso_commit=268bac16d351a21d867e37565738f458b11cb06c
+updated=2026-08-28

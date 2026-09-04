@@ -1,0 +1,282 @@
+name: Upstream tracker
+
+# Watches the two upstream repositories this profile is derived from --
+# basecamp/omarchy and omacom-io/omarchy-iso -- and, when they move, prepares
+# the bump: it moves the pin, proves the patch series still applies, runs
+# `make test` and opens a pull request with the changelog, the per-patch result
+# and a checklist. It never merges anything. The whole decision lives in
+# tools/upstream-bump.sh, which is runnable by hand:
+#
+#   tools/upstream-bump.sh --dry-run
+#
+# Channels:
+#   tags  (default)  follow the latest upstream RELEASE tag: the stable pin
+#   edge             follow the upstream default branch: a canary, opened as a
+#                    DRAFT pull request labelled `edge-canary`
+#
+# The weekly schedule runs the `tags` channel. The separate `edge-canary` job
+# runs beside it and only reports: it dry-runs the patch series against the
+# upstream default branch and writes a job summary, so a patch that upstream is
+# about to break is visible a release early. It opens no pull request and never
+# fails the workflow.
+#
+# Repository setup this workflow expects:
+#
+#   Secret MIRROR_PUSH_TOKEN  a fine-grained PAT with `contents: write` on
+#                             edimarlnx/omarchy, the public mirror the
+#                             omarchy-server PKGBUILD clones from. Without it
+#                             the mirror step is SKIPPED with a warning and the
+#                             package build would later fail to find the new
+#                             commit, so create it:
+#                             Settings > Secrets and variables > Actions.
+#   Labels                    `needs-rebase` and `edge-canary`. They are
+#                             created on demand by the job, so nothing has to
+#                             be done by hand.
+#
+# The job also needs "Allow GitHub Actions to create and approve pull requests"
+# enabled in Settings > Actions > General, since it opens the PR with the
+# built-in GITHUB_TOKEN.
+
+on:
+  schedule:
+    # Monday 06:00 UTC, before the week starts.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Which upstream channel to follow'
+        type: choice
+        options: [tags, edge]
+        default: tags
+
+concurrency:
+  # One tracker at a time: two runs would race on the same bump branch.
+  group: upstream-tracker
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  track:
+    name: Track upstream (${{ inputs.channel || 'tags' }})
+    runs-on: ubuntu-latest
+    env:
+      CHANNEL: ${{ inputs.channel || 'tags' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The bump commit is pushed to a branch of its own, so the full
+          # history has to be here, and the upstream work clones come along if
+          # they are ever turned into submodules.
+          fetch-depth: 0
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/serverlab/go.mod
+          # serverlab has no third-party dependency and therefore no go.sum,
+          # which the module cache would insist on finding.
+          cache: false
+
+      - name: Resolve the bump, apply the patch series, run make test
+        id: bump
+        env:
+          # tools/upstream-bump.sh reads upstream through `gh api`.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          # The script's exit code is the verdict, so it must not abort the
+          # step: 0 = fine, 3 = a patch no longer applies (still worth a PR),
+          # anything else = a real failure.
+          tools/upstream-bump.sh --channel "$CHANNEL" --body "$RUNNER_TEMP/pr-body.md"
+          status=$?
+          echo "status=$status" >>"$GITHUB_OUTPUT"
+          case $status in
+            0|3) exit 0 ;;
+            *) echo "::error::tools/upstream-bump.sh failed with exit $status" >&2; exit "$status" ;;
+          esac
+
+      - name: Nothing moved
+        if: steps.bump.outputs.changed != 'true'
+        run: echo "Upstream has not moved since the current pin; nothing to do."
+
+      # --- the mirror --------------------------------------------------------
+      # The omarchy-server PKGBUILD clones edimarlnx/omarchy, not basecamp's,
+      # so the new commit has to exist there before the package can be built.
+      # `pin/<ref>` is a mirror-owned branch: force-pushable, and enough to
+      # make the commit reachable whichever channel resolved it.
+      - name: Push the new upstream commit to the mirror
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          MIRROR_PUSH_TOKEN: ${{ secrets.MIRROR_PUSH_TOKEN }}
+          OMARCHY_REF: ${{ steps.bump.outputs.omarchy_ref }}
+          OMARCHY_COMMIT: ${{ steps.bump.outputs.omarchy_commit }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MIRROR_PUSH_TOKEN:-}" ]; then
+            echo "::warning::MIRROR_PUSH_TOKEN is not set, so edimarlnx/omarchy was not updated. The package build will not find $OMARCHY_COMMIT until someone pushes it by hand. See the workflow header."
+            exit 0
+          fi
+          remote="https://x-access-token:$MIRROR_PUSH_TOKEN@github.com/edimarlnx/omarchy.git"
+          cd upstream/omarchy
+          branch="pin/$(printf '%s' "$OMARCHY_REF" | tr -c 'A-Za-z0-9._-' '-')"
+          git push --force "$remote" "$OMARCHY_COMMIT:refs/heads/$branch"
+          # The tag too, when there is one. A tag that is already there is not
+          # an error worth failing on: tags are immutable and equal.
+          if git rev-parse --verify --quiet "refs/tags/$OMARCHY_REF" >/dev/null; then
+            git push "$remote" "refs/tags/$OMARCHY_REF" || \
+              echo "::notice::tag $OMARCHY_REF is already on the mirror"
+          fi
+          echo "Mirror updated: refs/heads/$branch -> $OMARCHY_COMMIT"
+
+      # --- the branch and the commit ----------------------------------------
+      - name: Commit the new pin
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ steps.bump.outputs.branch }}
+          OMARCHY_REF: ${{ steps.bump.outputs.omarchy_ref }}
+          OMARCHY_COMMIT: ${{ steps.bump.outputs.omarchy_commit }}
+          ISO_REF: ${{ steps.bump.outputs.omarchy_iso_ref }}
+          ISO_COMMIT: ${{ steps.bump.outputs.omarchy_iso_commit }}
+        run: |
+          set -euo pipefail
+          git config user.name 'omarchy-server upstream tracker'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B "$BRANCH"
+          # Explicit paths. The run leaves build output and moved work clones
+          # behind, and none of that belongs in the commit.
+          git add upstream/PIN
+          if git diff --cached --quiet; then
+            echo "::warning::upstream/PIN did not change; nothing to commit."
+            exit 0
+          fi
+          # -m rather than a heredoc: a heredoc inside a `run: |` block cannot
+          # have its terminator indented, and unindenting it here would be a
+          # trap for the next editor of this file.
+          # One -m per paragraph, each on a single line: a multi-line string
+          # inside a `run: |` block would carry this file's indentation into
+          # the commit message, and a heredoc cannot have its terminator
+          # indented here either.
+          git commit \
+            -m "Follow upstream: omarchy $OMARCHY_REF, omarchy-iso $ISO_REF" \
+            -m "Upstream moved, so the pin moves with it. Prepared by tools/upstream-bump.sh on the $CHANNEL channel, which applied the whole patch series onto a fresh export of the new upstream tree and ran make test before writing upstream/PIN." \
+            -m "omarchy $OMARCHY_COMMIT, omarchy-iso $ISO_COMMIT." \
+            -m "The PKGBUILD's _commit in omarchy-server-pkgs still has to be set to the same omarchy commit, with a pkgrel bump; that is on the pull request's checklist because it lives in another repository."
+          git push --force origin "$BRANCH"
+
+      # --- the pull request --------------------------------------------------
+      - name: Open or update the pull request
+        if: steps.bump.outputs.changed == 'true'
+        id: pr
+        env:
+          BRANCH: ${{ steps.bump.outputs.branch }}
+          OMARCHY_REF: ${{ steps.bump.outputs.omarchy_ref }}
+          ISO_REF: ${{ steps.bump.outputs.omarchy_iso_ref }}
+          CONFLICTS: ${{ steps.bump.outputs.conflicts }}
+        run: |
+          set -euo pipefail
+          title="Upstream bump: omarchy $OMARCHY_REF, omarchy-iso $ISO_REF"
+          body="$RUNNER_TEMP/pr-body.md"
+          printf '\n---\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n' >>"$body"
+
+          # The labels this workflow uses. --force makes the call idempotent,
+          # so a fresh repository needs nothing set up by hand.
+          gh label create needs-rebase --force --color B60205 \
+            --description 'A patch in the series no longer applies to upstream'
+          gh label create edge-canary --force --color FBCA04 \
+            --description 'Follows the upstream default branch, not a release'
+
+          # `// empty` so an empty list is an empty string rather than "null".
+          url=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
+          if [ -n "$url" ]; then
+            gh pr edit "$url" --title "$title" --body-file "$body"
+          elif [ "$CHANNEL" = edge ]; then
+            url=$(gh pr create --draft --head "$BRANCH" --base main \
+              --title "$title" --body-file "$body")
+          else
+            url=$(gh pr create --head "$BRANCH" --base main \
+              --title "$title" --body-file "$body")
+          fi
+
+          if [ "$CHANNEL" = edge ]; then
+            gh pr edit "$url" --add-label edge-canary
+          fi
+          if [ -n "${CONFLICTS:-}" ]; then
+            gh pr edit "$url" --add-label needs-rebase
+          else
+            gh pr edit "$url" --remove-label needs-rebase || true
+          fi
+          echo "url=$url" >>"$GITHUB_OUTPUT"
+          echo "Pull request: $url"
+
+      - name: Summary
+        if: always() && steps.bump.outputs.changed == 'true'
+        env:
+          URL: ${{ steps.pr.outputs.url }}
+          CONFLICTS: ${{ steps.bump.outputs.conflicts }}
+        run: |
+          {
+            echo "### Upstream bump (${CHANNEL} channel)"
+            echo
+            echo "- omarchy: \`${{ steps.bump.outputs.omarchy_ref }}\` (\`${{ steps.bump.outputs.omarchy_commit }}\`)"
+            echo "- omarchy-iso: \`${{ steps.bump.outputs.omarchy_iso_ref }}\` (\`${{ steps.bump.outputs.omarchy_iso_commit }}\`)"
+            echo "- pull request: ${URL:-none}"
+            if [ -n "${CONFLICTS:-}" ]; then
+              echo
+              echo "**Patches that no longer apply:** \`${CONFLICTS}\`"
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      # The pull request is open either way; the red run is what makes a
+      # conflicting series impossible to scroll past.
+      - name: Fail when the patch series needs a rebase
+        if: steps.bump.outputs.conflicts != ''
+        run: |
+          echo "::error::The patch series no longer applies: ${{ steps.bump.outputs.conflicts }}. The pull request is open and labelled needs-rebase; docs/maintenance.md has the runbook." >&2
+          exit 1
+
+  edge-canary:
+    name: Edge canary (informative)
+    runs-on: ubuntu-latest
+    # Informative only: it must never turn the week's run red, and it opens no
+    # pull request. Its whole output is the job summary.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/serverlab/go.mod
+          # serverlab has no third-party dependency and therefore no go.sum,
+          # which the module cache would insist on finding.
+          cache: false
+
+      - name: Dry-run the patch series against the upstream default branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          tools/upstream-bump.sh --channel edge --dry-run \
+            --body "$RUNNER_TEMP/canary.md" 2>&1 | tee "$RUNNER_TEMP/canary.log"
+          status=${PIPESTATUS[0]}
+          {
+            echo "### Edge canary"
+            echo
+            case $status in
+              0) echo "The whole patch series still applies to the upstream default branch." ;;
+              3) echo "⚠️ **A patch no longer applies to the upstream default branch.** It will break the next release bump unless it is rebased first." ;;
+              *) echo "The canary could not finish (exit $status)." ;;
+            esac
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/canary.log"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          # Informative: the summary is the deliverable, not the exit code.
+          exit 0
