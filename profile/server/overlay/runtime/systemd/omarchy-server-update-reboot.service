@@ -1,0 +1,13 @@
+[Unit]
+Description=Omarchy server reboot, if one is due
+# Nothing to reach: this only reads a marker file and, at most, reboots.
+
+[Service]
+Type=oneshot
+Environment=OMARCHY_PATH=/usr/share/omarchy
+# The marker lives under $HOME, and root's is where every unattended update
+# writes it.
+Environment=HOME=/root
+ExecStart=/usr/bin/omarchy-server-update reboot-if-due
+StandardOutput=journal
+StandardError=journal

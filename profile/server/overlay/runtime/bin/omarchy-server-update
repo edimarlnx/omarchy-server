@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # omarchy:summary=Run the system update non-interactively on a headless server
-# omarchy:args=[run|enable|disable|status|kexec] [--kexec|--no-reboot]
-# omarchy:examples=omarchy server-update | omarchy server-update enable
+# omarchy:args=[run|enable|disable|status|kexec|reboot-if-due] [--security-only|--kexec|--no-reboot|--json]
+# omarchy:examples=omarchy server-update | omarchy server-update run --security-only
 # omarchy:requires-sudo=true
 
 # `omarchy update` asks three questions: start?, remove orphans?, reboot? A
@@ -19,8 +19,51 @@
 # `preauth silent` line, so the repeated timeouts lock the account for two
 # minutes and look exactly like a wrong password.
 #
-# `enable` turns on the daily timer, which ships disabled: a machine that
-# upgrades a database under load is not something to opt anyone into.
+# `enable` turns on the timers, which ship disabled: a machine that upgrades a
+# database under load is not something to opt anyone into.
+#
+# ── the two schedules ───────────────────────────────────────────────────────
+#
+# There are two updates on this profile, and they are not the same job.
+#
+#   run                  the whole rolling release, weekly
+#                        (omarchy-server-update.timer, Sunday 03:00).
+#   run --security-only  only the installed packages arch-audit reports as
+#                        vulnerable WITH a fix already in the repositories,
+#                        daily (omarchy-server-update-security.timer).
+#
+# The security-only set comes from `arch-audit -uq`, which cross-checks the
+# local package database against security.archlinux.org and prints the
+# packages whose advisory is already fixed in a version the repositories
+# carry. Those packages are then upgraded with `pacman -S --needed` -- their
+# dependencies come along, because a package that needs a newer library gets
+# it, and nothing else moves. When the set is empty the run says so and stops
+# before the snapshot: there is nothing to roll back from.
+#
+# A security-only run is, by construction, a PARTIAL upgrade: the sync
+# databases are refreshed and only some of what they offer is installed. That
+# is the trade the mode makes, and it is the reason the full run stays on the
+# calendar rather than being replaced -- a machine that only ever ran
+# --security-only would drift into exactly the mismatch Arch warns about. It
+# is also why the full run happens weekly and not monthly.
+#
+# ── the reboot window ───────────────────────────────────────────────────────
+#
+# Whether an update requires a reboot is decided by
+# omarchy-server-update-restart (the classifier); WHEN that reboot is taken is
+# decided here, from REBOOT_WINDOW in /etc/omarchy/server/update.conf
+# (HH:MM-HH:MM, local time, wrapping around midnight when the end is before
+# the start):
+#
+#   inside the window   the reboot is taken at the end of the run.
+#   outside the window  the reboot-required marker is left where it is and the
+#                       run reports "reboot deferred to window <window>".
+#                       omarchy-server-update-reboot.timer fires at the start
+#                       of the window and runs `reboot-if-due`, which reboots
+#                       if and only if the marker is still set.
+#
+# `--no-reboot` still means never, and `--kexec` still means now, whatever the
+# window says: an operator at the keyboard outranks the calendar.
 #
 # The update does not end when omarchy-update returns. An unattended update
 # leaves every service running the code it replaced on disk -- upstream's
@@ -33,10 +76,27 @@
 set -euo pipefail
 
 timer=omarchy-server-update.timer
+security_timer=omarchy-server-update-security.timer
+reboot_timer=omarchy-server-update-reboot.timer
 # The toggle the timer reads. `omarchy-server-update kexec on` writes it, and
 # the unit runs the same code path a person does, so a fleet is configured once
 # rather than by editing a unit file.
 config=/etc/omarchy-server-update.conf
+# The settings a PERSON edits, shipped with defaults by omarchy-server-settings
+# and listed in its backup= array. Kept separate from the file above because
+# that one is rewritten by this command and this one is not.
+#
+# The three overrides below exist so the schedule, the window and the run
+# stamps can be exercised against a fixture tree rather than a machine -- the
+# same reason omarchy-server-update-restart takes $OMARCHY_PACMAN_LOG. Nothing
+# on an installed system sets them.
+update_conf="${OMARCHY_SERVER_UPDATE_CONF:-/etc/omarchy/server/update.conf}"
+state_dir="${OMARCHY_SERVER_STATE_DIR:-/var/lib/omarchy-server}"
+full_run_stamp="$state_dir/last-full-run"
+security_run_stamp="$state_dir/last-security-run"
+# Where upstream's reboot-required marker lives; omarchy-state writes it and
+# omarchy-server-update-restart sets it through omarchy-state.
+reboot_marker="${HOME:-/root}/.local/state/omarchy/reboot-required"
 
 require_root() {
   if ((EUID != 0)); then
@@ -51,14 +111,38 @@ action=""
 # Whether this run replaces the live root in place or builds a new one beside
 # it. Empty means "whatever the config says"; the flags below are the override.
 transactional=""
+security_only=0
+json=0
+allow_reboot=1
 for argument in "$@"; do
   case "$argument" in
-    --kexec | --no-reboot | --no-restart | --dry-run) restart_args+=("$argument") ;;
+    --no-reboot | --dry-run)
+      restart_args+=("$argument")
+      # Both mean "do not reboot": --dry-run does not even set the marker.
+      allow_reboot=0
+      ;;
+    --kexec | --no-restart) restart_args+=("$argument") ;;
     --transactional) transactional=1 ;;
     --in-place) transactional=0 ;;
+    --security-only) security_only=1 ;;
+    --json) json=1 ;;
     *) [[ -n $action ]] || action="$argument" ;;
   esac
 done
+
+# The shipped defaults first, so an admin's file only has to carry what it
+# changes, and so a machine whose file predates a new key still gets one.
+SECURITY_DAILY=yes
+FULL_WEEKLY=sun
+REBOOT_WINDOW=04:00-05:00
+if [[ -r $update_conf ]]; then
+  # `||` and not a bare source: this file is edited by hand, it is read by an
+  # unattended job, and a typo in it must cost the defaults rather than the
+  # update. `set -e` would otherwise take the whole run out over a stray word.
+  # shellcheck source=/dev/null
+  . "$update_conf" ||
+    echo "omarchy-server-update: $update_conf has errors; keeping the defaults it did not set" >&2
+fi
 
 # The configured default, overridden by an explicit flag on the command line.
 if [[ -r $config ]]; then
@@ -80,6 +164,217 @@ set_config() {
   printf '%s=%s\n' "$key" "$value" >>"$temporary"
   install -m 0644 "$temporary" "$config"
   rm -f "$temporary"
+}
+
+# A JSON string, or null for the empty value. Every field this command emits is
+# a timestamp or a known word, so quoting is all the escaping there is to do.
+json_string() {
+  [[ -n ${1:-} ]] && printf '"%s"' "$1" || printf 'null'
+}
+
+# ── the timers and the config ───────────────────────────────────────────────
+#
+# The units ship with the DEFAULTS of update.conf baked in (Sunday 03:00 for
+# the full run, 04:00 for the reboot window). When the config says something
+# else, `enable` writes the difference as drop-ins rather than editing the
+# shipped units, so a package upgrade cannot quietly reset the schedule and
+# `systemctl cat` shows both the shipped line and the local one.
+write_timer_overrides() {
+  local day="${FULL_WEEKLY:-sun}" bounds start_minutes start_time
+  local drop_in
+
+  drop_in=/etc/systemd/system/$timer.d
+  install -d "$drop_in"
+  cat >"$drop_in/10-omarchy-schedule.conf" <<EOF
+# Written by \`omarchy-server-update enable\` from FULL_WEEKLY in
+# $update_conf. Edit that file and run \`enable\` again.
+[Timer]
+OnCalendar=
+OnCalendar=${day} 03:00
+EOF
+
+  bounds=$(window_bounds)
+  start_minutes=${bounds%% *}
+  start_time=$(printf '%02d:%02d' $((start_minutes / 60)) $((start_minutes % 60)))
+  drop_in=/etc/systemd/system/$reboot_timer.d
+  install -d "$drop_in"
+  cat >"$drop_in/10-omarchy-schedule.conf" <<EOF
+# Written by \`omarchy-server-update enable\` from the start of REBOOT_WINDOW
+# in $update_conf. Edit that file and run \`enable\` again.
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* ${start_time}:00
+EOF
+
+  # An empty OnCalendar= resets the shipped list; systemd only reads that after
+  # a reload.
+  systemctl daemon-reload
+}
+
+# ── the reboot window ───────────────────────────────────────────────────────
+#
+# HH:MM-HH:MM in local time. A window whose end is before its start wraps
+# around midnight, which is the common shape for a maintenance slot
+# (23:00-01:00 is two hours, not a mistake). A window whose ends are equal is
+# read as "no window at all": every hour is inside it.
+default_window=04:00-05:00
+
+# HH:MM -> minutes since midnight, or nothing at all when the text is not a
+# time. The caller tests for the empty string; there is no sentinel number that
+# is not also a valid answer.
+window_minutes() {
+  local value="$1"
+  [[ $value =~ ^([0-9]{1,2}):([0-9]{2})$ ]] || return 1
+  local hour=$((10#${BASH_REMATCH[1]})) minute=$((10#${BASH_REMATCH[2]}))
+  ((hour <= 23 && minute <= 59)) || return 1
+  printf '%d' $((hour * 60 + minute))
+}
+
+# The configured window as three fields -- start minutes, end minutes and the
+# text to print -- or the shipped default with a warning when the configured
+# one cannot be read. An unparsable window must not become "reboot whenever": a
+# typo in a config file is not consent to reboot at noon.
+#
+# The text is returned rather than read from $REBOOT_WINDOW by the caller
+# because this runs in a command substitution: an assignment made here would
+# not survive it, and a message quoting the window that was rejected would be
+# a lie about what the machine is doing.
+window_bounds() {
+  local window="${REBOOT_WINDOW:-$default_window}" start end
+  if [[ $window == *-* ]]; then
+    start=$(window_minutes "${window%%-*}" 2>/dev/null || true)
+    end=$(window_minutes "${window##*-}" 2>/dev/null || true)
+  fi
+  if [[ -z ${start:-} || -z ${end:-} ]]; then
+    echo "omarchy-server-update: REBOOT_WINDOW='$window' is not HH:MM-HH:MM; using $default_window" >&2
+    window="$default_window"
+    start=$(window_minutes "${window%%-*}")
+    end=$(window_minutes "${window##*-}")
+  fi
+  printf '%s %s %s' "$start" "$end" "$window"
+}
+
+# Whether $now (minutes since midnight) falls in [start, end). A window whose
+# ends are equal is no window at all: every hour is inside it. A window whose
+# end is before its start wraps around midnight.
+minutes_inside() {
+  local start="$1" end="$2" now="$3"
+  ((start == end)) && return 0
+  if ((start < end)); then
+    ((now >= start && now < end))
+  else
+    ((now >= start || now < end))
+  fi
+}
+
+# $OMARCHY_UPDATE_NOW is the clock the tests move; everything else reads the
+# machine's own.
+now_minutes() { window_minutes "${OMARCHY_UPDATE_NOW:-$(date +%H:%M)}"; }
+
+# ── the reboot-required marker ──────────────────────────────────────────────
+reboot_due() { [[ -f $reboot_marker ]]; }
+
+reboot_due_since() {
+  reboot_due || return 1
+  date -Is -d "@$(stat -c %Y "$reboot_marker")"
+}
+
+# The reboot half of a run: the classifier has already decided WHETHER, this
+# decides WHEN. Called at the end of every run, including the ones that
+# changed nothing -- a marker left by an earlier run is still a reboot owed.
+take_reboot_if_window() {
+  reboot_due || return 0
+  local since window now start end
+  since=$(reboot_due_since)
+  if ((allow_reboot == 0)); then
+    echo "reboot required since $since; not rebooting (--no-reboot)"
+    return 0
+  fi
+  # Read once, so the warning about an unreadable window is printed once and
+  # every line below quotes the window that was actually used.
+  read -r start end window <<<"$(window_bounds)"
+  now=$(now_minutes)
+  if minutes_inside "$start" "$end" "$now"; then
+    echo "reboot required since $since, and now is inside the reboot window $window: rebooting"
+    take_reboot
+    return 0
+  fi
+  echo "reboot deferred to window $window (required since $since)"
+}
+
+# kexec when the machine is configured for it and the image loads, a plain
+# reboot otherwise. The marker is NOT cleared here: it is cleared by the next
+# run, which compares its mtime against the boot time and so proves the reboot
+# actually happened rather than trusting that it was asked for.
+take_reboot() {
+  if [[ ${KEXEC:-0} == 1 ]] && command -v omarchy-server-kexec >/dev/null; then
+    if omarchy-server-kexec load; then
+      omarchy-state clear reboot-required || true
+      exec systemctl kexec
+    fi
+    echo "kexec unavailable; taking a firmware reboot instead" >&2
+  fi
+  exec systemctl reboot
+}
+
+# ── the run stamps ──────────────────────────────────────────────────────────
+#
+# What `status` reports as "last full run" / "last security run". Written at
+# the END of a run, including a security run that found nothing to do: the
+# question the stamp answers is "did this machine look?", not "did it install
+# something?".
+record_run() {
+  local stamp="$1"
+  install -d "$state_dir" 2>/dev/null || return 0
+  date -Is >"$stamp" 2>/dev/null || true
+}
+
+read_stamp() {
+  local stamp="$1"
+  [[ -r $stamp ]] && head -n1 "$stamp" || true
+}
+
+# ── the vulnerable package set ──────────────────────────────────────────────
+#
+# `arch-audit -uq` prints one line per installed package that has an open
+# advisory AND a fixed version already in the repositories, as `name>=version`.
+# Both of the shapes the tool is known to print are parsed, because the flags
+# are a stable interface and the output text is not something to bet a daily
+# unattended job on. Measured against arch-audit 0.2.0 on a lab machine:
+#
+#   arch-audit -uq   curl>=8.20.0-1
+#   arch-audit -u    curl is affected by ... . Update to 8.20.0-1!
+#   arch-audit       curl is affected by denial of service. High risk!
+#
+# (Older releases print "Package curl is affected by ...", so the "Package "
+# prefix is optional here rather than expected.)
+#
+# Anything that survives the strip and does not look like a package name is
+# dropped, which is what turns "No vulnerable packages found" and every other
+# message into the empty set rather than into a pacman target. An empty answer
+# is also what the tool prints when there is nothing to do -- it exits 0 with no
+# output at all -- so the empty set is a normal day, not a failure.
+security_packages() {
+  local line name
+  # `|| true` inside the group: arch-audit exits non-zero on some builds when
+  # it found something, which under `set -o pipefail` would take the whole run
+  # out on the very day it has news.
+  { arch-audit -uq 2>/dev/null || true; } | while IFS= read -r line; do
+    if [[ $line =~ ^(Package[[:space:]]+)?([^[:space:]]+)[[:space:]]+is[[:space:]]+affected ]]; then
+      name="${BASH_REMATCH[2]}"
+    elif [[ $line == *[[:space:]]* ]]; then
+      # A line with a space in it that is not the sentence above is a message:
+      # "No vulnerable packages found", a warning, a header. A package name
+      # never contains one, so this is the whole test.
+      continue
+    else
+      # Everything from the first character that cannot be in a package name:
+      # the `>=1.2.3-1` of the quiet format, a trailing comment, whitespace.
+      name="${line%%[^A-Za-z0-9@._+-]*}"
+    fi
+    [[ $name =~ ^[A-Za-z0-9@._+-]+$ ]] || continue
+    printf '%s\n' "$name"
+  done | sort -u
 }
 
 case "${action:-run}" in
@@ -131,28 +426,131 @@ case "${action:-run}" in
     ;;
   status)
     # Reporting, so a disabled timer is an answer rather than a failure.
-    echo "mode: $([[ $transactional == 1 ]] && echo transactional || echo in-place)"
-    systemctl is-enabled "$timer" 2>/dev/null || true
-    systemctl status "$timer" --no-pager 2>&1 || true
+    #
+    # Every field is answered, including the ones whose answer is "unknown":
+    # `status --json` is what the canaries read, and a key that disappears when
+    # arch-audit is missing is a key every consumer has to special-case.
+    mode=$([[ $transactional == 1 ]] && echo transactional || echo in-place)
+    full_at=$(read_stamp "$full_run_stamp")
+    security_at=$(read_stamp "$security_run_stamp")
+    due_since=$(reboot_due_since || true)
+    # The effective window, which is the shipped default when the configured
+    # one is unreadable -- reporting the rejected text would be reporting a
+    # window this machine will never use.
+    window=$(window_bounds)
+    window=${window##* }
+    # The count, not the list: `arch-audit` itself is the tool for the list,
+    # and this line is meant to be read at a glance and compared over days.
+    pending=""
+    if command -v arch-audit >/dev/null; then
+      pending=$(security_packages | grep -c . || true)
+    fi
+    timer_state() { systemctl is-enabled "$1" 2>/dev/null || echo unknown; }
+
+    if ((json)); then
+      # Hand-written, because jq is not a dependency of this profile and this
+      # is a fixed shape with no free text in it: every value below is a
+      # timestamp, an integer, a boolean or one of a handful of known words.
+      printf '{\n'
+      printf '  "mode": "%s",\n' "$mode"
+      printf '  "timers": {"full": "%s", "security": "%s", "reboot": "%s"},\n' \
+        "$(timer_state "$timer")" "$(timer_state "$security_timer")" "$(timer_state "$reboot_timer")"
+      printf '  "last_full_run": %s,\n' "$(json_string "$full_at")"
+      printf '  "last_security_run": %s,\n' "$(json_string "$security_at")"
+      printf '  "pending_vulnerable_packages": %s,\n' "${pending:-null}"
+      printf '  "reboot_due": %s,\n' "$(reboot_due && echo true || echo false)"
+      printf '  "reboot_due_since": %s,\n' "$(json_string "$due_since")"
+      printf '  "reboot_window": "%s",\n' "$window"
+      printf '  "full_weekly": "%s",\n' "$FULL_WEEKLY"
+      printf '  "security_daily": "%s"\n' "$SECURITY_DAILY"
+      printf '}\n'
+      exit 0
+    fi
+
+    echo "mode: $mode"
+    echo "last full run: ${full_at:-never}"
+    echo "last security run: ${security_at:-never}"
+    echo "pending vulnerable packages: ${pending:-unknown (arch-audit is not installed)}"
+    if [[ -n $due_since ]]; then
+      echo "reboot due: yes, since $due_since"
+    else
+      echo "reboot due: no"
+    fi
+    echo "reboot window: $window"
+    echo "timers: $timer $(timer_state "$timer"), $security_timer $(timer_state "$security_timer"), $reboot_timer $(timer_state "$reboot_timer")"
+    systemctl status "$timer" "$security_timer" "$reboot_timer" --no-pager 2>&1 || true
     if [[ $transactional == 1 ]] && ((EUID == 0)) && command -v omarchy-server-transaction >/dev/null; then
       echo
       omarchy-server-transaction status 2>/dev/null || true
     fi
     exit 0
     ;;
+  reboot-if-due)
+    # The other half of the reboot window: this is what
+    # omarchy-server-update-reboot.timer runs at the start of the window. It
+    # takes no view of its own on whether a reboot is warranted -- the marker
+    # is the decision, made by the classifier during a run -- and no view on
+    # the window either, because the timer IS the window.
+    require_root "$@"
+    if ! reboot_due; then
+      echo "no reboot due"
+      exit 0
+    fi
+    since=$(reboot_due_since)
+    if ((allow_reboot == 0)); then
+      echo "reboot due since $since; not rebooting (--no-reboot)"
+      exit 0
+    fi
+    echo "reboot due since $since: rebooting now"
+    take_reboot
+    ;;
   enable)
     require_root "$@"
+    write_timer_overrides
     systemctl enable --now "$timer"
-    systemctl list-timers "$timer" --no-pager
+    # SECURITY_DAILY=no is the way to run only the weekly full update; the
+    # timer is then explicitly disabled rather than left in whatever state a
+    # previous `enable` put it in.
+    if [[ ${SECURITY_DAILY,,} == yes || ${SECURITY_DAILY,,} == true || ${SECURITY_DAILY,,} == 1 ]]; then
+      systemctl enable --now "$security_timer"
+    else
+      systemctl disable --now "$security_timer" 2>/dev/null || true
+    fi
+    systemctl enable --now "$reboot_timer"
+    systemctl list-timers "$timer" "$security_timer" "$reboot_timer" --no-pager
     exit 0
     ;;
   disable)
     require_root "$@"
     systemctl disable --now "$timer"
+    systemctl disable --now "$security_timer" 2>/dev/null || true
+    systemctl disable --now "$reboot_timer" 2>/dev/null || true
     exit 0
     ;;
   run)
     require_root "$@"
+
+    # ── the security-only set ────────────────────────────────────────────────
+    #
+    # Decided before anything else happens, because the answer is very often
+    # "nothing", and nothing is exactly what should then happen: no snapshot,
+    # no transaction, no database refresh, no reboot decision. A daily job that
+    # snapshots the root to install zero packages is a daily job that fills a
+    # disk for no reason.
+    vulnerable=()
+    if ((security_only)); then
+      if ! command -v arch-audit >/dev/null; then
+        echo "omarchy-server-update: --security-only needs arch-audit (pacman -S arch-audit)." >&2
+        exit 2
+      fi
+      mapfile -t vulnerable < <(security_packages)
+      if ((${#vulnerable[@]} == 0)); then
+        echo "no installed package has an open advisory with a fix available: nothing to do"
+        record_run "$security_run_stamp"
+        exit 0
+      fi
+      echo "vulnerable packages with a fix available: ${vulnerable[*]}"
+    fi
 
     # ── transactional mode ───────────────────────────────────────────────────
     #
@@ -171,6 +569,19 @@ case "${action:-run}" in
           --kexec | --no-reboot) transaction_args+=("$argument") ;;
         esac
       done
+      # A security-only transaction is the same snapshot, the same swap and the
+      # same rollback; only the package half differs, and the transaction
+      # command takes it as `--security-only` plus one `--with` per package.
+      if ((security_only)); then
+        transaction_args+=(--security-only)
+        for argument in "${vulnerable[@]}"; do
+          transaction_args+=(--with "$argument")
+        done
+        # Recorded before the exec, because after it this process is gone.
+        record_run "$security_run_stamp"
+      else
+        record_run "$full_run_stamp"
+      fi
       exec omarchy-server-transaction run ${transaction_args[@]+"${transaction_args[@]}"}
     fi
 
@@ -235,9 +646,34 @@ case "${action:-run}" in
     fi
 
     update_rc=0
-    env OMARCHY_NONINTERACTIVE=1 \
-      OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}" \
-      omarchy-update -y || update_rc=$?
+    if ((security_only)); then
+      # ── the security-only upgrade, in place ────────────────────────────────
+      #
+      # omarchy-update is not the right tool here: it upgrades everything, by
+      # design. What runs instead is the same two steps it would take, with the
+      # target list narrowed to what arch-audit named.
+      #
+      # The snapshot is taken here because omarchy-update is the command that
+      # normally takes it, and the rollback story must not depend on which of
+      # the two updates ran.
+      if command -v omarchy-snapshot >/dev/null; then
+        omarchy-snapshot create || echo "continuing the security update without a snapper snapshot" >&2
+      fi
+      # -Sy and then -S is a partial upgrade, and it is the mode's whole point.
+      # --needed so a package already at the fixed version (arch-audit reads the
+      # local database, which a hand-run pacman may have moved five minutes ago)
+      # is not reinstalled for nothing. Dependencies are NOT restricted: a fixed
+      # package that needs a newer library gets the newer library, because the
+      # alternative is a broken machine.
+      pacman -Sy --noconfirm --noprogressbar || update_rc=$?
+      if ((update_rc == 0)); then
+        pacman -S --needed --noconfirm --noprogressbar "${vulnerable[@]}" || update_rc=$?
+      fi
+    else
+      env OMARCHY_NONINTERACTIVE=1 \
+        OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}" \
+        omarchy-update -y || update_rc=$?
+    fi
 
     # Restart what the update replaced, and decide the reboot. This runs even
     # when the update above failed partway -- hence the captured status rather
@@ -245,19 +681,43 @@ case "${action:-run}" in
     # to upgrade is already on disk, and a half-updated machine still running
     # the old binaries is the worse of the two states.
     omarchy-server-update-restart --since-offset "$offset" ${restart_args[@]+"${restart_args[@]}"}
+
+    if ((security_only)); then
+      record_run "$security_run_stamp"
+    else
+      record_run "$full_run_stamp"
+    fi
+
+    # Whether a reboot is required was decided above; when it is taken is
+    # decided here. A marker left by an earlier run counts: the reboot is owed
+    # whichever run asked for it.
+    take_reboot_if_window
     exit "$update_rc"
     ;;
   -h | --help)
-    echo "Usage: omarchy-server-update [run|enable|disable|status|kexec|transactional|rollback] [flags]"
+    echo "Usage: omarchy-server-update [run|enable|disable|status|reboot-if-due|kexec|transactional|rollback] [flags]"
     echo
     echo "  run            update now, non-interactively (default), then restart what changed"
-    echo "  enable         enable the daily $timer"
-    echo "  disable        disable the daily $timer"
-    echo "  status         report the mode, whether the timer is enabled and when it next runs"
+    echo "  enable         enable the three timers: weekly full, daily security, reboot window"
+    echo "  disable        disable all three"
+    echo "  status         the mode, the last runs, the pending advisories, the reboot state"
+    echo "  reboot-if-due  reboot if and only if an update left the reboot-required marker"
     echo "  kexec          on|off|status -- whether a required reboot is taken with kexec"
     echo "  transactional  on|off|status -- whether updates build a new root instead of"
     echo "                 writing to the running one. The timer reads the same setting."
     echo "  rollback       after a transactional update, boot the previous root again"
+    echo
+    echo "What to update:"
+    echo "  --security-only  only the packages arch-audit reports as vulnerable with a fix"
+    echo "                   available, upgraded with pacman -S --needed (dependencies"
+    echo "                   included). An empty set is a no-op: no snapshot, no reboot."
+    echo
+    echo "Reporting:"
+    echo "  --json           status only: the same fields as machine-readable JSON"
+    echo
+    echo "The schedule and the reboot window are read from $update_conf"
+    echo "(SECURITY_DAILY, FULL_WEEKLY, REBOOT_WINDOW). Outside the window a required"
+    echo "reboot is deferred to it and taken by reboot-if-due."
     echo
     echo "Mode, overriding the configured default for this run:"
     echo "  --transactional  update inside a snapshot of / and swap it in at reboot"

@@ -1,13 +1,25 @@
 [Unit]
-Description=Daily Omarchy server system update
+Description=Weekly Omarchy server system update
 
 [Timer]
-OnCalendar=daily
+# Weekly, not daily. The daily job on this profile is the security-only update
+# (omarchy-server-update-security.timer), which moves only the packages
+# arch-audit reports as vulnerable; taking the whole rolling release every day
+# is a much larger change for a much smaller return, and every day is a day
+# something can break unattended.
+#
+# Sunday 03:00 is FULL_WEEKLY=sun in /etc/omarchy/server/update.conf, an hour
+# before the default reboot window, so a reboot this run makes necessary is
+# taken by omarchy-server-update-reboot.timer at 04:00 rather than deferred a
+# whole day. `omarchy-server-update enable` writes a drop-in with the
+# configured day when FULL_WEEKLY is not sunday.
+OnCalendar=Sun 03:00
 # Spread a fleet across the small hours instead of having every machine hit the
-# mirrors at 00:00 and reboot-require itself at the same minute.
-RandomizedDelaySec=4h
+# mirrors at the same minute. Kept under an hour so the run is finished before
+# the reboot window opens.
+RandomizedDelaySec=45m
 # A machine that was off at its slot updates on the next boot rather than
-# skipping a day, which on a server is how an update gets missed for a month.
+# skipping a week, which on a server is how an update gets missed for a month.
 Persistent=true
 
 [Install]

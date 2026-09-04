@@ -17,6 +17,15 @@
 #   - runtime: omarchy-server (which pulls omarchy-server-keyring, gum and
 #     pacman-contrib through its dependencies)
 
+# What `omarchy-server-update run --security-only` asks "which of the packages
+# on this machine has an open advisory with a fix already published?". It reads
+# the local package database and the Arch security tracker
+# (security.archlinux.org) over https and installs nothing itself: the answer
+# is a list of package names, and pacman is what acts on it. In the core list
+# and not an addon because the daily security update is part of what this
+# profile promises a machine it is left alone on, and `omarchy-server-update
+# status` reports the open count whether or not anyone enabled the timer.
+arch-audit
 btrfs-progs
 # checkupdates, from pacman-contrib below, is what omarchy-update-available and
 # the update timer ask "is there anything to install?". It builds a throwaway

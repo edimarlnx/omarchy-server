@@ -1,0 +1,20 @@
+[Unit]
+Description=Take a deferred reboot at the start of the reboot window
+
+[Timer]
+# The start of the default REBOOT_WINDOW in /etc/omarchy/server/update.conf.
+# `omarchy-server-update enable` writes a drop-in with the configured start
+# whenever the window is not the default, so this line is what an
+# unconfigured machine gets and never something to edit by hand.
+OnCalendar=*-*-* 04:00:00
+# Minutes, not hours: the window is an hour long and the point is to reboot
+# inside it. Some spread is still worth having so a fleet does not go down at
+# the same second.
+RandomizedDelaySec=10m
+# NOT Persistent=: a missed reboot window is not a reboot to take at the next
+# boot. The machine either rebooted (the marker is cleared by the next update)
+# or waits for tomorrow's window, when nobody is using it.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

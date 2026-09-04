@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # omarchy:summary=Run an update in a throwaway snapshot of the root subvolume and swap it in at reboot
-# omarchy:args=<run|rollback|status|prune|discard> [--keep N] [--no-swap] [--kexec|--no-reboot]
+# omarchy:args=<run|rollback|status|prune|discard> [--keep N] [--no-swap] [--security-only] [--kexec|--no-reboot]
 # omarchy:examples=omarchy server-transaction run | omarchy server-transaction rollback
 # omarchy:requires-sudo=true
 
@@ -74,6 +74,10 @@ restart_args=()
 # transactional too -- an addon, a one-off `pacman -S`, a kernel reinstall to
 # force a fresh initramfs -- without ever writing to the running root.
 with_packages=()
+# Upgrade everything (the default), or only the packages named with --with.
+# omarchy-server-update passes this for a --security-only run: the transaction,
+# the swap and the rollback are the same, only the package half is narrower.
+security_only=0
 
 if ((EUID != 0)); then
   echo "omarchy-server-transaction: must run as root." >&2
@@ -95,6 +99,10 @@ while (($#)); do
     --with)
       with_packages+=("${2:?--with needs a package name}")
       shift 2
+      ;;
+    --security-only)
+      security_only=1
+      shift
       ;;
     --kexec | --no-reboot)
       restart_args+=("$1")
@@ -303,6 +311,7 @@ transaction_script() {
   else
     printf 'extra_packages=()\n'
   fi
+  printf 'security_only=%d\n' "$security_only"
   cat <<'CHROOT'
 set -uo pipefail
 rc=0
@@ -311,12 +320,26 @@ if command -v omarchy-update-keyring >/dev/null; then
   omarchy-update-keyring || { echo "keyring step failed" >&2; exit 1; }
 fi
 
-echo "== pacman -Syu"
-pacman -Syu --noconfirm --noprogressbar --overwrite '/usr/share/omarchy/*' || exit 1
+if ((security_only)); then
+  # The databases still have to be refreshed -- the fixed version has to be
+  # findable -- but only the named packages are installed from them. That is a
+  # partial upgrade by definition, and it is what --security-only asks for.
+  echo "== pacman -Sy (security-only)"
+  pacman -Sy --noconfirm --noprogressbar || exit 1
+else
+  echo "== pacman -Syu"
+  pacman -Syu --noconfirm --noprogressbar --overwrite '/usr/share/omarchy/*' || exit 1
+fi
 
 if ((${#extra_packages[@]})); then
-  echo "== pacman -S ${extra_packages[*]}"
-  pacman -S --noconfirm --noprogressbar "${extra_packages[@]}" || exit 1
+  # --needed only in a security-only transaction: there the packages are a fix
+  # list and reinstalling one already at the fixed version buys nothing, while
+  # a plain `--with` is how a kernel gets deliberately REinstalled to rebuild
+  # its initramfs.
+  needed=()
+  ((security_only)) && needed=(--needed)
+  echo "== pacman -S ${needed[*]} ${extra_packages[*]}"
+  pacman -S --noconfirm --noprogressbar ${needed[@]+"${needed[@]}"} "${extra_packages[@]}" || exit 1
 fi
 
 if command -v omarchy-migrate >/dev/null; then
@@ -638,6 +661,7 @@ case "$action" in
     echo
     echo "Flags:"
     echo "  --with PKG    also install/reinstall PKG inside the transaction (repeatable)"
+    echo "  --security-only  refresh the databases but upgrade only the --with packages"
     echo "  --keep N      previous roots to retain (default 1)"
     echo "  --no-swap     build and update the transaction, do not swap it in"
     echo "  --kexec       take the reboot with kexec into the signed UKI"

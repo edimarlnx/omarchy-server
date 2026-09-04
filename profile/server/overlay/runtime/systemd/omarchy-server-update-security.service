@@ -1,0 +1,21 @@
+[Unit]
+Description=Omarchy server security-only update
+# arch-audit reads security.archlinux.org and pacman downloads what it names,
+# so both halves of this unit need an address. Not Requires=: a machine whose
+# network comes up late should still have tried.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Same two variables as the full update, for the same reasons: the Omarchy
+# commands never default $OMARCHY_PATH themselves, and systemd sets no $HOME
+# for a system service -- which is where the reboot-required marker lives.
+Environment=OMARCHY_PATH=/usr/share/omarchy
+Environment=HOME=/root
+ExecStart=/usr/bin/omarchy-server-update run --security-only
+# A security-only run installs a handful of packages, not the whole release,
+# but one of them can be a kernel with an initramfs to rebuild.
+TimeoutStartSec=1h
+StandardOutput=journal
+StandardError=journal

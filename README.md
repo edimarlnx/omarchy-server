@@ -158,14 +158,60 @@ on instead.
 
 ```bash
 sudo omarchy-server-update           # update now, nothing to answer
-sudo omarchy-server-update enable    # daily timer, randomized, journal-only
+sudo omarchy-server-update enable    # the timers, journal-only
 sudo omarchy-server-update status
 ```
 
-The timer ships **disabled**. It can also be turned on at install time by an
+The timers ship **disabled**. They can also be turned on at install time by an
 autoinstall drive carrying an `unattended-updates` file
 (`mkcidata.sh --unattended-updates`). `journalctl -u omarchy-server-update` is
 the record of a run. `docs/iso-server.md` §3.1 is what had to change and why.
+
+### Every day for the CVEs, every week for the rest
+
+Taking the whole rolling release every night keeps a server current and makes it
+unpredictable; taking it monthly keeps it predictable and leaves published
+vulnerabilities open for weeks. So the update is split in two.
+
+```bash
+sudo omarchy-server-update run --security-only   # daily, small, targeted
+sudo omarchy-server-update run                   # weekly, everything
+```
+
+`--security-only` asks `arch-audit` which installed packages have an open
+advisory **with a fix already in the repositories**, and upgrades exactly those
+with `pacman -S --needed` — dependencies included, nothing else moved. On the
+days the answer is nothing, nothing happens: no snapshot, no database refresh,
+no transaction. Everything around the package half is what a full run does, the
+snapper snapshot and the restart classifier included, and `--transactional`
+works the same way.
+
+A reboot the classifier decides is required is taken **inside the reboot
+window** and deferred to it outside:
+
+```
+reboot required: linux 6.19.14.arch1-1 -> 6.19.15.arch1-1
+reboot deferred to window 04:00-05:00 (required since 2026-09-03T01:12:44-03:00)
+```
+
+`omarchy-server-update-reboot.timer` fires at the start of the window and takes
+the deferred reboot; `--no-reboot` still means never and `--kexec` still means
+now. The schedule and the window are three lines in `/etc/omarchy/server/update.conf`
+(`SECURITY_DAILY`, `FULL_WEEKLY`, `REBOOT_WINDOW`), which `enable` turns into
+timer drop-ins.
+
+`status` reports the pair worth watching — how long a reboot has been owed and
+how many advisories are still open — and `status --json` says the same thing to
+a monitor:
+
+```
+last security run: 2026-09-03T04:07:55-03:00
+pending vulnerable packages: 2
+reboot due: yes, since 2026-09-03T04:09:31-03:00
+```
+
+`docs/security-updates.md` is the mode, the window, the config file and the JSON
+shape in full.
 
 ### Restart what changed, reboot only when you must
 
