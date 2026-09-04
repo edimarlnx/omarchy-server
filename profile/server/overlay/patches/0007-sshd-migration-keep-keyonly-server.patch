@@ -1,0 +1,68 @@
+# Upstream's v4.0.2 migration `migrations/1788124236.sh` closes a hole an
+# aborted `omarchy-setup-security-sshd` could leave behind: sshd enabled with
+# no authorized key, so passwords were the only way in. Its repair is
+# `systemctl disable --now sshd.service`.
+#
+# It asks the key question of `$HOME/.ssh/authorized_keys`. On this profile the
+# update runs as root with HOME=/root — the update unit declares
+# `Environment=HOME=/root` so the timer and a hand-run update share one
+# migration state directory — and root here is deliberately keyless and
+# forbidden from logging in (`PermitRootLogin no` in 10-omarchy-server.conf).
+# The answer is therefore always "no key", and an unattended update takes a
+# headless machine off the network. Measured on a VM; see
+# reports/2026-09-04-upstream-4.0.2.md § "sshd password lockout in v4.0.2".
+#
+# The guard asks sshd instead of guessing, using the same `sshd -T` question
+# the migration's own success path asks:
+#
+#   * passwords and keyboard-interactive already refused => the password-only
+#     server upstream wants to close does not exist. No-op with a notice. This
+#     is the state this profile installs with.
+#   * invoked by root on a machine with `PermitRootLogin no` => root cannot
+#     have a usable key by policy, so its empty authorized_keys says nothing
+#     about the machine. Never disable sshd on that answer.
+#
+# Everything else is upstream's: a machine that genuinely accepts passwords
+# still gets the daemon disabled, an unreadable `sshd -T` falls through to
+# upstream behaviour, and the key-present branch is untouched.
+--- a/migrations/1788124236.sh
++++ b/migrations/1788124236.sh
+@@ -67,6 +67,38 @@
+ # desktop distro, so the console remains; re-enabling password SSH afterwards
+ # is an intentional, informed choice the warning explains how to make.
+ if [[ ! -f $authorized_keys ]] || ! has_usable_key; then
++  # The key question above was asked of $HOME. On this server profile the
++  # update runs as root with HOME=/root, an account the profile deliberately
++  # keeps keyless and forbids from logging in, so "no usable key" is the wrong
++  # answer to act on: it would take down the daemon every named account
++  # depends on. Ask sshd what it actually accepts, which is the same question
++  # the success path below asks of `sshd -T`. When the effective config cannot
++  # be read the answer is unknown and upstream's behaviour stands.
++  effective_now=$(as_root sshd -T 2>/dev/null) || effective_now=
++
++  effective_says() { grep -qixF "$1" <<<"$effective_now"; }
++
++  if [[ -n $effective_now ]]; then
++    # The hole upstream closes here is a password-only SSH server. A daemon
++    # that already refuses both password and keyboard-interactive logins has
++    # no such hole, and that is the state this profile installs with
++    # (10-omarchy-server.conf). Nothing to close, so nothing to disable.
++    if effective_says "passwordauthentication no" &&
++      effective_says "kbdinteractiveauthentication no"; then
++      echo "No usable SSH key is authorized for $(id -un), but sshd already refuses password and keyboard-interactive logins, so there is no password-only server to close. Leaving sshd enabled."
++      exit 0
++    fi
++
++    # PermitRootLogin no means root cannot log in over SSH at all, so root
++    # having no authorized key is policy rather than an aborted setup. Never
++    # disable the daemon on an answer given by an account that is not allowed
++    # to log in.
++    if ((EUID == 0)) && effective_says "permitrootlogin no"; then
++      echo "No usable SSH key is authorized for root, but sshd refuses root logins (PermitRootLogin no), so root cannot have one. Leaving sshd enabled; run omarchy-setup-security-sshd from the account you log in with to harden SSH."
++      exit 0
++    fi
++  fi
++
+   if ! as_root systemctl disable --now sshd.service; then
+     echo "Administrator privileges are required to close the password-only SSH server. Run omarchy-migrate again from a terminal." >&2
+     exit 1
