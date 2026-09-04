@@ -124,6 +124,17 @@ check "sshd is listening on 22" \
   "~/.lab-sudo ss -tlnH | awk '{print \$4}' | grep -E ':22\$' | head -1" \
   ":22$"
 
+# An update must never take the machine off the network. Upstream's v4.0.2
+# migration disables sshd when the account running it has no authorized key,
+# and on this profile that account is root, which is keyless by policy; the
+# profile's patch series makes that branch inert on a key-only server. The unit
+# state is the proof, and it is separate from the listener above: a daemon
+# stopped by a migration keeps a perfectly valid configuration.
+check "sshd enabled and active after update" \
+  'echo sshd=$(systemctl is-enabled sshd.service 2>&1)/$(systemctl is-active sshd.service 2>&1);
+   ls /etc/ssh/sshd_config.d/' \
+  '^sshd=enabled/active$'
+
 # --- forwarding is persisted (a router forwards; a server does not) ----------
 check "IP forwarding is persisted as a sysctl drop-in" \
   "cat /etc/sysctl.d/30-omarchy-router.conf" \

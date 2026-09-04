@@ -179,8 +179,8 @@ check "zram active" \
 check "/etc/omarchy-profile is server" \
   'cat /etc/omarchy-profile' '^server$'
 
-check "omarchy-version reports the profile release (4.0.1-N)" \
-  'omarchy-version 2>/dev/null' '^4\.0\.1-[0-9]+$'
+check "omarchy-version reports the profile release (4.0.2-N)" \
+  'omarchy-version 2>/dev/null' '^4\.0\.2-[0-9]+$'
 
 # ── Identity ────────────────────────────────────────────────────────────────
 # The point of these: a headless install should be recognisably Omarchy from
@@ -462,5 +462,18 @@ check "kexec is an addon, absent from the base" \
   'pacman -Qq kexec-tools >/dev/null 2>&1 && echo "kexec-tools=present" || echo "kexec-tools=absent";
    omarchy-server-addon --list | tr "\n" " "' \
   '^kexec-tools=absent$'
+
+# The last word on the update that just ran: it must not have taken the machine
+# off the network. Upstream's v4.0.2 sshd migration disables the daemon when
+# the account running it has no authorized key, and the update runs as root,
+# which this profile keeps keyless and forbids from logging in; the profile's
+# patch series makes that branch inert on a server that already refuses
+# passwords. The unit state is the proof, and it is a separate question from
+# the configuration checked earlier -- a daemon stopped by a migration still
+# reads as perfectly hardened.
+check "sshd enabled and active after update" \
+  'echo sshd=$(systemctl is-enabled sshd.service 2>&1)/$(systemctl is-active sshd.service 2>&1);
+   ls /etc/ssh/sshd_config.d/' \
+  '^sshd=enabled/active$'
 
 echo "=== $pass passed, $fail failed ==="
