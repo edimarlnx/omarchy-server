@@ -97,6 +97,12 @@ security_run_stamp="$state_dir/last-security-run"
 # Where upstream's reboot-required marker lives; omarchy-state writes it and
 # omarchy-server-update-restart sets it through omarchy-state.
 reboot_marker="${HOME:-/root}/.local/state/omarchy/reboot-required"
+# Root's migration markers and the profile's allowlist, reported by `status`.
+# Not ${HOME}: this is always ROOT's state, whoever is asking, because root is
+# the account the unattended update runs migrations as. See
+# omarchy-server-migration-seed.
+root_migration_state="${OMARCHY_ROOT_MIGRATION_STATE:-/root/.local/state/omarchy/migrations}"
+migrations_allow="${OMARCHY_MIGRATIONS_ALLOW:-${OMARCHY_PATH:-/usr/share/omarchy}/install/server/migrations-allow}"
 
 require_root() {
   if ((EUID != 0)); then
@@ -334,6 +340,31 @@ read_stamp() {
   [[ -r $stamp ]] && head -n1 "$stamp" || true
 }
 
+# ── upstream migrations ─────────────────────────────────────────────────────
+#
+# Two numbers, both read rather than computed: how many upstream migrations are
+# marked done for root (the seeding this profile does at install and on every
+# package upgrade, see omarchy-server-migration-seed) and how many the profile
+# has explicitly opted back into (install/server/migrations-allow). A machine
+# where the first number is far below the count in /usr/share/omarchy/
+# migrations has migrations pending that the next unattended update will run.
+#
+# Empty output means "cannot tell" -- an unreadable /root for a non-root
+# caller is not the same answer as zero, and status is read by canaries.
+marked_migration_count() {
+  [[ -d $root_migration_state && -r $root_migration_state ]] || return 0
+  local count
+  count=$(find "$root_migration_state" -maxdepth 1 -type f -name '*.sh' 2>/dev/null | grep -c . || true)
+  printf '%s' "$count"
+}
+
+allowed_migration_count() {
+  [[ -r $migrations_allow ]] || return 0
+  local count
+  count=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$migrations_allow" | grep -c . || true)
+  printf '%s' "$count"
+}
+
 # ── the vulnerable package set ──────────────────────────────────────────────
 #
 # `arch-audit -uq` prints one line per installed package that has an open
@@ -446,6 +477,8 @@ case "${action:-run}" in
       pending=$(security_packages | grep -c . || true)
     fi
     timer_state() { systemctl is-enabled "$1" 2>/dev/null || echo unknown; }
+    marked_migrations=$(marked_migration_count)
+    allowed_migrations=$(allowed_migration_count)
 
     if ((json)); then
       # Hand-written, because jq is not a dependency of this profile and this
@@ -462,7 +495,9 @@ case "${action:-run}" in
       printf '  "reboot_due_since": %s,\n' "$(json_string "$due_since")"
       printf '  "reboot_window": "%s",\n' "$window"
       printf '  "full_weekly": "%s",\n' "$FULL_WEEKLY"
-      printf '  "security_daily": "%s"\n' "$SECURITY_DAILY"
+      printf '  "security_daily": "%s",\n' "$SECURITY_DAILY"
+      printf '  "upstream_migrations": {"marked_done_for_root": %s, "allowed": %s}\n' \
+        "${marked_migrations:-null}" "${allowed_migrations:-null}"
       printf '}\n'
       exit 0
     fi
@@ -477,6 +512,7 @@ case "${action:-run}" in
       echo "reboot due: no"
     fi
     echo "reboot window: $window"
+    echo "upstream migrations: ${marked_migrations:-unknown} marked done for root, ${allowed_migrations:-unknown} allowed"
     echo "timers: $timer $(timer_state "$timer"), $security_timer $(timer_state "$security_timer"), $reboot_timer $(timer_state "$reboot_timer")"
     systemctl status "$timer" "$security_timer" "$reboot_timer" --no-pager 2>&1 || true
     if [[ $transactional == 1 ]] && ((EUID == 0)) && command -v omarchy-server-transaction >/dev/null; then

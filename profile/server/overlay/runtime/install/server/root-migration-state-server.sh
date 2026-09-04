@@ -14,9 +14,20 @@
 #
 # Marking, not running: the migrations are for a system this install already
 # ships current.
-install -d -m 700 /root/.local /root/.local/state /root/.local/state/omarchy \
-  /root/.local/state/omarchy/migrations
-for migration in "$OMARCHY_PATH"/migrations/*.sh; do
-  [[ -e $migration ]] || continue
-  : >"/root/.local/state/omarchy/migrations/${migration##*/}"
-done
+#
+# The same seeding runs again on every omarchy-server upgrade, from the
+# package's post_upgrade scriptlet, so migrations that arrive later by upgrade
+# are covered too. Both paths go through the same command, which is also where
+# the install/server/migrations-allow allowlist is honoured -- a migration this
+# profile wants is left pending here as well as there.
+install -d -m 700 /root/.local /root/.local/state /root/.local/state/omarchy
+if command -v omarchy-server-migration-seed >/dev/null; then
+  OMARCHY_PATH="$OMARCHY_PATH" omarchy-server-migration-seed
+else
+  # Fallback for a tree without the command: mark everything, no allowlist.
+  install -d -m 700 /root/.local/state/omarchy/migrations
+  for migration in "$OMARCHY_PATH"/migrations/*.sh; do
+    [[ -e $migration ]] || continue
+    : >"/root/.local/state/omarchy/migrations/${migration##*/}"
+  done
+fi

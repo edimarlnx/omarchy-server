@@ -1,0 +1,140 @@
+#!/bin/bash
+
+# omarchy:summary=Mark upstream migrations as already applied for root
+# omarchy:args=[--dry-run] [--quiet]
+# omarchy:requires-sudo=true
+
+# Upstream migrations do not run on this profile unless the profile asks for
+# them. This command is what makes that true, and the package's post_install /
+# post_upgrade scriptlet is what runs it.
+#
+# ── why ─────────────────────────────────────────────────────────────────────
+#
+# Omarchy records migrations per user, under ~/.local/state/omarchy/migrations,
+# and runs every migration that has no marker. install/server/
+# root-migration-state-server.sh seeds root's markers at INSTALL time, for the
+# migrations shipped by the package that was installed. Nothing seeded the ones
+# that arrive later, by upgrade -- and a headless machine updates as root, so
+# `omarchy-migrate` inside the update ran them all against /root.
+#
+# That is not a hypothetical. omarchy v4.0.2 shipped a migration that disables
+# and stops sshd when it finds no usable key in the calling account's
+# authorized_keys. Run as root on a machine whose only login path is sshd and
+# whose policy is `PermitRootLogin no`, it took the machine off the network in
+# the middle of an unattended update. See reports/2026-09-04-upstream-4.0.2.md.
+#
+# The general shape of the problem is not the one migration: upstream
+# migrations are written for a desktop session that is being carried forward,
+# they run under `bash -euo pipefail` inside the update, and the first one that
+# fails aborts it. A server profile ships current -- there is nothing to carry
+# forward -- so the default is to mark them, not to run them.
+#
+# ── the allowlist ───────────────────────────────────────────────────────────
+#
+# Opting out of every future upstream migration by default would be a way to
+# quietly miss one that matters, so the opt-out has a documented way back in:
+# install/server/migrations-allow (profile/server/migrations-allow in the lab
+# repository). Every migration id listed there is left UNMARKED, which is to
+# say it stays pending and the next `omarchy-migrate` runs it, exactly as
+# upstream intended. The file ships empty; a maintainer reviewing an upstream
+# bump adds the ids the profile wants.
+#
+# ── root only, on purpose ───────────────────────────────────────────────────
+#
+# Named accounts are deliberately NOT seeded here. Three reasons, in order:
+#
+#   1. The package already pre-marks every shipped migration in /etc/skel, so
+#      an account created after the package landed starts with a full set of
+#      markers and replays nothing. The gap this command closes is root's, and
+#      root predates /etc/skel.
+#   2. root is the account the machine updates as, without anybody watching.
+#      A migration that breaks under a named account breaks a login session
+#      somebody is sitting in front of; the same migration under root breaks an
+#      unattended update on a machine reachable only over ssh. Those are not
+#      the same risk.
+#   3. A person's home directory is their own. If an operator uses a desktop
+#      Omarchy session on this machine, deciding on their behalf that upstream's
+#      migrations must not touch their dotfiles is not this package's call --
+#      and writing into every /home on every upgrade would be that call.
+#
+# ── idempotence ─────────────────────────────────────────────────────────────
+#
+# Only missing markers are created, and markers are never REMOVED. Adding an id
+# to the allowlist after it was already marked does not make it pending again:
+# a marker means "this machine is past that migration", and un-marking would
+# re-run a migration against a system that already moved on. To replay one
+# deliberately, delete its marker by hand.
+
+set -euo pipefail
+
+# The three paths, each overridable so the whole command can be exercised
+# against a fixture tree (test/shell.d/migration-seed-test.sh). Nothing on an
+# installed system sets them.
+omarchy_path="${OMARCHY_PATH:-/usr/share/omarchy}"
+migrations_dir="${OMARCHY_MIGRATIONS_DIR:-$omarchy_path/migrations}"
+allow_file="${OMARCHY_MIGRATIONS_ALLOW:-$omarchy_path/install/server/migrations-allow}"
+state_dir="${OMARCHY_ROOT_MIGRATION_STATE:-/root/.local/state/omarchy/migrations}"
+
+dry_run=0
+quiet=0
+for argument in "$@"; do
+  case "$argument" in
+    --dry-run) dry_run=1 ;;
+    --quiet) quiet=1 ;;
+    -h | --help)
+      echo "Usage: omarchy-server-migration-seed [--dry-run] [--quiet]"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $argument" >&2
+      exit 2
+      ;;
+  esac
+done
+
+say() { ((quiet)) || printf '%s\n' "$*"; }
+
+# The allowlist, as a set. Comments and blank lines are dropped; an entry is
+# accepted with or without the .sh suffix, because both spellings are what a
+# person reading `ls /usr/share/omarchy/migrations` would write down.
+declare -A allowed=()
+allowed_count=0
+if [[ -r $allow_file ]]; then
+  while IFS= read -r line || [[ -n $line ]]; do
+    line="${line%%#*}"
+    line="${line//[[:space:]]/}"
+    [[ -n $line ]] || continue
+    allowed["${line%.sh}"]=1
+    ((++allowed_count))
+  done <"$allow_file"
+fi
+
+if [[ ! -d $migrations_dir ]]; then
+  say "no migrations directory at $migrations_dir; nothing to seed"
+  exit 0
+fi
+
+marked=0
+skipped=0
+already=0
+
+((dry_run)) || install -d -m 700 "$state_dir"
+
+shopt -s nullglob
+for migration in "$migrations_dir"/*.sh; do
+  name="${migration##*/}"
+  if [[ -n ${allowed[${name%.sh}]:-} ]]; then
+    # Left pending on purpose: this is a migration the profile WANTS to run.
+    ((++skipped))
+    continue
+  fi
+  if [[ -e $state_dir/$name ]]; then
+    ((++already))
+    continue
+  fi
+  ((++marked))
+  ((dry_run)) || : >"$state_dir/$name"
+done
+shopt -u nullglob
+
+say "upstream migrations for root: ${marked} newly marked done, ${already} already marked, ${skipped} left pending (allowlist: ${allowed_count} $( ((allowed_count == 1)) && echo entry || echo entries))"

@@ -87,9 +87,14 @@ cp -a "$repo_root/profile/server/overlay" "$overlay_stage/overlay"
 cp -a "$repo_root/profile/server/addons" "$overlay_stage/addons"
 cp -a "$repo_root/profile/server/branding" "$overlay_stage/branding"
 cp -a "$repo_root/profile/router/addons" "$overlay_stage/router-addons"
+# The upstream-migration allowlist, shipped by the runtime package as
+# install/server/migrations-allow. A single file rather than a directory, and
+# outside overlay/ because it is a profile POLICY the maintainer edits, not a
+# runtime file or a settings replacement. See omarchy-server-migration-seed.
+cp -a "$repo_root/profile/server/migrations-allow" "$overlay_stage/migrations-allow"
 for package in omarchy-server-settings omarchy-server; do
   tar -czf "$pkgbuilds_dir/$package/$overlay_tarball_name" \
-    -C "$overlay_stage" overlay addons branding router-addons
+    -C "$overlay_stage" overlay addons branding router-addons migrations-allow
 done
 
 install -d "$pkgs_dir/out" "$pkgs_dir/repo"

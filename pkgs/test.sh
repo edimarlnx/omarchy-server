@@ -187,6 +187,17 @@ EOF
       "test -L /usr/bin/omarchy-version && test -L /usr/bin/omarchy-update"
     check "migration stubs seeded in /etc/skel" bash -c \
       "(( \$(ls /etc/skel/.local/state/omarchy/migrations | wc -l) > 50 ))"
+    # Upstream migrations do not run on this profile unless the allowlist says
+    # so. The scriptlet is what keeps that true across upgrades, and it can
+    # only work if the command and the (empty) allowlist are both shipped.
+    check "the migration seeding command is shipped" bash -c \
+      "test -x /usr/share/omarchy/bin/omarchy-server-migration-seed && test -L /usr/bin/omarchy-server-migration-seed"
+    check "the upstream-migration allowlist is shipped and empty" bash -c \
+      "test -f /usr/share/omarchy/install/server/migrations-allow && ! sed -e 's/#.*//' -e 's/[[:space:]]//g' /usr/share/omarchy/install/server/migrations-allow | grep -q ."
+    check "the package scriptlet marked every migration for root" bash -c \
+      "(( \$(ls /root/.local/state/omarchy/migrations 2>/dev/null | wc -l) == \$(ls /usr/share/omarchy/migrations | wc -l) ))"
+    check "omarchy-migrate has nothing pending for root" bash -c \
+      "! HOME=/root omarchy-migrate --pending"
     check "update guard hook installed" test -f /usr/share/libalpm/hooks/00-omarchy-update-guard.hook
     check "hyprland reload hooks NOT installed" bash -c \
       "! ls /usr/share/libalpm/hooks/ | grep -q hyprland"
