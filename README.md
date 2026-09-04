@@ -29,8 +29,11 @@ pocs/            lab scripts and measured results (QEMU/OVMF, cidata autoinstall
                  pocs/image/ builds and validates the cloud image, pocs/image/oci/
                  is the OCI import + demo-instance recipe
 tools/serverlab/ the Go driver that runs all of the above in order (make serverlab)
+tools/upstream-bump.sh  follow upstream: move the pin, rehearse the patch series
+upstream/PIN     which upstream commits everything here is derived from
 docs/            technical docs: packaging.md, iso-server.md, secure-boot.md, mac.md,
-                 transactional.md, cloud-image.md, serverlab.md, screenshots/
+                 transactional.md, cloud-image.md, serverlab.md, maintenance.md,
+                 screenshots/
 test/            shell tests for the profile's runtime commands (make shell-test)
 ```
 
@@ -57,6 +60,17 @@ Work clones live in `upstream/` (gitignored):
 ```bash
 git clone https://github.com/basecamp/omarchy.git upstream/omarchy
 git clone https://github.com/omacom-io/omarchy-iso.git upstream/omarchy-iso
+```
+
+**Which commit** those clones are supposed to be at is the one thing in
+`upstream/` that is in git: `upstream/PIN`. `tools/upstream-bump.sh` writes it,
+moves the clones onto it, and rehearses the patch series against the new tree
+before anything is committed; `.github/workflows/upstream-tracker.yml` runs the
+same script every Monday and opens a pull request when upstream has moved.
+`docs/maintenance.md` is the flow and the manual rebase runbook.
+
+```bash
+tools/upstream-bump.sh --dry-run     # what would move, and does it still patch
 ```
 
 The **tui-tools** terminal UIs are not built here. They come from the signed

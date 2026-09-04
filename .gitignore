@@ -7,7 +7,13 @@ pocs/**/keys/
 pocs/**/out/
 pocs/**/out-*/
 temp/
-upstream/
+# The upstream work clones. `upstream/*` rather than `upstream/`, because git
+# does not look inside an excluded directory and the pin below has to be
+# re-included: upstream/PIN is the one file that records WHICH
+# upstream trees this repository is derived from, written by
+# tools/upstream-bump.sh, and it has to be in git for that to mean anything.
+upstream/*
+!upstream/PIN
 
 # Package build (pkgs/): signing keys, makepkg output, the assembled repo and
 # the scratch dir used to dissect the published upstream packages. The
