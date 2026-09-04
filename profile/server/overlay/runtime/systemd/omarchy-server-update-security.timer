@@ -1,0 +1,19 @@
+[Unit]
+Description=Daily Omarchy server security-only update
+
+[Timer]
+# Daily, because a CVE with a fix already in the repositories should not wait
+# for the weekly full run. The security-only update is small by construction:
+# only the packages arch-audit names, and nothing at all on the days it names
+# none.
+OnCalendar=daily
+# An hour of spread rather than the full run's four: the window this feeds is
+# an hour long, and a run that starts at 03:50 should still be finished before
+# the reboot timer fires at 04:00.
+RandomizedDelaySec=1h
+# A machine that was off at its slot catches up on the next boot rather than
+# skipping a day, which is how a CVE stays open for a month.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
