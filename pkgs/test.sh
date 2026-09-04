@@ -103,8 +103,11 @@ EOF
     check "install/server/all.sh parses" bash -n /usr/share/omarchy/install/server/all.sh
     check "every install/server script parses" bash -c \
       "for f in /usr/share/omarchy/install/server/*.sh /usr/share/omarchy/install/server/addons/*.sh; do bash -n \"\$f\" || exit 1; done"
-    check "apply-system routes the server profile" bash -c \
-      "grep -q \"OMARCHY_INSTALL/server/all.sh\" /usr/bin/omarchy-apply-system"
+    # The patch routes BOTH headless profiles through the same line, so the
+    # command carries the variable, not the literal `server`. Asserting the
+    # literal passed only while the router profile did not exist yet.
+    check "apply-system routes the headless profiles" bash -c \
+      "grep -qE 'OMARCHY_INSTALL/[$]profile/all[.]sh' /usr/bin/omarchy-apply-system"
     check "/etc/omarchy-profile says server" bash -c \
       "[[ \$(cat /etc/omarchy-profile) == server ]]"
     check "provides/conflicts recorded" bash -c \
