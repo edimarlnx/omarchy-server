@@ -1,0 +1,30 @@
+# Upstream Omarchy migrations this profile WANTS to run.
+#
+# The server profile does not run upstream migrations by default. Every
+# migration shipped by the omarchy-server package is marked as already applied
+# for root at install time and again on every package upgrade, by
+# `omarchy-server-migration-seed` (run from the package's post_install /
+# post_upgrade scriptlet). The reasoning is in that command's header and in
+# docs/security-updates.md, "Upstream migrations on a server": migrations are
+# written to carry a desktop session forward, a server profile ships current,
+# they run under `bash -euo pipefail` inside an unattended update as root, and
+# v4.0.2 shipped one that disabled sshd on a machine reachable only over ssh.
+#
+# This file is the way back in. One migration id per line -- the file name
+# under /usr/share/omarchy/migrations, with or without the .sh suffix. Anything
+# listed here is left UNMARKED, so it stays pending and the next
+# `omarchy-migrate` runs it exactly as upstream intended.
+#
+#   1788124236
+#   1788124236.sh     the same thing
+#
+# Blank lines and everything after a `#` are ignored.
+#
+# Adding an id here does not un-mark a migration that was already marked on a
+# machine: a marker means the machine is past it, and un-marking would re-run a
+# migration against a system that already moved on. Delete the marker under
+# /root/.local/state/omarchy/migrations by hand to replay one deliberately.
+#
+# The list is reviewed on every upstream bump; see docs/maintenance.md.
+#
+# Empty on purpose: no upstream migration has been opted into yet.

@@ -75,13 +75,17 @@ the package build will not find the new commit until someone pushes it by hand.
 The bot moves the pin and proves the patches apply. What it cannot do, in order:
 
 1. Rebase any conflicting patch (runbook below).
-2. In `omarchy-server-pkgs`: set `_commit` to the omarchy commit named in
+2. Read the release's NEW migrations and decide whether any of them belongs in
+   `profile/server/migrations-allow`. None of them runs on this profile
+   otherwise; see "Upstream migrations on a server" in
+   `docs/security-updates.md` for the policy and the reason.
+3. In `omarchy-server-pkgs`: set `_commit` to the omarchy commit named in
    `upstream/PIN`, and bump `pkgrel`.
-3. `./bin/serverlab pkgs build && ./bin/serverlab pkgs test`.
-4. `./bin/serverlab iso build`.
-5. VM acceptance on a host with KVM: `./bin/serverlab lab up srv --profile server`
+4. `./bin/serverlab pkgs build && ./bin/serverlab pkgs test`.
+5. `./bin/serverlab iso build`.
+6. VM acceptance on a host with KVM: `./bin/serverlab lab up srv --profile server`
    then `./bin/serverlab lab test srv --suite base`.
-6. Merge here, then let `publish.yml` in `omarchy-server-pkgs` republish the
+7. Merge here, then let `publish.yml` in `omarchy-server-pkgs` republish the
    signed repository.
 
 ## Running the bump by hand

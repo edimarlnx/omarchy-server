@@ -74,6 +74,8 @@ run_update() {
     PATH="$fixture/bin:$PATH" \
     OMARCHY_SERVER_UPDATE_CONF="$fixture/update.conf" \
     OMARCHY_SERVER_STATE_DIR="$fixture/state" \
+    OMARCHY_ROOT_MIGRATION_STATE="$fixture/migration-state" \
+    OMARCHY_MIGRATIONS_ALLOW="$fixture/migrations-allow" \
     ${OMARCHY_UPDATE_NOW:+OMARCHY_UPDATE_NOW="$OMARCHY_UPDATE_NOW"} \
     ${STUB_REBOOT_REQUIRED:+STUB_REBOOT_REQUIRED="$STUB_REBOOT_REQUIRED"} \
     bash "$update_command" "$@" 2>&1
@@ -88,6 +90,12 @@ EOF
 }
 
 write_config
+
+# Root's migration markers and the profile's allowlist, which `status` reports.
+mkdir -p "$fixture/migration-state"
+: >"$fixture/migration-state/1700000001.sh"
+: >"$fixture/migration-state/1700000002.sh"
+printf '# a comment\n\n1700000003\n' >"$fixture/migrations-allow"
 
 # ── an empty set is a no-op ─────────────────────────────────────────────────
 # The point of the mode: on most days there is nothing to do, and nothing is
@@ -238,6 +246,11 @@ assert_contains "$output" "reboot window: 04:00-05:00" \
   "status reports the window"
 assert_contains "$output" "last security run: " \
   "status reports the last security run"
+# The upstream-migration line: what omarchy-server-migration-seed left behind,
+# read from root's state directory rather than recomputed. Two markers seeded,
+# one migration the profile opted back into.
+assert_contains "$output" "upstream migrations: 2 marked done for root, 1 allowed" \
+  "status reports the seeded migrations and the allowlist"
 
 touch "$marker"
 json=$(run_update status --json)
@@ -251,6 +264,8 @@ assert_contains "$json" '"last_full_run": null' \
   "a run that never happened is null, not a missing key"
 assert_contains "$json" '"timers": {"full": "disabled"' \
   "the JSON carries all three timers"
+assert_contains "$json" '"upstream_migrations": {"marked_done_for_root": 2, "allowed": 1}' \
+  "the JSON carries both migration counts as numbers"
 
 if command -v python3 >/dev/null; then
   python3 -c 'import json,sys; json.load(sys.stdin)' <<<"$json" ||

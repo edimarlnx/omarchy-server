@@ -269,6 +269,14 @@ Ships: `bin/` (442), `install/` (including `install/server/`), `migrations/`
 `00-omarchy-update-guard.hook`, and one system unit,
 `/usr/lib/systemd/system/omarchy-tty-palette.service`.
 
+It also ships `install/server/migrations-allow` (the upstream-migration
+allowlist, from `profile/server/migrations-allow`) and an `.install` scriptlet
+whose `post_install` / `post_upgrade` runs `omarchy-server-migration-seed`, so
+migrations that arrive with a new upstream release are marked as applied for
+root before the next unattended update can run them. The policy, and why named
+accounts are deliberately not seeded, is in `docs/security-updates.md`,
+"Upstream migrations on a server".
+
 Three commands are this profile's own, added to `bin/` before the `/usr/bin`
 symlink loop so they are linked like any other: `omarchy-server-addon`,
 `omarchy-tty-palette` and `omarchy-server-motd` (all three in §2.5). The unit
