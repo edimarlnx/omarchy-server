@@ -3,9 +3,9 @@
 # name the same omarchy commit.
 channel=tags
 omarchy_repo=basecamp/omarchy
-omarchy_ref=v4.0.2
-omarchy_commit=346e69e1cec6c4e8924531874af6ba010a1bc99e
+omarchy_ref=v4.0.3
+omarchy_commit=0534987009061cbe2dacdde4ad564092ab698d12
 omarchy_iso_repo=omacom-io/omarchy-iso
 omarchy_iso_ref=quattro
-omarchy_iso_commit=2673c613d9a71e23920e43fbb951238145e0f1e8
-updated=2026-09-04
+omarchy_iso_commit=a23f8d464dcb0616a61bfaa8026e23d0533da209
+updated=2026-09-14
